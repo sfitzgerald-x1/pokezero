@@ -12,7 +12,8 @@ import {restoreReferenceTrace} from "./battle_bridge_reference_trace.mjs";
 import {witnessCommandBegin, witnessCommandEnd, witnessSnapshotBegin, witnessSnapshotEnd, snapshotRequestsForCommand,
   nativeTransportEnabled,witnessTransportSource,witnessTransportStreams,witnessTransportReaderBegin,witnessTransportReaderEnd,
   witnessTransportReaderEOF,witnessTransportTeardownBegin,witnessTransportTeardownEnd,witnessTransportScheduled,
-  witnessTransportCallbackFinished,witnessTransportStdout,witnessTransportComplete,witnessTransportAbort}
+  witnessTransportCallbackFinished,witnessTransportStdout,witnessTransportComplete,witnessTransportAbort,
+  requireFreshOwnerVisibilityStart,writeOwnerVisibilityStart}
   from "./battle_bridge_witness_port.mjs";
 import {
   invalidatedBoundaryState,
@@ -323,6 +324,7 @@ async function teardownBattle(battle) {
 
 async function startBattle(command) {
   const battleId = battleIdOf(command);
+  const percentOwner = requireFreshOwnerVisibilityStart(battleId, battles.size);
   // Reusing a live process: tear down any prior battle under this id so a fresh battle can begin
   // without exiting the process.
   if (battles.has(battleId)) {
@@ -351,11 +353,13 @@ async function startBattle(command) {
     p1.seed = deriveSeed(seed, "p1");
     p2.seed = deriveSeed(seed, "p2");
   }
-  await battle.streams.omniscient.write(
-    `>start ${JSON.stringify(startOptions)}\n` +
-      `>player p1 ${JSON.stringify(p1)}\n` +
-      `>player p2 ${JSON.stringify(p2)}`
-  );
+  const start = `>start ${JSON.stringify(startOptions)}\n`;
+  const playerLines = `>player p1 ${JSON.stringify(p1)}\n>player p2 ${JSON.stringify(p2)}`;
+  if (percentOwner) {
+    await writeOwnerVisibilityStart(battleStream, battle.streams.omniscient, start, playerLines, {battleId, formatid});
+  } else {
+    await battle.streams.omniscient.write(start + playerLines);
+  }
   emit({ type: "started", battleId, formatid, seed: seed || null });
 }
 

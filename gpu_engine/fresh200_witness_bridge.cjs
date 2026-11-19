@@ -107,8 +107,12 @@ function createObserver({Battle,loadControl,appendAudit,appendReceipt,sourceRegi
         transportCompletion=null;
         if(battleId!==transport.battleId)throw Error('TRANSPORT_BATTLE_IDENTITY_DIFFERS');
         const bound=loadTransportControl(),value=bound?.value;
-        if(!bound||Object.keys(bound).sort().join(',')!=='sha256,value'||!value||Object.keys(value).sort().join(',')!=='command,native_nonce,previous_completion_hash,schema,stdin_sha256'
-            ||value.schema!=='pokezero.native_transport_control.v1'||value.native_nonce!==control.nonce||value.previous_completion_hash!==transport.previousCompletion
+        const visibility=transport.visibilityPolicySha256;
+        const keys='command,native_nonce,previous_completion_hash,schema,stdin_sha256'+(visibility?',visibility_policy_sha256':'');
+        const schema=visibility?'pokezero.native_transport_control.v2':'pokezero.native_transport_control.v1';
+        if(!bound||Object.keys(bound).sort().join(',')!=='sha256,value'||!value||Object.keys(value).sort().join(',')!==keys
+            ||value.schema!==schema||(visibility&&value.visibility_policy_sha256!==visibility)
+            ||value.native_nonce!==control.nonce||value.previous_completion_hash!==transport.previousCompletion
             ||JSON.stringify(wireValue(command))!==JSON.stringify(value.command)||typeof bound.sha256!=='string'||!/^[a-f0-9]{64}$/.test(bound.sha256))
           throw Error('INDEPENDENT_TRANSPORT_COMMAND_BINDING_DIFFERS');
         transport.commandBegin({id:control.nonce,phase:command.type,receivedLine,stdinSha256:value.stdin_sha256,controlHash:bound.sha256});

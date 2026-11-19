@@ -36,11 +36,13 @@ function channel(){return {produced:[],consumed:0,open:null,ended:false,readerEn
   lineCount:0,generation:0,actionable:false};}
 
 class TransportWitness{
-  constructor({session,battleId,sourceRegistryHash,expectedMethods,appendEvent,maxEvents=100000,maxBytes=64*1024**2}){
+  constructor({session,battleId,sourceRegistryHash,expectedMethods,appendEvent,visibilityPolicySha256=null,maxEvents=100000,maxBytes=64*1024**2}){
     need(typeof session==='string'&&session&&typeof battleId==='string'&&battleId&&hex(sourceRegistryHash),'EXACT_TRANSPORT_IDENTITY_REQUIRED');
     need(expectedMethods&&typeof expectedMethods==='object'&&typeof appendEvent==='function','INDEPENDENT_METHOD_ROSTER_AND_EVENT_SINK_REQUIRED');
     need(Number.isSafeInteger(maxEvents)&&maxEvents>0&&Number.isSafeInteger(maxBytes)&&maxBytes>0,'FINITE_TRANSPORT_BOUNDS_REQUIRED');
+    need(visibilityPolicySha256===null||hex(visibilityPolicySha256),'EXACT_OWNER_VISIBILITY_POLICY_DIGEST_REQUIRED');
     this.session=session;this.battleId=battleId;this.sourceRegistryHash=sourceRegistryHash;
+    this.visibilityPolicySha256=visibilityPolicySha256;
     this.expectedMethods={...expectedMethods};this.appendEvent=appendEvent;this.maxEvents=maxEvents;this.maxBytes=maxBytes;
     this.sequence=0;this.previous=ZERO;this.eventBytes=0;this.poisoned=false;this.reason=null;this.hooks=[];this.waiters=[];
     this.source=null;this.streams=null;this.iteratorSeen=false;this.nextPending=false;this.current=null;
@@ -73,9 +75,20 @@ class TransportWitness{
     this._install(source,Symbol.asyncIterator,'source.iterator',receiver=>{
       need(receiver===source&&!this.iteratorSeen,'SINGLE_NATIVE_FANOUT_ITERATOR_REQUIRED');this.iteratorSeen=true;
     },result=>need(result===source,'ORIGINAL_SOURCE_ITERATOR_IDENTITY_DIFFERS'));
-    this._install(source,'_write','source.write',receiver=>{
+    this._install(source,'_write','source.write',(receiver,args)=>{
       need(receiver===source&&this.command&&!this.command.ended,'NATIVE_WRITE_OUTSIDE_COMMAND');this.writeDepth++;
-    },()=>{this.writeDepth--;this._event('SOURCE_WRITE_RETURN',{});},()=>{this.writeDepth--;this.poison('ORIGINAL_NATIVE_WRITE_THROW');});
+      if(!this.visibilityPolicySha256||this.command.phase!=='start')return null;
+      const ordinal=this.command.visibilityWrites+1;
+      need((ordinal===1&&!this.command.visibilityApplied)||(ordinal===2&&this.command.visibilityApplied),
+        'OWNER_VISIBILITY_NATIVE_WRITE_ORDER_DIFFERS');
+      return {ordinal,sha256:hash(text(args[0]))};
+    },(_,startWrite)=>{
+      this.writeDepth--;
+      if(startWrite){
+        this.command.visibilityWrites=startWrite.ordinal;
+        this._event('START_WRITE_RETURN',startWrite);
+      }else this._event('SOURCE_WRITE_RETURN',{});
+    },()=>{this.writeDepth--;this.poison('ORIGINAL_NATIVE_WRITE_THROW');});
     this._install(source,'push','source.push',(receiver,args)=>{
       need(receiver===source&&!this.sourceEnded&&(this.writeDepth>0||this.teardownDepth>0),'NATIVE_OUTPUT_OUTSIDE_WRITE_SPAN');
       const value=args[0];const packet=raw(value);const newline=value.indexOf('\n');const type=newline<0?value:value.slice(0,newline);
@@ -193,10 +206,21 @@ class TransportWitness{
     need(typeof id==='string'&&id&&!this.commandIds.has(id)&&(!this.command||this.command.completed),'UNIQUE_NONOVERLAPPING_TRANSPORT_COMMAND_REQUIRED');
     need(['start','choices','snapshot','end','close'].includes(phase)&&hex(stdinSha256)&&hex(controlHash)&&typeof receivedLine==='string'&&!/[\r\n]/.test(receivedLine),'EXACT_CLOSED_RECEIVED_COMMAND_REQUIRED');
     need(hash(text(receivedLine+'\n'))===stdinSha256,'INDEPENDENT_STDIN_BYTES_DIFFER');
-    this.command={id,phase,stdinSha256,controlHash,firstEvent:this.sequence,ended:false,completed:false};this.commandIds.add(id);this._event('COMMAND_RECEIVED',{phase,received_line:receivedLine,stdin_sha256:stdinSha256,control_hash:controlHash});
+    this.command={id,phase,stdinSha256,controlHash,firstEvent:this.sequence,ended:false,completed:false,
+      visibilityWrites:0,visibilityApplied:false};
+    this.commandIds.add(id);this._event('COMMAND_RECEIVED',{phase,received_line:receivedLine,stdin_sha256:stdinSha256,control_hash:controlHash});
   });}
+  visibilityApplied(evidence){
+    need(!this.poisoned&&this.visibilityPolicySha256&&evidence.policy_sha256===this.visibilityPolicySha256
+      &&this.command?.phase==='start'&&this.command.visibilityWrites===1&&!this.command.visibilityApplied
+      &&!this.writeDepth&&!this.requests.length,'OWNER_VISIBILITY_TRANSITION_OUTSIDE_PRE_PLAYER_WINDOW');
+    this._event('START_VISIBILITY_APPLIED',evidence);
+    this.command.visibilityApplied=true;
+  }
   commandEnd({originalThrew,nativeReceiptHash,snapshotHash=null}){return this._safe(()=>{
     need(this.command&&!this.command.ended&&typeof originalThrew==='boolean'&&hex(nativeReceiptHash)&&(snapshotHash===null||hex(snapshotHash)),'EXACT_NATIVE_COMMAND_OUTCOME_REQUIRED');
+    need(!this.visibilityPolicySha256||this.command.phase!=='start'
+      ||this.command.visibilityApplied&&this.command.visibilityWrites===2,'INCOMPLETE_OWNER_VISIBILITY_NATIVE_START');
     this.command.ended=true;this.command.nativeReceiptHash=nativeReceiptHash;this.command.snapshotHash=snapshotHash;
     this._event('COMMAND_RETURN',{original_threw:originalThrew,native_receipt_hash:nativeReceiptHash,snapshot_hash:snapshotHash});
     if(originalThrew)this.poison('ORIGINAL_BRIDGE_COMMAND_THROW');this._checkWaiters();

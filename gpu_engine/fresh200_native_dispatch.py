@@ -300,10 +300,15 @@ class FixedPrefixDispatcher:
             reset=0, command=len(self.command_ids), phase=phase, request=request, nonce=command_id,
             chance_nonce=chance_nonce, previous_receipt_hash=verifier.native_cursor.receipt_hash,
         ))
-        transport = _json(dict(
-            schema='pokezero.native_transport_control.v1', native_nonce=command_id, stdin_sha256=digest(wire),
+        visibility = verifier.transport_cursor.visibility_policy_sha256
+        transport_fields = dict(
+            schema='pokezero.native_transport_control.v2' if visibility else 'pokezero.native_transport_control.v1',
+            native_nonce=command_id, stdin_sha256=digest(wire),
             command=document(wire.decode('utf8')), previous_completion_hash=verifier.transport_cursor.previous_completion,
-        ))
+        )
+        if visibility is not None:
+            transport_fields['visibility_policy_sha256'] = visibility
+        transport = _json(transport_fields)
         binding = verifier.hook_cursor.binding(verifier.hook_policy)
         spec = CommandSpec(wire, control, transport, self.prefix.battle_id, hook_admission=binding)
         record = self.recorder.record(spec, chance_control_wire=chance_wire)

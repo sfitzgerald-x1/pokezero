@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .fresh200_fixed_prefix import prefix_schedule
 from .fresh200_native import require_resolved, step_packet_from_native
+from .fresh200_native_consumer import verify_visibility_snapshot, verify_visibility_start
 from .fresh200_native_dispatch import (
     OWNERS, DecisionEvidence, _confirmed_choices, _constructor, _decode_rows, _need, _select,
 )
@@ -61,7 +62,8 @@ class _ClosedStream:
               'recording stream has an unaccounted tail or a changed digest')
 
 
-def load_recorded_boundaries(prefix, root, *, recorded_root, completed_sha256, source_registry_hash):
+def load_recorded_boundaries(prefix, root, *, recorded_root, completed_sha256, source_registry_hash,
+                             visibility_policy_sha256=None):
     """Extract PRE0–PRE8 without starting Native or opening expected values.
 
     The caller supplies the admitted inputs, terminal receipt digest, and the
@@ -82,10 +84,21 @@ def load_recorded_boundaries(prefix, root, *, recorded_root, completed_sha256, s
     _need(receipt['schema'] == 'pokezero.fresh200.raw_command_recording.v1'
           and receipt['status'] == 'RAW_CLOSED_ARTIFACT_SET_RECORDED_ONLY'
           and receipt['source_registry_hash'] == source_registry_hash and receipt['failure'] is None
+          and receipt.get('owner_visibility_sha256') == visibility_policy_sha256
           and receipt['qualification'] is False and receipt['child_exit_code'] == 0
           and receipt['closure']['status'] == 'RAW_CLOSED_ARTIFACT_SET_VERIFIED_ONLY'
           and len(records) == len(schedule) == receipt['closure']['commands'],
           'source-bound completed Native prefix receipt required')
+    if visibility_policy_sha256 is not None:
+        rule_wire = _artifact(recording, recorded_recording, 'owner-visibility.json',
+                              receipt['admission_files']['owner-visibility.json'])
+        rule = document(rule_wire.decode('utf8'))
+        _need(digest(rule_wire) == visibility_policy_sha256
+              and rule['fixed_input_binding_sha256'] == digest(prefix.binding_wire)
+              and rule['start_wire_sha256'] == digest(prefix.start_wire)
+              and rule['root_index'] == prefix.root_index and rule['stream_id'] == prefix.stream_id
+              and rule['reference_owner'] == OWNERS[prefix.owner] and rule['battle_id'] == prefix.battle_id,
+              'archived visibility declaration differs from the frozen root')
     _need(_bounded_read(recording / 'frozen-inputs.json') == prefix.binding_wire
           and _bounded_read(recording / 'literal-teams.json') == prefix.team_wire,
           'recorded prefix binding or literal constructor differs')
@@ -124,6 +137,8 @@ def load_recorded_boundaries(prefix, root, *, recorded_root, completed_sha256, s
                 chance_audit = _artifact(folder, recorded_folder, 'chance-audit.jsonl', record['chance_audit'])
                 require_resolved(_decode_rows(chance_audit))
             if kind == 'start':
+                if visibility_policy_sha256 is not None:
+                    verify_visibility_start(document(stdin.decode('utf8')), transport, visibility_policy_sha256)
                 initialization = _artifact(folder, recorded_folder, 'initializing.json', record['inputs']['initializing.json'])
                 _need(stdin == prefix.start_wire
                       and _same(document(initialization.decode('utf8')), document(prefix.initial_chance_wire.decode('utf8'))),
@@ -135,6 +150,8 @@ def load_recorded_boundaries(prefix, root, *, recorded_root, completed_sha256, s
                 snapshots = [row['snapshot'] for row in stdout if row['type'] == 'snapshot']
                 _need(len(snapshots) == 1, 'one original passive snapshot required')
                 snapshot = snapshots[0]
+                if visibility_policy_sha256 is not None:
+                    verify_visibility_snapshot(snapshot)
                 if frame == 0:
                     _constructor(snapshot, evidence.teams)
                 phase, party, relations = evidence.boundary(snapshot, ordinary=prior_ordinary)

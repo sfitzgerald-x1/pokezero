@@ -80,13 +80,26 @@ function preflight(pins, identity) {
   requireEvidence(typeof pins.node_path === 'string' && path.isAbsolute(pins.node_path)
     && fs.realpathSync(pins.node_path) === fs.realpathSync(process.execPath)
     && process.version === 'v22.22.2' && hashFile(process.execPath) === NODE, 'pinned Node executable differs');
-  requireEvidence(keysMatch(identity, ['session', 'battle_id', 'completion_fd'])
+  const hasVisibility = Object.hasOwn(identity, 'owner_visibility_base64');
+  requireEvidence(keysMatch(identity, ['session', 'battle_id', 'completion_fd', ...(hasVisibility ? ['owner_visibility_base64'] : [])])
     && text(identity.session) && text(identity.battle_id) && Number.isSafeInteger(identity.completion_fd)
     && identity.completion_fd >= 3 && identity.completion_fd <= 255, 'literal bridge identifiers required');
-  requireEvidence(keysMatch(pins.sources, SOURCE_FILES), 'complete producer file pins required');
-  for (const name of SOURCE_FILES) {
+  const helpers = hasVisibility ? [...HELPERS, 'fresh200_owner_visibility.cjs'] : HELPERS;
+  const sources = hasVisibility ? [...SOURCE_FILES, 'gpu_engine/fresh200_owner_visibility.cjs'] : SOURCE_FILES;
+  requireEvidence(keysMatch(pins.sources, sources), 'complete producer file pins required');
+  for (const name of sources) {
     requireEvidence(hex(pins.sources[name]) && hashFile(path.join(REPO, name)) === pins.sources[name],
       'producer file identity differs: ' + name);
+  }
+  let visibility = null;
+  if (hasVisibility) {
+    requireEvidence(typeof identity.owner_visibility_base64 === 'string' && identity.owner_visibility_base64.length <= 5464,
+      'bounded literal owner visibility policy required');
+    const bytes = Buffer.from(identity.owner_visibility_base64, 'base64');
+    requireEvidence(bytes.toString('base64') === identity.owner_visibility_base64, 'canonical visibility policy base64 required');
+    visibility = require('./fresh200_owner_visibility.cjs').readPolicy(bytes);
+    requireEvidence(visibility.policy.session === identity.session && visibility.policy.battle_id === identity.battle_id,
+      'independent Native owner visibility roots differ');
   }
 
   const dist = path.join(pins.native_root, 'dist');
@@ -138,7 +151,8 @@ function preflight(pins, identity) {
       streamLibraryFile: hashFile(path.join(dist, 'lib/streams.js')),
       declaration: sha(declaration),
     },
-    helpers: Object.fromEntries(HELPERS.map(name => [name, pins.sources['gpu_engine/' + name]])),
+    ...(visibility ? {ownerVisibilitySha256: visibility.sha256} : {}),
+    helpers: Object.fromEntries(helpers.map(name => [name, pins.sources['gpu_engine/' + name]])),
     bridge: pins.sources[BRIDGE],
     port: pins.sources[PORT],
     setPlayer: methodSha(Battle.prototype, 'setPlayer'),

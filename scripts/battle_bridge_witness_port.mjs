@@ -1,10 +1,44 @@
 // Optional passive observation port. Ordinary bridge users have no observer.
 let observer = null;
+let ownerVisibility = null;
 
 export function setNativeWitness(value) {
   if (observer !== null || !value || ['commandBegin','commandEnd','snapshotBegin','snapshotEnd','poison']
     .some(name => typeof value[name] !== 'function')) throw Error('EXACT_NATIVE_WITNESS_PORT_REQUIRED');
   observer = value;
+}
+
+export function setOwnerVisibility(value) {
+  if (ownerVisibility !== null || !value || observer?.transport?.visibilityPolicySha256 !== value.sha256) {
+    throw Error('OWNER_VISIBILITY_REQUIRES_BOUND_NATIVE_TRANSPORT');
+  }
+  ownerVisibility = value;
+}
+
+export function requireFreshOwnerVisibilityStart(battleId, battleCount) {
+  if (ownerVisibility === null) return false;
+  const transport = observer.transport;
+  if (battleCount !== 0 || transport.poisoned || transport.command?.phase !== 'start'
+      || battleId !== ownerVisibility.policy.battle_id
+      || transport.command.stdinSha256 !== ownerVisibility.policy.start_wire_sha256) {
+    throw Error('EXACT_FRESH_OWNER_VISIBILITY_START_REQUIRED');
+  }
+  return true;
+}
+
+export async function writeOwnerVisibilityStart(battleStream, writer, start, players, context) {
+  if (ownerVisibility === null) throw Error('OWNER_VISIBILITY_NOT_ADMITTED');
+  const transport = observer.transport;
+  await writer.write(start);
+  if (transport.poisoned || transport.command?.visibilityWrites !== 1) {
+    throw Error('UNVERIFIED_PRE_PLAYER_NATIVE_START_WRITE');
+  }
+  const evidence = ownerVisibility.apply(battleStream.battle, {
+    ...context, session: transport.session, stdinSha256: transport.command.stdinSha256,
+  });
+  transport.visibilityApplied(evidence);
+  await writer.write(players);
+  ownerVisibility.verifyBoundary(battleStream.battle);
 }
 
 function observe(name, args) {

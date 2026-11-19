@@ -92,7 +92,7 @@ class NativeCommandRecorder:
     from witness-source-registry.json. Caller owns the finite process guard.
     """
     def __init__(self, *, directory, artifacts, child, completion, verifier,
-            expected_registry_wire, deadline_monotonic, max_commands=20):
+            expected_registry_wire, deadline_monotonic, max_commands=20, visibility_policy_wire=None):
         _need(type(deadline_monotonic) in (int,float) and time.monotonic()<deadline_monotonic,
             'finite future recording wall deadline required')
         _need(type(max_commands) is int and 1<=max_commands<=20, 'bounded explicit command count required')
@@ -102,6 +102,16 @@ class NativeCommandRecorder:
         _need(type(registry) is dict and set(registry)=={'registry','sourceRegistryHash'}
             and registry['sourceRegistryHash']==verifier.source_registry_hash,
             'independent expected registry/causal verifier identity differs')
+        self.visibility_sha256 = verifier.transport_cursor.visibility_policy_sha256
+        _need(registry['registry'].get('ownerVisibilitySha256') == self.visibility_sha256,
+            'independent expected registry/visibility identity differs')
+        if self.visibility_sha256 is None:
+            _need(visibility_policy_wire is None, 'unadmitted visibility policy')
+        else:
+            _need(type(visibility_policy_wire) is bytes and 0 < len(visibility_policy_wire) <= 4096
+                and native.digest(visibility_policy_wire) == self.visibility_sha256
+                and _bounded_read(Path(directory)/'owner-visibility.json') == visibility_policy_wire,
+                'exact admitted resident visibility policy required')
         self.directory=Path(directory);self.artifacts=Path(artifacts);self.artifacts.mkdir(exist_ok=False)
         _need(self.directory.resolve()!=self.artifacts.resolve() and self.directory.is_dir(), 'separate prepared source and new artifact directories required')
         _need(child.stdin is not None and child.stdout is not None and child.stderr is not None,
@@ -113,6 +123,10 @@ class NativeCommandRecorder:
             for name,source in (('stdout',child.stdout),('stderr',child.stderr),('completion',completion))}
         _durable(self.artifacts/'expected-source-registry.json',self.registry)
         self.admission_files = {}
+        if self.visibility_sha256 is not None:
+            path = self.artifacts/'owner-visibility.json'
+            _durable(path, visibility_policy_wire)
+            self.admission_files[path.name] = _identity(path)
         policy = self.verifier.hook_policy
         if policy is not None:
             for name, wire, digest in (
@@ -132,6 +146,8 @@ class NativeCommandRecorder:
             open_gates=['sealed fixed-input program applicability','independent73-field physical replay','literal owning references','actual-device parity'])
         if self.admission_files:
             value['admission_files'] = copy.deepcopy(self.admission_files)
+        if self.visibility_sha256 is not None:
+            value['owner_visibility_sha256'] = self.visibility_sha256
         _durable(self.artifacts/'recording.json',_json(value),replace=(self.artifacts/'recording.json').exists())
         return value
 

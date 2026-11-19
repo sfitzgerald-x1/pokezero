@@ -49,6 +49,50 @@ def _canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf8')
 
 
+def verify_visibility_start(command, rows, policy_sha256):
+    """Verify the exact native writes around a single pre-player assignment."""
+    def wire(value):
+        return json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+
+    seed, formatid = command.get('seed'), command.get('formatid')
+    _need(type(seed) is str and seed and formatid == 'gen3customgame@@@sleepclausemod'
+          and type(command.get('players')) is dict and set(command['players']) == {'p1', 'p2'},
+          'literal visibility start operands required')
+    start = '>start ' + wire(dict(formatid=formatid, strictChoices=True, seed=seed)) + '\n'
+    players = []
+    for owner in ('p1', 'p2'):
+        saved = command['players'][owner]
+        _need(type(saved) is dict and set(saved) == {'name', 'team'}
+              and all(type(value) is str and value for value in saved.values()),
+              'literal sealed visibility player operands required')
+        entropy = hashlib.sha256(f'{seed}:{owner}'.encode()).digest()
+        player_seed = ','.join(str(int.from_bytes(entropy[i:i+2], 'big')) for i in range(0, 8, 2))
+        players.append(f'>player {owner} ' + wire(dict(name=saved['name'], team=saved['team'], seed=player_seed)))
+    expected = [
+        ('START_WRITE_RETURN', dict(ordinal=1, sha256=native.digest(start.encode()))),
+        ('START_VISIBILITY_APPLIED', dict(policy_sha256=policy_sha256, before_exact=True, after_exact=False,
+                                         before_percentage=False, after_percentage=False, turn=0, installed_players=0)),
+        ('START_WRITE_RETURN', dict(ordinal=2, sha256=native.digest('\n'.join(players).encode()))),
+    ]
+    seen = 0
+    for row in rows:
+        operation = row['operation']
+        if operation == 'REQUEST_CALL_BEGIN':
+            _need(seen >= 2, 'Native player request preceded visibility configuration')
+        elif operation in ('START_WRITE_RETURN', 'START_VISIBILITY_APPLIED', 'SOURCE_WRITE_RETURN'):
+            _need(seen < len(expected) and operation == expected[seen][0]
+                  and native._same(row['evidence'], expected[seen][1]),
+                  'closed Native visibility order or exact write bytes differ')
+            seen += 1
+    _need(seen == len(expected), 'complete Native visibility start proof required')
+
+
+def verify_visibility_snapshot(snapshot):
+    battle = snapshot['battle']
+    _need(battle.get('reportExactHP') is False and battle.get('reportPercentages') is True,
+          'closed Native snapshot lacks admitted percentage visibility')
+
+
 def _line(stream):
     wire = stream.readline(MAX_BYTES+1)
     _need(type(wire) is bytes and 0 < len(wire) <= MAX_BYTES and wire.endswith(b'\n')
@@ -96,7 +140,11 @@ class CommandSpec:
                 or self.hook_identity_digest is None and type(self.hook_admission) is HookAdmissionBinding),
             'independent Native command/source address differs')
         keys = {'schema', 'native_nonce', 'stdin_sha256', 'command', 'previous_completion_hash'}
-        _need(type(bound) is dict and set(bound) == keys and bound['schema'] == 'pokezero.native_transport_control.v1'
+        visibility = type(bound) is dict and bound.get('schema') == 'pokezero.native_transport_control.v2'
+        if visibility:
+            keys.add('visibility_policy_sha256')
+        _need(type(bound) is dict and set(bound) == keys
+            and (native._hex(bound['visibility_policy_sha256']) if visibility else bound['schema'] == 'pokezero.native_transport_control.v1')
             and bound['native_nonce'] == control['nonce'] and native._same(bound['command'], command)
             and bound['stdin_sha256'] == native.digest(self.stdin_wire)
             and native._hex(bound['previous_completion_hash']), 'independent transport control binding differs')
@@ -131,12 +179,15 @@ class _Stream:
 
 class TransportAudit:
     """Replay the source-bound IO evidence without executing Native again."""
-    def __init__(self, *, session, battle_id, source_registry_hash, expected_methods):
+    def __init__(self, *, session, battle_id, source_registry_hash, expected_methods, visibility_policy_sha256=None):
         _need(type(session) is str and session and type(battle_id) is str and battle_id
             and native._hex(source_registry_hash), 'independent transport identity required')
         _need(type(expected_methods) is dict and set(expected_methods) == METHODS
             and all(native._hex(x) for x in expected_methods.values()), 'independent full method-source roster required')
         self.session = session;self.battle_id = battle_id;self.source_registry_hash = source_registry_hash
+        _need(visibility_policy_sha256 is None or native._hex(visibility_policy_sha256),
+            'independent owner visibility policy digest required')
+        self.visibility_policy_sha256 = visibility_policy_sha256
         self.expected_methods = dict(expected_methods);self.sequence = 0;self.head = native.ZERO;self.event_bytes = 0;self.next_callback = 0
         self.previous_completion = native.ZERO;self.producers = [];self.delivered = 0;self.ack = 0;self.current = None
         self.source_registered = False;self.streams_registered = False;self.source_ended = False;self.source_eof = False
@@ -280,6 +331,10 @@ class TransportAudit:
         _need(type(receipt_wire) is bytes and receipt_wire.endswith(b'\n') and not receipt_wire.endswith(b'\r\n')
             and len(receipt_wire) <= MAX_BYTES, 'exact transport completion bytes required')
         command, control, bound = spec.documents();receipt = native.document(receipt_wire.decode('utf8'))
+        _need(bound.get('visibility_policy_sha256') == self.visibility_policy_sha256,
+            'independently admitted visibility policy differs from transport control')
+        visibility_start = self.visibility_policy_sha256 is not None and control['phase'] == 'start'
+        visibility_rows = []
         _need(type(receipt) is dict and set(receipt) == COMPLETION, 'complete closed transport receipt schema required')
         _need(native._hex(receipt.get('hash')), 'transport completion hash required')
         body = {k:v for k, v in receipt.items() if k != 'hash'}
@@ -316,8 +371,15 @@ class TransportAudit:
                 snapshot_hash = e['snapshot_hash'];ended = True
             else:
                 _need(started, 'transport evidence precedes exact command admission')
-                self._event(operation, e, command_id=control['nonce'], stdout=stdout, joined=joined, snapshots=snapshots)
+                if visibility_start and operation in ('START_WRITE_RETURN', 'START_VISIBILITY_APPLIED',
+                                                      'SOURCE_WRITE_RETURN', 'REQUEST_CALL_BEGIN'):
+                    _need(not ended, 'Native visibility start evidence follows command return')
+                    visibility_rows.append(row)
+                if not (visibility_start and operation in ('START_WRITE_RETURN', 'START_VISIBILITY_APPLIED')):
+                    self._event(operation, e, command_id=control['nonce'], stdout=stdout, joined=joined, snapshots=snapshots)
             self.sequence += 1;self.head = row['hash']
+        if visibility_start:
+            verify_visibility_start(command, visibility_rows, self.visibility_policy_sha256)
         emitted = {}
         for row in native_rows:
             frame = row.get('frame')
@@ -343,6 +405,8 @@ class TransportAudit:
                 and boundary['requestId'] == command['requestId'] and native._same(boundary['wire'], witness['wire'])
                 and snapshot_hash == witness['wire']['state_sha256'], 'early snapshot and final command completion differ')
             native.verify_snapshot_wire(witness['wire'], snapshot)
+            if self.visibility_policy_sha256 is not None:
+                verify_visibility_snapshot(snapshot)
         else:_need(not snapshots and snapshot_hash is None, 'unbound snapshot outside snapshot command')
         wanted = dict(body, event_head=self.head, producer_frontier=len(self.producers), fanout_ack_frontier=self.ack,
             streams={name:value.summary() for name, value in self.streams.items()}, stdout_frontier=self.stdout_count,
@@ -361,7 +425,8 @@ class ClosedCommandVerifier:
     a digest copied from the running witness. No physical/reference admission
     or fixed-input recording program is implemented by this class.
     """
-    def __init__(self, *, session, battle_id, source_registry_hash, expected_methods, call_operations, hook_policy=None):
+    def __init__(self, *, session, battle_id, source_registry_hash, expected_methods, call_operations, hook_policy=None,
+                 visibility_policy_sha256=None):
         _need(isinstance(call_operations, (set, frozenset)) and call_operations
             and all(type(x) is str and x for x in call_operations), 'independent causal operation roster required')
         self.call_operations = frozenset(call_operations);self.source_registry_hash = source_registry_hash
@@ -369,11 +434,14 @@ class ClosedCommandVerifier:
             'independent complete catalog operation roster required')
         self.hook_policy=hook_policy;self.hook_cursor=HookCursor() if hook_policy is not None else None
         self.native_cursor = native.Cursor();self.transport_cursor = TransportAudit(session=session, battle_id=battle_id,
-            source_registry_hash=source_registry_hash, expected_methods=expected_methods);self.completed = []
+            source_registry_hash=source_registry_hash, expected_methods=expected_methods,
+            visibility_policy_sha256=visibility_policy_sha256);self.completed = []
 
     def admit_spec(self,spec):
         _need(isinstance(spec,CommandSpec),'independently sealed command specification required')
         documents=spec.documents()
+        _need(documents[2].get('visibility_policy_sha256') == self.transport_cursor.visibility_policy_sha256,
+            'independent visibility control differs before submission')
         if self.hook_policy is None:_need(spec.hook_admission is None,'registration policy was not independently admitted')
         else:
             _need(spec.hook_identity_digest is None,'registration mode cannot adopt a runtime exact digest')
