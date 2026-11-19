@@ -165,8 +165,6 @@ class StrikeResult(NamedTuple):
     immune: object       # [B,64] bool: the variant's resolved type cannot affect the defender (count 0)
     effdis: object       # [B,64] bool: rolls fit but the variant's own effectiveness line differs from the printed one
     typeboost: object    # [B,64] bool: an engine-unmodeled type-boost item is active
-    marvel: object       # [B,64] bool: the defender's Marvel Scale is active
-    plusminus: object    # [B,64] bool: Plus / Minus is active
     move_bits: object    # [B] int32 the static move-class refusals (incl. Eruption / Water Spout below full HP)
 
 
