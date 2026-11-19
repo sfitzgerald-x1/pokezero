@@ -329,6 +329,12 @@ def tracker_default(name, template):
     if name == PUBLIC_ORDER:
         if template.shape[1:] != (2, 6):raise MigrationError(f'{name}: expected [B,2,6], tree has {template.shape}')
         return lambda lanes: np.broadcast_to(np.arange(6, dtype=template.dtype), (lanes, 2, 6))
+    if name == 'trackers.type_changed':
+        # Historical captures have no sticky history. Replay starts with the
+        # neutral carry, just as initialize does. Present values are preserved.
+        if template.shape[1:] != (2,) or template.dtype != np.dtype(bool):
+            raise MigrationError(f'{name}: expected a boolean [B,2] carry')
+        return lambda lanes: np.zeros((lanes, 2), dtype=bool)
     if re.match(r"^trackers\.(mon_features|field_features)\[", name):
         return lambda lanes: np.zeros((lanes,) + template.shape[1:], template.dtype)
     if name in TRANSFORM_TRACKERS:   # Transform: no captured lane is transformed (no mark, no donor, no copied uses)

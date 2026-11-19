@@ -157,6 +157,15 @@ class DigestAndRuleTests(unittest.TestCase):
         self.assertTrue((named['state.new'] == -1).all())
         self.assertEqual(named['trackers.public_order'][2, 1].tolist(), list(range(6)))       # declared identity, not lane 0
         self.assertTrue((named["trackers.mon_features['wrap_trap_turns']"] == 0).all())
+        history = 'trackers.type_changed'
+        template[history] = np.ones((1, 2), bool)
+        migrated, filled = migrate(['state.a', 'actions'], leaves, template, defaults=defaults)
+        self.assertIn(history, filled)
+        np.testing.assert_array_equal(migrated[history], np.zeros((3, 2), bool))
+        captured = np.asarray([[True, False], [True, True], [False, True]])
+        migrated, filled = migrate(['state.a', 'actions', history], leaves + [captured], template, defaults=defaults)
+        self.assertNotIn(history, filled)
+        np.testing.assert_array_equal(migrated[history], captured)
         with self.assertRaises(MigrationError):migrate(['state.a', 'actions'], [leaves[0].astype(np.int16), leaves[1]], template, defaults=defaults)
         with self.assertRaises(MigrationError):migrate(['state.a', 'actions'], [np.ones((3, 3), np.int32), leaves[1]], template, defaults=defaults)
         with self.assertRaises(MigrationError):migrate(['state.a', 'actions', 'state.gone'], leaves + [leaves[0]], template, defaults=defaults)
