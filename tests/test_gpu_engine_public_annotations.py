@@ -59,6 +59,14 @@ class AnnotationLexicalTests(unittest.TestCase):
                 self.assertIsNone(classify(line + ' 2'))
         self.assertIsNone(classify('|debug|tripling secondary chance'))
 
+    def test_frozen_root29_reversal_diagnostic(self):
+        from gpu_engine.public_annotations import classify
+
+        self.assertEqual(classify('|debug|BP: 20'), 'text')
+        for line in ('|debug|BP: 020', '|debug|BP: 21', '|debug|BP: 20|extra', '|debug|BP: 40'):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
     def test_bounded_canonical_shapes_and_refusals(self):
         from gpu_engine.public_annotations import classify
         for line in (*SETUP,*ANNOTATIONS):self.assertIsNotNone(classify(line),line)

@@ -83,9 +83,9 @@ def classify(line):
         # Deliberate Gen3 admission restriction; the source parser's integer
         # decoder is broader. Unsupported counts refuse rather than coerce.
         return 'target' if len(parts)==4 and ident and parts[3] in ('1','2','3','4','5') else None
-    # The pinned Native damage calculation emitted these two diagnostics.
-    # The move, damage and boost lines retain their own state consumers.
-    if line in ('|debug|BP: 70', '|debug|Negating (sp)def boost/penalty.'):
+    # These are exact diagnostics from the pinned Native damage calculation.
+    # The Gen 3 Reversal callback emits BP: 20 on the frozen root 29 prefix.
+    if line in ('|debug|BP: 20', '|debug|BP: 70', '|debug|Negating (sp)def boost/penalty.'):
         return 'text'
     if kind in ('-hint','-message'):
         return 'text' if len(parts)==3 and parts[2].strip() else None
