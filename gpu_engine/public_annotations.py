@@ -72,6 +72,10 @@ def classify(line):
         # Deliberate Gen3 admission restriction; the source parser's integer
         # decoder is broader. Unsupported counts refuse rather than coerce.
         return 'target' if len(parts)==4 and ident and parts[3] in ('1','2','3','4','5') else None
+    # The pinned Native damage calculation emitted these two diagnostics.
+    # The move, damage and boost lines retain their own state consumers.
+    if line in ('|debug|BP: 70', '|debug|Negating (sp)def boost/penalty.'):
+        return 'text'
     if kind in ('-hint','-message'):
         return 'text' if len(parts)==3 and parts[2].strip() else None
     if line=='|-fieldactivate|move: Perish Song':return 'perish_announcement'
