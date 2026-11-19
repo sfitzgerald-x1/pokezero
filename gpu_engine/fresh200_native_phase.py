@@ -75,18 +75,36 @@ def phase_from_native(snapshot,party:PartyMap,*,original_inputs=None,old_stall=N
     actor=-1;actions=(0,0);stall=(0,0)
     if moves:
         need(bool(residual),'remaining Native move lacks its original residual queue continuation')
-        actor,original=party.resolve_pokemon(moves[0]['pokemon'])
-        need(not requested[actor] and original==party.active(actor),'pending Native actor is not the unchanged nonrequesting side')
+        queued_side, original = party.resolve_pokemon(moves[0]['pokemon'])
+        need(original == party.active(queued_side), 'pending Native actor is not the unchanged active member')
+        inert = requested[queued_side]
+        if inert:
+            peer = 1 - queued_side
+            peer_request = requests.get(f'p{peer+1}')
+            fainted = party.mon(queued_side, original)
+            survivor = party.mon(peer, party.active(peer))
+            # Showdown leaves the skipped move's fainted actor in the literal queue.
+            # PhaseProof stores only the executable continuation and pending residual.
+            need(battle.get('formatid') == 'gen3customgame' and battle.get('gameType') == 'singles'
+                 and battle.get('midTurn') is True and queue == [moves[0], residual[0]]
+                 and forced[queued_side] and not forced[peer]
+                 and peer_request is not None and peer_request.get('wait') is True
+                 and type(fainted.get('hp')) is int and fainted['hp'] == 0 and fainted.get('fainted') is True
+                 and type(survivor.get('hp')) is int and survivor['hp'] > 0 and survivor.get('fainted') is False,
+                 'requesting Native actor has no proof of an inert fainted move')
         need(isinstance(original_inputs,OrdinaryInputs) and len(original_inputs.actions)==2
             and all(type(x) is int and 0<=x<9 for x in original_inputs.actions)
             and len(original_inputs.native_moves)==2 and len(original_inputs.commit_call_ids)==2 and len(set(original_inputs.commit_call_ids))==2
             and all(type(x) is int and x>=0 for x in original_inputs.commit_call_ids), 'sealed original inputs and actual Native commit join required')
         move=moves[0].get('moveid') or reference_identifier(moves[0].get('move'),'Move')
-        need(original_inputs.native_moves[actor]==(original,move) and original_inputs.actions[actor]<4,
+        need(original_inputs.native_moves[queued_side]==(original,move) and original_inputs.actions[queued_side]<4,
             'remaining Native queued move differs from original accepted input')
         need(type(old_stall) in (list,tuple) and len(old_stall)==2 and all(type(x) is int and x>=0 for x in old_stall),
             'actual Native old-stall freeze required for pending actor')
-        actions=tuple(original_inputs.actions);stall=tuple(old_stall)
+        if not inert:
+            actor = queued_side
+            actions = tuple(original_inputs.actions)
+            stall = tuple(old_stall)
     pending=bool(residual)
     return PhaseProof('replacement-before-residual' if pending else 'replacement-after-residual',turn,clocks,
         tuple(requested),pending,actor,actions,stall,receipt['lastSequence'])

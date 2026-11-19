@@ -10,8 +10,8 @@ from gpu_engine.fresh200_owner_history import OwnerHistory
 from gpu_engine.fresh200_boundary_gate import BoundaryAddress,BoundaryGate
 
 
-def boundary():
-    party,request,_=action_fixture();peer=copy.deepcopy(request);peer['side']['id']='p2'
+def boundary(*, permutation='123456'):
+    party,request,_=action_fixture(permutation=permutation);peer=copy.deepcopy(request);peer['side']['id']='p2'
     party.battle.update(turn=4,midTurn=False,requestState='move',queue=[])
     for side in (0,1):
         for mon in party.battle['sides'][side]['pokemon']:mon['activeTurns']=4
@@ -27,6 +27,22 @@ def suspended():
     snapshot['boundaryRequests']['p2'].pop('active');snapshot['boundaryRequests']['p2']['forceSwitch']=[True]
     inputs=OrdinaryInputs((1,3),((0,'tackle'),(0,'batonpass')),(40,41))
     return snapshot,party,inputs
+
+
+def fainted_requester(side, move):
+    snapshot, party = boundary(permutation='413256')
+    owner, peer = f'p{side+1}', f'p{2-side}'
+    snapshot['battle'].update(
+        formatid='gen3customgame', gameType='singles', midTurn=True, requestState='switch',
+        queue=[dict(choice='move', pokemon=f'[Pokemon:{owner}a]', moveid=move), dict(choice='residual')])
+    snapshot['boundaryRequests'][owner].pop('active')
+    snapshot['boundaryRequests'][owner]['forceSwitch'] = [True]
+    snapshot['boundaryRequests'][peer]['wait'] = True
+    party.mon(side, party.active(side)).update(hp=0, fainted=True)
+    party.mon(1-side, party.active(1-side)).update(hp=173, fainted=False)
+    native_moves = [(1, 'tackle'), (1, 'tackle')]
+    native_moves[side] = (1, move)
+    return snapshot, party, OrdinaryInputs((1, 3), tuple(native_moves), (40, 41))
 
 
 def chance():
@@ -55,6 +71,60 @@ class NativeTransportContractTests(unittest.TestCase):
         snapshot['battle']['queue'].insert(0,dict(choice='move',pokemon='[Pokemon:p2a]',moveid='surf'))
         with self.assertRaisesRegex(UnmappedNativePhase,'ambiguous'):
             phase_from_native(snapshot,party,original_inputs=inputs,old_stall=[0,0])
+
+    def test_fainted_requesters_keep_residual_without_an_executable_move(self):
+        for root, side, move in ((80, 1, 'agility'), (81, 0, 'rockslide')):
+            with self.subTest(root=root):
+                snapshot, party, inputs = fainted_requester(side, move)
+                old_stall = [2, 1]
+                phase = phase_from_native(snapshot, party, original_inputs=inputs, old_stall=old_stall)
+                self.assertEqual(phase.kind, 'replacement-before-residual')
+                self.assertEqual(phase.requested, (side == 0, side == 1))
+                self.assertTrue(phase.pending_residual)
+                self.assertEqual((phase.queued_actor, phase.queued_actions, phase.queued_stall), (-1, (0, 0), (0, 0)))
+                self.assertEqual(old_stall, [2, 1])
+                old = chance()
+                old['draws'][0][1] = 3
+                fresh = chance()
+                fresh['entry_ties'] = [1, 0]
+                packet = step_packet_from_native(phase, fresh, old, stream=12, request=1)
+                self.assertEqual(packet['draws'], old['draws'])
+                self.assertEqual(packet['entry_ties'], [1, 0])
+
+    def test_fainted_requester_does_not_relax_original_choice_or_stall_proof(self):
+        snapshot, party, inputs = fainted_requester(1, 'agility')
+        with self.assertRaisesRegex(UnmappedNativePhase, 'commit join'):
+            phase_from_native(snapshot, party, old_stall=[0, 0])
+        wrong_move = OrdinaryInputs(inputs.actions, ((1, 'tackle'), (1, 'protect')), inputs.commit_call_ids)
+        with self.assertRaisesRegex(UnmappedNativePhase, 'original accepted input'):
+            phase_from_native(snapshot, party, original_inputs=wrong_move, old_stall=[0, 0])
+        with self.assertRaisesRegex(UnmappedNativePhase, 'old-stall'):
+            phase_from_native(snapshot, party, original_inputs=inputs)
+
+    def test_fainted_requester_requires_exact_witness(self):
+        for near_miss in ('living', 'departed', 'both-forced', 'no-wait', 'queue-order', 'format', 'no-residual'):
+            with self.subTest(near_miss=near_miss):
+                snapshot, party, inputs = fainted_requester(0, 'rockslide')
+                match = 'no proof'
+                battle = snapshot['battle']
+                if near_miss == 'living':
+                    party.mon(0, party.active(0)).update(hp=5, fainted=False)
+                elif near_miss == 'departed':
+                    battle['sides'][0]['active'] = ['[Pokemon:p1b]']
+                    match = 'unchanged active'
+                elif near_miss == 'both-forced':
+                    snapshot['boundaryRequests']['p2'].update(wait=False, forceSwitch=[True])
+                elif near_miss == 'no-wait':
+                    snapshot['boundaryRequests']['p2'] = None
+                elif near_miss == 'queue-order':
+                    battle['queue'].reverse()
+                elif near_miss == 'format':
+                    battle['formatid'] = 'gen4customgame'
+                elif near_miss == 'no-residual':
+                    battle['queue'].pop()
+                    match = 'residual queue'
+                with self.assertRaisesRegex(UnmappedNativePhase, match):
+                    phase_from_native(snapshot, party, original_inputs=inputs, old_stall=[0, 0])
 
     def test_replacement_counter_counts_closed_resumes_and_clears_after_residual(self):
         initial,party=boundary();ordinary=phase_from_native(initial,party)
