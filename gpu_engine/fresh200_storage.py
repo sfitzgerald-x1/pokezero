@@ -60,8 +60,8 @@ def scan_spec(value, steps):
     raise TypeError('only trusted specification nodes may acquire a scan axis')
 
 
-def pool_dimensions(path, expected_sha256):
-    """Read only metadata_utf8 after binding the exact resident NPZ bytes."""
+def read_pool_metadata(path, expected_sha256):
+    """Return the bounded metadata from the exact resident NPZ bytes."""
     path = Path(path)
     if sha256_file(path) != expected_sha256:raise ValueError('bound constructor pool SHA differs')
     with zipfile.ZipFile(path) as archive:
@@ -71,7 +71,13 @@ def pool_dimensions(path, expected_sha256):
         with archive.open(members[0]) as stream:value = np.load(stream, allow_pickle=False)
     if value.dtype != np.dtype('uint8') or value.ndim != 1:
         raise ValueError('literal uint8 pool metadata required')
-    blob = value.tobytes();metadata = json.loads(blob);vocabulary = metadata['vocabulary']
+    return value.tobytes()
+
+
+def pool_dimensions(path, expected_sha256):
+    path = Path(path)
+    blob = read_pool_metadata(path, expected_sha256)
+    metadata = json.loads(blob);vocabulary = metadata['vocabulary']
     names = {}
     for kind in ('abilities', 'items'):
         values = vocabulary[kind]
