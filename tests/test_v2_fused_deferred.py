@@ -129,7 +129,8 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
     clock = count()
     with ExitStack() as patches:
         def replace(module, **options):
-            patches.enter_context(patch.multiple(module, **options))
+            for name, replacement in options.items():
+                patches.enter_context(patch.object(module, name, replacement))
 
         replace(v2_fused, prepare=lambda args: context, construct=construct, load_actor=actor,
                 audit=lambda *_: [], write_json=write, log=log,
