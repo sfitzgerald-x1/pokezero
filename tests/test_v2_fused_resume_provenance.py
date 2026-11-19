@@ -21,7 +21,7 @@ except ImportError:
 def exercise_resume(root, distribution=None):
     model, loss, train = configurations()
     declaration = {'fixture': 'fused-resume', 'self_moves': False}
-    plan = SimpleNamespace(model=model, loss=loss, train=train, self_moves=False, iterations=(),
+    plan = SimpleNamespace(model=model, loss=loss, train=train, self_moves=False, iterations=(), games=(),
                            manifest=lambda: declaration)
     context = dict(plan=plan, declared={}, preparation_seconds=0)
     checkpoint = root / 'on.pt'
