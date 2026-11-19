@@ -64,7 +64,7 @@ class _ClosedStream:
 
 def load_recorded_boundaries(prefix, root, *, recorded_root, completed_sha256, source_registry_hash,
                              visibility_policy_sha256=None):
-    """Extract PRE0–PRE8 without starting Native or opening expected values.
+    """Extract the admitted PRE boundaries without starting Native or opening expected values.
 
     The caller supplies the admitted inputs, terminal receipt digest, and the
     producer's output mount for the same durable root. Paths inside the receipt
@@ -79,7 +79,10 @@ def load_recorded_boundaries(prefix, root, *, recorded_root, completed_sha256, s
     manifest_wire = _bounded_read(recording / 'completed.json')
     _need(digest(manifest_wire) == completed_sha256, 'completed recording digest differs')
     receipt = document(manifest_wire.decode('utf8'))
-    schedule = prefix_schedule()
+    schedule = prefix_schedule(len(prefix.steps))
+    binding = document(prefix.binding_wire.decode('utf8'))
+    _need(_same(binding['schedule'], [vars(command) for command in schedule]),
+          'archive extent differs from the sealed prefix schedule')
     records = receipt['commands']
     _need(receipt['schema'] == 'pokezero.fresh200.raw_command_recording.v1'
           and receipt['status'] == 'RAW_CLOSED_ARTIFACT_SET_RECORDED_ONLY'

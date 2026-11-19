@@ -95,7 +95,9 @@ class NativeCommandRecorder:
             expected_registry_wire, deadline_monotonic, max_commands=20, visibility_policy_wire=None):
         _need(type(deadline_monotonic) in (int,float) and time.monotonic()<deadline_monotonic,
             'finite future recording wall deadline required')
-        _need(type(max_commands) is int and 1<=max_commands<=20, 'bounded explicit command count required')
+        # A frozen PRE63 prefix allows at most 63 choice/PRE pairs plus start,
+        # PRE0, end and close. The dispatcher checks the exact sealed extent.
+        _need(type(max_commands) is int and 1<=max_commands<=130, 'bounded explicit command count required')
         _need(type(expected_registry_wire) is bytes and expected_registry_wire.endswith(b'\n')
             and len(expected_registry_wire)<=MAX_BYTES, 'independent literal source registry required')
         registry=native.document(expected_registry_wire.decode('utf8'))

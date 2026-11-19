@@ -280,11 +280,15 @@ def _constructor(snapshot, teams):
 
 
 class FixedPrefixDispatcher:
-    """Use only the eight admitted action/chance rows on a prepared recorder."""
+    """Use only the admitted action/chance rows on a prepared recorder."""
 
     def __init__(self, prefix, recorder, chance, *, session):
-        _need(type(prefix) is FrozenPrefix and len(prefix.steps) == 8 and type(session) is str and session,
+        _need(type(prefix) is FrozenPrefix and type(session) is str and session,
               'one admitted frozen prefix and session required')
+        self.schedule = prefix_schedule(len(prefix.steps))
+        binding = document(prefix.binding_wire.decode('utf8'))
+        _need(_same(binding['schedule'], [vars(command) for command in self.schedule])
+              and recorder.max_commands == len(self.schedule), 'recorder extent differs from the sealed prefix schedule')
         self.prefix = prefix
         self.recorder = recorder
         self.chance = chance
@@ -328,7 +332,8 @@ class FixedPrefixDispatcher:
         ordinary_packet = None
         boundary = None
         battle_id = self.prefix.battle_id
-        for command in prefix_schedule():
+        endpoint = len(self.prefix.steps)
+        for command in self.schedule:
             phase_name, frame = command.phase, command.frame
             if phase_name == 'start':
                 self._submit(self.prefix.start_wire, phase_name, 0, launch_wire)
@@ -342,8 +347,8 @@ class FixedPrefixDispatcher:
                 if frame == 0:
                     _constructor(snapshots[0], self.evidence.teams)
                 boundary = self.evidence.boundary(snapshots[0], ordinary=prior_ordinary)
-                if frame == 8:
-                    _need(boundary[0].requested[self.prefix.owner], 'frozen PRE8 owner is not requested in Native')
+                if frame == endpoint:
+                    _need(boundary[0].requested[self.prefix.owner], 'frozen endpoint owner is not requested in Native')
             elif phase_name == 'choices':
                 step = self.prefix.steps[frame]
                 phase, party, relations = boundary
@@ -363,7 +368,8 @@ class FixedPrefixDispatcher:
                     prior_ordinary = confirmed
                     ordinary_packet = packet
             else:
-                self._submit(_json(dict(type=phase_name, battleId=battle_id)), phase_name, 8)
+                self._submit(_json(dict(type=phase_name, battleId=battle_id)), phase_name, endpoint)
         completion = self.recorder.finish(expected_command_ids=self.command_ids)
-        _need(len(self.command_ids) == 20 and completion['qualification'] is False, 'complete raw prefix required')
+        _need(len(self.command_ids) == len(self.schedule) and completion['qualification'] is False,
+              'complete raw prefix required')
         return completion

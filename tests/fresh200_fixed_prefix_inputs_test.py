@@ -65,7 +65,7 @@ class FrozenPrefixInputsTest(unittest.TestCase):
 
         with patch.object(prefix, 'SealedInputs', ReplayInputs), patch.object(
                 prefix, '_manifest', side_effect=lambda root, reference, source: links[reference]):
-            steps, sources = prefix._read_steps(None, None, None, game, 1, 'construction', links['link-0'],
+            steps, sources = prefix._read_steps(None, None, None, capture, game, 1, 'construction', links['link-0'],
                                                 selected, bind_consumed=True)
         self.assertEqual(reads, [(step, 1) for step in range(9)])
         self.assertEqual([step.frame for step in steps], list(range(9)))
