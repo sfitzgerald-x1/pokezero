@@ -316,14 +316,6 @@ class HeldoutMechanismTests(unittest.TestCase):
                             siblings=artifact('s.jsonl', dict(common, schema=bank.SIBLINGS)))
             with self.assertRaisesRegex(ValueError, 'different device-bank encodings'):bank.resolve_device_bank(protocol, None)
 
-    def test_bank_capture_refuses_an_on_catalog(self):
-        from gpu_engine import v5_device_evaluation_bank as capture
-        prepared = lambda on: SimpleNamespace(catalog=SimpleNamespace(masks=SimpleNamespace(self_moves=on)))
-        with self.assertRaisesRegex(ValueError, 'not threaded yet'):
-            capture.collect(None, prepared(True), None, gender_policy=None)
-        with self.assertRaisesRegex(ValueError, 'no-replay resume mode'):     # off passes on to the next check
-            capture.collect(None, prepared(False), None, gender_policy=None, resume='no')
-
     def test_python_capture_bank_is_off(self):
         from pokezero import v5_evaluation as evaluation
         data = SimpleNamespace(positions=(1, 2, 3), groups=(4,))

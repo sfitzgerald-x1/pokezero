@@ -45,6 +45,8 @@ def publish(path,value):
 def bank_manifest(config,schema):
     """Validate original complete bank, before original runtime/model work."""
     decl,batches,games,labels=schema.declaration(config['declaration'])
+    if decl.get('self_moves', False):
+        raise ValueError('rollout truth does not support a self_moves ON bank')
     ph,positions=schema._records(config['positions'],schema.POSITIONS)
     sh,groups=schema._records(config['siblings'],schema.SIBLINGS)
     protocol=dict(positions=config['positions'],siblings=config['siblings'],label_vocabulary_sha256=labels.sha256)
