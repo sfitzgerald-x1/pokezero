@@ -104,8 +104,7 @@ def _members(party, observed, scalars, history, sequence):
     return [[values for _, values in sorted(side)] for side in result]
 
 
-def project_core(boundary, *, original_species):
-    """Type-check the covered leaves without opening any expected State values."""
+def bound_boundary(boundary, original_species):
     _need(isinstance(boundary, RecordedBoundary), 'closed archived Native boundary required')
     snapshot, phase, history = boundary.snapshot, boundary.phase, boundary.history
     witness = _field(snapshot, 'witness')
@@ -117,7 +116,14 @@ def project_core(boundary, *, original_species):
           and _same(_field(witness, 'elidedProperties'), receipt['boundary']['elidedProperties']),
           'Native phase, causal history and literal member data must describe the same boundary')
     party = PartyMap(_field(snapshot, 'battle'), original_species)
-    members = _members(party, _field(observed, 'state'), _scalars(witness, party), history, phase.snapshot_sequence)
+    return party, _field(observed, 'state')
+
+
+def project_core(boundary, *, original_species):
+    """Type-check the covered leaves without opening any expected State values."""
+    party, observed = bound_boundary(boundary, original_species)
+    phase, history = boundary.phase, boundary.history
+    members = _members(party, observed, _scalars(boundary.snapshot['witness'], party), history, phase.snapshot_sequence)
     values = {key: [[mon[key] for mon in side] for side in members] for key in members[0][0]}
     values.update(
         active=[party.active(0), party.active(1)], active_turns=phase.active_turns,
