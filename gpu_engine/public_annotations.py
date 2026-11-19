@@ -45,6 +45,11 @@ def classify(line):
     if len(parts)<2 or parts[0]:return None
     kind=parts[1]
     if line==TURN_500_WARNING:return 'text'
+    # Showdown f76228a1 emits these exact diagnostics in battle-actions.ts:1331
+    # and abilities.ts:4185. Keep the raw line and its shared consumers, with
+    # no failure, ability reveal or secondary-effect event inferred from it.
+    if line in ('|debug|move failed because it did nothing', '|debug|Shield Dust prevent secondary'):
+        return 'text'
     if attract_idents(line) is not None:return 'attract'
     # Incidental proc tags retain their existing consumers; text cannot
     # manufacture a source ability/item reveal under this annotation contract.

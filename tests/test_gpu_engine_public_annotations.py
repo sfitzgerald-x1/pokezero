@@ -35,6 +35,18 @@ class AnnotationLexicalTests(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertIsNone(classify(line))
 
+    def test_frozen_root2_diagnostics_admit_only_exact_annotation_text(self):
+        from gpu_engine.public_annotations import classify
+
+        lines = ('|debug|move failed because it did nothing', '|debug|Shield Dust prevent secondary')
+        for line in lines:
+            with self.subTest(line=line):
+                self.assertEqual(classify(line), 'text')
+                self.assertIsNone(classify(line + '|p2a: Dustox'))
+                self.assertIsNone(classify(line + '\n'))
+        self.assertIsNone(classify('|debug|Shield Dust prevent primary'))
+        self.assertIsNone(classify('|debug|move failed because it did something'))
+
     def test_bounded_canonical_shapes_and_refusals(self):
         from gpu_engine.public_annotations import classify
         for line in (*SETUP,*ANNOTATIONS):self.assertIsNotNone(classify(line),line)
