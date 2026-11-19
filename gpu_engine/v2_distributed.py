@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import time
+from uuid import UUID
 
 
 class Distribution:
@@ -152,8 +153,10 @@ def main(argv=None):
     count = torch.cuda.device_count()
     if count != args.ranks:
         raise ValueError(f'exactly {args.ranks} allocated CUDA devices required; visible={count}')
-    identifiers = [str(torch.cuda.get_device_properties(i).uuid) for i in range(count)]
-    if len(set(identifiers)) != count or any(not x for x in identifiers):
+    # Torch can return a bare UUID. CUDA_VISIBLE_DEVICES expects the GPU- form.
+    identifiers = [f"GPU-{UUID(str(torch.cuda.get_device_properties(i).uuid).removeprefix('GPU-'))}"
+                   for i in range(count)]
+    if len(set(identifiers)) != count:
         raise ValueError('distinct allocated GPU UUIDs required')
     with tempfile.TemporaryDirectory(prefix='v2-rendezvous-') as temporary:
         rendezvous = str(Path(temporary) / 'store')
