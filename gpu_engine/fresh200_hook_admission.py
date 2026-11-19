@@ -60,12 +60,21 @@ class SourceCatalog:
         _need(native._hex(self.parser_sha256) and type(self.source_pins) is tuple and self.source_pins
             and type(self.entries) is tuple and self.entries,'sealed source/parser/function catalog required')
         _need(len({x.operation for x in self.entries})==len(self.entries),'duplicate catalog operation')
-        document=dict(schema='pokezero.native_function_catalog.v1',parser_sha256=self.parser_sha256,
-            sources=[dict(path=p,sha256=s) for p,s in self.source_pins],
-            functions=[dict(operation=e.operation,originalSha256=e.originalSha256,kind=e.kind,stage=e.stage,
-                locations=[vars(x) for x in e.locations]) for e in self.entries])
-        object.__setattr__(self,'sha256',native.digest(_wire(document,sort=True)))
+        object.__setattr__(self,'sha256',native.digest(self.wire()))
         object.__setattr__(self,'_lookup',MappingProxyType({x.operation:x for x in self.entries}))
+
+    def wire(self):
+        return _wire(dict(
+            schema='pokezero.native_function_catalog.v1',
+            parser_sha256=self.parser_sha256,
+            sources=[dict(path=path, sha256=sha) for path, sha in self.source_pins],
+            functions=[
+                dict(operation=entry.operation, originalSha256=entry.originalSha256,
+                     kind=entry.kind, stage=entry.stage,
+                     locations=[vars(location) for location in entry.locations])
+                for entry in self.entries
+            ],
+        ), sort=True)
 
     def entry(self,operation):
         _need(operation in self._lookup,'hook operation is absent from independent source catalog')
@@ -128,9 +137,17 @@ class HookPolicy:
         for stage,operations in (('bootstrap-method',self.bootstrap_operations),('instance-method',self.instance_operations)):
             _need(all(self.catalog.entry(op).stage==stage for op in operations),'catalog and independently declared installation stage differ')
         _need(not self.instance_operations or self.instance_discovery_operation in self.bootstrap_operations,'declared instance discovery seam required')
-        object.__setattr__(self,'sha256',native.digest(_wire(dict(schema='pokezero.native_hook_policy.v1',catalog_sha256=self.catalog.sha256,
-            bootstrap_operations=self.bootstrap_operations,instance_operations=self.instance_operations,
-            instance_discovery_operation=self.instance_discovery_operation,discovery_rules='native-passive-registration-v1'),sort=True)))
+        object.__setattr__(self,'sha256',native.digest(self.wire()))
+
+    def wire(self):
+        return _wire(dict(
+            schema='pokezero.native_hook_policy.v1',
+            catalog_sha256=self.catalog.sha256,
+            bootstrap_operations=self.bootstrap_operations,
+            instance_operations=self.instance_operations,
+            instance_discovery_operation=self.instance_discovery_operation,
+            discovery_rules='native-passive-registration-v1',
+        ), sort=True)
 
     @property
     def operations(self):return frozenset(e.operation for e in self.catalog.entries)

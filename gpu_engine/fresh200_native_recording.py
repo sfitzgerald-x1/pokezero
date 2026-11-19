@@ -48,6 +48,13 @@ def _identity(path):
     return dict(path=str(path),bytes=size,sha256=digest.hexdigest())
 
 
+def _bounded_read(path):
+    with path.open('rb') as stream:
+        data = stream.read(MAX_BYTES + 1)
+    _need(len(data) <= MAX_BYTES, 'recording input exceeds the byte limit')
+    return data
+
+
 class _Capture:
     """Drain an original FD even if the evidence sink fails; never parse IO."""
     def __init__(self, source, path, condition):
@@ -105,6 +112,17 @@ class NativeCommandRecorder:
         self._captures={name:_Capture(source,self.artifacts/(name+'.bin'),self.condition)
             for name,source in (('stdout',child.stdout),('stderr',child.stderr),('completion',completion))}
         _durable(self.artifacts/'expected-source-registry.json',self.registry)
+        self.admission_files = {}
+        policy = self.verifier.hook_policy
+        if policy is not None:
+            for name, wire, digest in (
+                ('hook-policy.json', policy.wire(), policy.sha256),
+                ('hook-catalog.json', policy.catalog.wire(), policy.catalog.sha256),
+            ):
+                _need(len(wire) <= MAX_BYTES and native.digest(wire) == digest, 'independently admitted hook document differs')
+                path = self.artifacts / name
+                _durable(path, wire)
+                self.admission_files[name] = _identity(path)
         self._manifest()
 
     def _manifest(self):
@@ -112,6 +130,8 @@ class NativeCommandRecorder:
             status='FAILED_RAW_RECORDING' if self.failed else 'RAW_CLOSED_ARTIFACT_SET_RECORDED_ONLY' if self.finished else 'RECORDING',
             source_registry_hash=self.verifier.source_registry_hash,commands=copy.deepcopy(self.records),failure=self.failed,
             open_gates=['sealed fixed-input program applicability','independent73-field physical replay','literal owning references','actual-device parity'])
+        if self.admission_files:
+            value['admission_files'] = copy.deepcopy(self.admission_files)
         _durable(self.artifacts/'recording.json',_json(value),replace=(self.artifacts/'recording.json').exists())
         return value
 
@@ -136,7 +156,8 @@ class NativeCommandRecorder:
             'bounded complete saved receipt bytes required')
         return value,end
 
-    def record(self, spec):
+    def record(self, spec, *, chance_control_wire=None):
+        """Record one command with the independently supplied chance control, if used."""
         _need(self.command_lock.acquire(blocking=False), 'one original command at a time required')
         index=len(self.records);record=None
         try:
@@ -148,14 +169,29 @@ class NativeCommandRecorder:
                 and control['previous_receipt_hash']==self.verifier.native_cursor.receipt_hash
                 and bound['previous_completion_hash']==self.verifier.transport_cursor.previous_completion,
                 'independent next command/receipt parents differ before stdin write')
+            chance_path = self._validate_chance_control(control, chance_control_wire)
             self._remaining();folder=self.artifacts/('command-'+str(index));folder.mkdir(exist_ok=False)
             record=dict(index=index,command_id=control['nonce'],phase=command['type'],status='SEALED_BEFORE_STDIN',inputs={})
             self.records.append(record)
-            for name,data in (('stdin.jsonl',spec.stdin_wire),('native-control.json',spec.native_control_wire),('transport-control.json',spec.transport_control_wire)):
+            inputs = {
+                'stdin.jsonl': spec.stdin_wire,
+                'native-control.json': spec.native_control_wire,
+                'transport-control.json': spec.transport_control_wire,
+            }
+            if spec.hook_admission is not None:
+                inputs['hook-admission.json'] = _json(vars(spec.hook_admission))
+            else:
+                inputs['hook-admission.json'] = _json(dict(hook_identity_digest=spec.hook_identity_digest))
+            if chance_path is not None:
+                inputs[chance_path.name] = chance_control_wire
+            for name,data in inputs.items():
                 path=folder/name;_durable(path,data);record['inputs'][name]=_identity(path)
             _durable(self.directory/'witness-control.json',spec.native_control_wire,replace=True)
             _durable(self.directory/'witness-transport-control.json',spec.transport_control_wire,replace=True)
             self._manifest()
+            if chance_path is not None:
+                _need(_bounded_read(chance_path) == chance_control_wire, 'resident chance control changed before stdin write')
+            self._remaining()
             # Exactly the admitted bytes, once. No newline/protocol sentinel,
             # default action, read probe or implicit teardown is introduced.
             wrote=self.child.stdin.write(spec.stdin_wire)
@@ -196,13 +232,32 @@ class NativeCommandRecorder:
             self._manifest();raise
         finally:self.command_lock.release()
 
+    def _validate_chance_control(self, control, wire):
+        if wire is None:
+            if self.verifier.hook_policy is not None:
+                _need(not any((self.directory / name).exists() for name in ('initializing.json', 'chance.json')),
+                      'active chance control requires independently sealed bytes')
+            return None
+        _need(type(wire) is bytes and 0 < len(wire) <= MAX_BYTES, 'bounded exact chance control bytes required')
+        phase = control['phase']
+        _need(phase in ('start', 'choices'), 'chance control belongs only to start or choices')
+        name, other = ('initializing.json', 'chance.json') if phase == 'start' else ('chance.json', 'initializing.json')
+        path = self.directory / name
+        _need(not (self.directory / other).exists(), 'overlapping Native chance controls')
+        value = native.document(wire.decode('utf8'))
+        _need(type(value) is dict, 'literal chance control object required')
+        if phase == 'choices':
+            _need(type(control['chance_nonce']) is str and bool(control['chance_nonce'])
+                  and value.get('nonce') == control['chance_nonce'], 'chance control nonce differs')
+        _need(_bounded_read(path) == wire, 'resident chance control differs before stdin write')
+        return path
+
     def archive_chance_before_retirement(self, *, retire):
         """Preserve exact bytes before existing initialized()/end() removes them."""
         _need(self.records and self.records[-1]['status']=='RAW_CLOSED_COMMAND_VERIFIED_ONLY' and callable(retire),
             'closed command and explicit existing chance retirement required')
         folder=self.artifacts/('command-'+str(len(self.records)-1));source=self.directory/'chance-audit.jsonl'
-        data=source.read_bytes() if source.exists() else b''
-        _need(len(data)<=MAX_BYTES, 'bounded original chance audit required')
+        data=_bounded_read(source) if source.exists() else b''
         expected=[]
         for line in data.splitlines(keepends=True):
             _need(line.endswith(b'\n'),'complete chance audit frames required');expected.append(native.document(line.decode('utf8')))
@@ -240,5 +295,12 @@ class NativeCommandRecorder:
         finally:
             for stream in opened.values():stream.close()
         self.finished=True;manifest=self._manifest();manifest['files']={name:_identity(capture.path) for name,capture in self._captures.items()}
+        manifest['files'].update({
+            name: _identity(self.directory / name) for name in (
+                'witness-audit.jsonl', 'witness-receipts.jsonl',
+                'witness-transport-events.jsonl', 'witness-transport-receipts.jsonl',
+                'witness-source-registry.json',
+            )
+        })
         manifest['closure']=result;manifest['child_exit_code']=code;_durable(self.artifacts/'completed.json',_json(manifest))
         return manifest
