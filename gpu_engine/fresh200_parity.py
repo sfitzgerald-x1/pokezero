@@ -22,8 +22,12 @@ def array_identity(value):
 
 def python_float32(original):
     """Convert from one frozen copy of the exact original IEEE binary64 bytes."""
-    if not isinstance(original, np.ndarray) or original.dtype != np.dtype('float64') or original.shape != (ROOTS, 23, 132):
-        raise ValueError('original Python float64[200,23,132] array required')
+    return _python_float32(original, ROOTS)
+
+
+def _python_float32(original, roots):
+    if not isinstance(original, np.ndarray) or original.dtype != np.dtype('float64') or original.shape != (roots, 23, 132):
+        raise ValueError(f'original Python float64[{roots},23,132] array required')
     payload = original.tobytes(order='C')
     frozen = np.frombuffer(payload, dtype=original.dtype).reshape(original.shape)
     if not np.isfinite(frozen).all():raise ValueError('nonfinite original Python numeric value')
@@ -36,14 +40,14 @@ def python_float32(original):
         numpy=np.__version__, original_modified=False)
 
 
-def _arrays(value, *, kind, namespace):
+def _arrays(value, *, kind, namespace, roots):
     expected = set(SHAPES) | ({'error'} if kind == 'device' else set())
     if not isinstance(value, dict) or set(value) != expected:raise ValueError('exact '+kind+' observation tensors required')
     result = {}
     for name, shape in SHAPES.items():
         if kind == 'device' and name != 'legal_action_mask':shape = (29, *shape[1:])
         array = value[name]
-        if not isinstance(array, np.ndarray) or array.shape != (ROOTS, *shape):raise ValueError(kind+' shape/array differs: '+name)
+        if not isinstance(array, np.ndarray) or array.shape != (roots, *shape):raise ValueError(kind+' shape/array differs: '+name)
         if name == 'numeric_features':
             dtype = np.dtype('float64' if kind == 'python' else 'float32')
             if array.dtype != dtype or not np.isfinite(array).all():raise ValueError(kind+' numeric dtype/nonfinite value')
@@ -60,7 +64,7 @@ def _arrays(value, *, kind, namespace):
         raise ValueError(kind+' requested root has empty attention/action mask')
     if kind == 'device':
         error = value['error']
-        if not isinstance(error, np.ndarray) or error.shape != (ROOTS,) or error.dtype.kind not in 'iu' or np.any(error != 0):
+        if not isinstance(error, np.ndarray) or error.shape != (roots,) or error.dtype.kind not in 'iu' or np.any(error != 0):
             raise ValueError('selected actual-device encoder errors are fatal')
     return result
 
@@ -72,15 +76,24 @@ def compare(device, b2, python, *, namespace, policy):
     Explicit namespace sizes must come from the independently bound contracts.
     The full29 device tensors stay intact, including six unpaired tokens.
     """
+    return _compare_rows(device, b2, python, namespace=namespace, policy=policy, roots=ROOTS)
+
+
+def compare_one(device, b2, python, *, namespace, policy):
+    """Compare one sealed owning row, with a leading axis of length one."""
+    return _compare_rows(device, b2, python, namespace=namespace, policy=policy, roots=1)
+
+
+def _compare_rows(device, b2, python, *, namespace, policy, roots):
     if (set(namespace) != {'categorical_vocab_size', 'token_type_vocab_size', 'device_token_type_vocab_size'}
             or any(type(value) is not int or not 0 < value <= 2**31 for value in namespace.values())):
         raise ValueError('complete bound categorical/token namespaces required')
     columns = policy.cumulative_columns()
     if set(columns) != CUMULATIVE:raise ValueError('approved cumulative column policy changed')
-    actual = _arrays(device, kind='device', namespace=namespace)
-    canonical = _arrays(b2, kind='b2', namespace=namespace)
-    original = _arrays(python, kind='python', namespace=namespace)
-    converted, conversion = python_float32(original['numeric_features'])
+    actual = _arrays(device, kind='device', namespace=namespace, roots=roots)
+    canonical = _arrays(b2, kind='b2', namespace=namespace, roots=roots)
+    original = _arrays(python, kind='python', namespace=namespace, roots=roots)
+    converted, conversion = _python_float32(original['numeric_features'], roots)
     reference = dict(original, numeric_features=converted)
     shared = {name: value if name == 'legal_action_mask' else value[:, :23] for name, value in actual.items()}
     pairs = {};all_good = True
@@ -97,7 +110,7 @@ def compare(device, b2, python, *, namespace, policy):
                 right_bits='0x%08x' % int(b.view(np.uint32)[index]), ulps=int(ulps[index]))
         item['array_rules_passed'] = not bad.any() and not any(other.values())
         all_good &= item['array_rules_passed'];pairs[name] = item
-    report = dict(schema='pokezero.fresh200.strict_array_parity.v1', roots=ROOTS,
+    report = dict(schema='pokezero.fresh200.strict_array_parity.v1', roots=roots,
         array_rules_passed=bool(all_good), qualification=False, namespace=namespace,
         numeric_rule='exact binary32 bits except existing approved four cumulative columns <=1 ULP, same signs, finite',
         approved_cumulative_columns={str(index): columns[index] for index in sorted(columns)}, pairs=pairs,

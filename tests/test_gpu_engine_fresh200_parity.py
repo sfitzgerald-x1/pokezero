@@ -11,6 +11,36 @@ from gpu_engine import encoder_parity_policy as policy, fresh200_parity as parit
 NAMESPACE = dict(categorical_vocab_size=17, token_type_vocab_size=3, device_token_type_vocab_size=5)
 
 
+class SingleOwningRowParityTest(unittest.TestCase):
+    def test_uses_one_real_row_and_keeps_the_full_device_surface(self):
+        python = dict(numeric_features=np.zeros((1, 23, 132), np.float64),
+                      categorical_ids=np.zeros((1, 23, 41), np.int64),
+                      token_type_ids=np.zeros((1, 23), np.int64),
+                      attention_mask=np.ones((1, 23), bool),
+                      legal_action_mask=np.ones((1, 9), bool))
+        b2 = dict(numeric_features=python['numeric_features'].astype(np.float32),
+                  categorical_ids=python['categorical_ids'].astype(np.int32),
+                  token_type_ids=python['token_type_ids'].astype(np.int32),
+                  attention_mask=python['attention_mask'].copy(), legal_action_mask=python['legal_action_mask'].copy())
+        device = dict(error=np.zeros(1, np.int32), legal_action_mask=b2['legal_action_mask'].copy())
+        for name, array in b2.items():
+            if name != 'legal_action_mask':
+                device[name] = np.concatenate((array, np.zeros((1, 6, *array.shape[2:]), array.dtype)), axis=1)
+        args = dict(namespace=NAMESPACE, policy=policy)
+        report, converted = parity.compare_one(device, b2, python, **args)
+        self.assertEqual(report['roots'], 1)
+        self.assertEqual(report['full_device']['numeric_features']['shape'], [1, 29, 132])
+        self.assertEqual(converted.shape, (1, 23, 132))
+        self.assertTrue(report['array_rules_passed'])
+        self.assertFalse(report['qualification'])
+        with self.assertRaisesRegex(ValueError, 'shape/array'):
+            parity.compare(device, b2, python, **args)
+        device['categorical_ids'][0, 22, 0] = 1
+        report, _ = parity.compare_one(device, b2, python, **args)
+        self.assertFalse(report['array_rules_passed'])
+        self.assertEqual(report['pairs']['device_b2']['other_bad_cells']['categorical_ids'], 1)
+
+
 class StrictArrayParityTests(unittest.TestCase):
     def setUp(self):
         self.python = dict(numeric_features=np.full((200, 23, 132), .5, np.float64),
