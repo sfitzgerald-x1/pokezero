@@ -4,7 +4,8 @@ import unittest
 
 import numpy as np
 
-from gpu_engine.fresh200_native_compare import compare_pre, freeze_pre
+from gpu_engine.fresh200_boundary_gate import BoundaryAddress
+from gpu_engine.fresh200_native_compare import compare_boundary, compare_pre, freeze_linked_role, freeze_pre
 from gpu_engine.fresh200_native_initial import _layout
 from gpu_engine.fresh200_native_ledger import Frame, NativeHistory
 
@@ -42,3 +43,29 @@ class NativeFullBoundaryTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'artifact'):
                 compare_pre(root, gate, Expected(), row=9, source=source)
             self.assertEqual(len(expected_calls), 1)
+
+
+class NativeLinkedRoleTest(unittest.TestCase):
+    def test_post_uses_the_next_pre_and_has_its_own_seal(self):
+        source = dict(engine_commit='1'*40, producer_commit='2'*40, entry_sha256='3'*64, runtime_sha256='4'*64)
+        values = {name: np.zeros((1, *spec['shape'][1:]), dtype=spec['dtype']) for name, spec in _layout().items()}
+
+        class Expected:
+            def read(self, gate, *, row):
+                self.address = gate.address
+                return {name: data[0] for name, data in values.items()}
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            bind = dict(recording_sha256='5'*64, registry='6'*64, source=source)
+            pre0 = freeze_pre(root, 3, 0, (values,), **bind)
+            pre1 = freeze_pre(root, 3, 1, (values,), **bind)
+            address = BoundaryAddress(stream=3, step=0, role='POST')
+            origin = dict(pre_root=root, pre_source=source, **bind)
+            with self.assertRaisesRegex(ValueError, 'source-bound frozen Native boundary'):
+                freeze_linked_role(root, address, pre_reference=pre0.receipt['reference'], **origin)
+            post = freeze_linked_role(root, address, pre_reference=pre1.receipt['reference'], **origin)
+            self.assertNotEqual(post.receipt['reference'], pre1.receipt['reference'])
+            expected = Expected()
+            self.assertEqual(compare_boundary(root, post, expected, row=0, source=source), {})
+            self.assertEqual(expected.address, address)
