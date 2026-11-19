@@ -69,6 +69,64 @@ class ForecastUpdateTests(unittest.TestCase):
         self.assertEqual([lane[0] for lane in self.types(back)], [[NORMAL, 0]] * 5)
         self.assertEqual(changed[:, 0].tolist(), [False, True, True, False, True])
 
+    def test_public_history_uses_forme_events_and_clears_on_faint_or_switch(self):
+        from unittest.mock import patch
+        import jax
+        import numpy as np
+        from gpu_engine import engine_device_public_hooks as hooks
+        from test_gpu_engine_device_public_hooks import tables
+
+        j = self.j
+        cast = ('castform', 'forecast', 50)
+        native = self.state([(cast, cast, RAIN)] * 4)
+        eligible = j.array([[True, False], [False, True], [True, True], [False, False]])
+        changed_forme, mask = self.f.update(native, self.table, self.wt, eligible=eligible)
+        self.assertEqual(mask.tolist(), eligible.tolist())
+        live = hooks.initialize(native, tables())
+        legacy = hooks.initialize(native, tables())
+
+        def assert_same_old_leaves():
+            live_leaves, live_schema = jax.tree.flatten(live.trackers._replace(type_changed=None))
+            legacy_leaves, legacy_schema = jax.tree.flatten(legacy.trackers._replace(type_changed=None))
+            self.assertEqual(live_schema, legacy_schema)
+            for actual, expected in zip(live_leaves, legacy_leaves):
+                actual, expected = np.asarray(actual), np.asarray(expected)
+                self.assertEqual((actual.shape, actual.dtype), (expected.shape, expected.dtype))
+                self.assertEqual(actual.tobytes(), expected.tobytes())
+
+        def apply_forme_event(state, mask):
+            hooks.forecast(live, state, mask)
+            with patch.object(hooks, 'type_event', side_effect=lambda context, *_: context):
+                hooks.forecast(legacy, state, mask)
+            assert_same_old_leaves()
+
+        apply_forme_event(changed_forme, mask)
+        self.assertEqual(live.trackers.type_changed.tolist(), eligible.tolist())
+
+        restored, mask = self.f.update(changed_forme._replace(weather=j.zeros_like(native.weather)),
+                                      self.table, self.wt, eligible=j.ones(4, bool))
+        self.assertEqual(mask.tolist(), eligible.tolist())
+        np.testing.assert_array_equal(restored.types, native.types)
+        apply_forme_event(restored, mask)
+        self.assertEqual(live.trackers.type_changed.tolist(), eligible.tolist())
+        restoring = hooks.initialize(changed_forme, tables())
+        hooks.forecast(restoring, restored, mask)
+        self.assertEqual(restoring.trackers.type_changed.tolist(), eligible.tolist())
+
+        fainted = restored._replace(hp=restored.hp.at[0, 0, 0].set(0).at[2, 1, 0].set(0))
+        for context in (live, legacy):
+            hooks.faint_clear(context, restored, fainted, j.array([True, True, False, True]))
+        self.assertEqual(live.trackers.type_changed.tolist(),
+                         [[False, False], [False, True], [True, True], [False, False]])
+        assert_same_old_leaves()
+
+        switched = fainted._replace(active=fainted.active.at[1, 1].set(1))
+        for context in (live, legacy):
+            hooks.install(context, switched, 1, j.array([False, True, False, False]))
+        self.assertEqual(live.trackers.type_changed.tolist(),
+                         [[False, False], [False, False], [True, True], [False, False]])
+        assert_same_old_leaves()
+
     def test_suppression_ending_and_weather_override(self):
         cast = ('castform', 'forecast', 50)
         rows = [(cast, ('golduck', 'cloudnine', 50), RAIN), (cast, ('rayquaza', 'airlock', 50), SUN),

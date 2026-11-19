@@ -223,6 +223,8 @@ def matchup(c,side,use,kind):
 
 def install(c,state,side,use,*,initial=False):
     t=c.trackers;b=len(t.error);use=_mask(use,b);r=j.arange(b);p=_li.take(state.active,r,side)
+    history=j.zeros((b,2),bool) if t.type_changed is None else t.type_changed
+    t=t._replace(type_changed=_li.put(history,r,(side,),j.where(use,False,_li.take(history,r,side))))
     old=_li.take(t.active_physical,r,side);fresh=_li.take(t.physical_to_public,r,side,j.clip(p,0,5))<0
     if not initial:
         # One actual installation, including intermediate drag/Baton installs.
@@ -831,6 +833,9 @@ def faint_clear(c,before,after,use):
         hit.append(use&(_li.take(before.hp,r,side,j.clip(p,0,5))>0)&(_get(after,'hp',side)==0))
     for side in range(2):
         p=_li.take(after.active,r,side)
+        history=c.trackers.type_changed
+        c=c._replace(trackers=c.trackers._replace(type_changed=_li.put(history,r,(side,),
+            j.where(hit[side],False,_li.take(history,r,side)))))
         c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,j.zeros((b,len(VOLATILE_NAMES)),bool),hit[side]))
         for name in FAINT_CLEAR_KEYS:
             if name in c.trackers.mon_features:c=feature(c,side,p,name,j.zeros_like(p),hit[side])
@@ -890,9 +895,21 @@ def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None,residual=None,
 
 def color_change(c,before,after,side,use):
     changed=use&j.any(_get(before,'types',side)!=_get(after,'types',side),axis=1)
+    c=type_event(c,side,changed)
     c=reveal_ability(c,after,side,changed)
     p=_li.take(after.active,_r(after),side)
     return c._replace(trackers=_write(c.trackers,'shown_types',side,p,_get(after,'types',side),changed))
+
+
+def type_event(c,side,use):
+    """Record an emitted typechange or formechange event, even a return to native typing.
+
+    Transform alone is a separate host refusal and does not set this history. Producers pass their actual public
+    event mask; identity or current typing cannot reconstruct an earlier event. No inference consumes this yet.
+    """
+    t=c.trackers;r=j.arange(len(t.error));history=t.type_changed
+    return c._replace(trackers=t._replace(type_changed=_li.put(history,r,(side,),
+        _li.take(history,r,side)|_mask(use,len(r)))))
 
 
 def drag(c,before,after,side,table,use):
@@ -1119,6 +1136,7 @@ def forecast(c,state,changed):
     _confirmed_ability_from_event). An arrival (install) and a departure (type_revert) end the overlay as before."""
     for side in range(2):
         use=changed[:,side]
+        c=type_event(c,side,use)
         c=reveal_ability(c,state,side,use)
         c=c._replace(trackers=_write(c.trackers,'shown_types',side,_li.take(state.active,_r(state),side),_get(state,'types',side),use))
     return c
