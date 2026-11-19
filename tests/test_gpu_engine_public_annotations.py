@@ -103,6 +103,18 @@ class AnnotationLexicalTests(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertIsNone(classify(line))
 
+    def test_witnessed_rain_and_interrupted_toxic_diagnostics(self):
+        from gpu_engine.public_annotations import classify
+
+        for line in ('|debug|rain water boost', '|debug|set status [tox] interrupted'):
+            with self.subTest(line=line):
+                self.assertEqual(classify(line), 'text')
+                self.assertIsNone(classify(line + '|extra'))
+        for line in ('|debug|rain water boosted', '|debug|set status [psn] interrupted',
+                     '|debug|set status [tox] succeeded'):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
     def test_bounded_canonical_shapes_and_refusals(self):
         from gpu_engine.public_annotations import classify
         for line in (*SETUP,*ANNOTATIONS):self.assertIsNotNone(classify(line),line)

@@ -90,6 +90,9 @@ def classify(line):
     # The Gen 3 Reversal callback emits BP: 20 on the frozen root 29 prefix.
     if line in ('|debug|BP: 20', '|debug|BP: 70', '|debug|Negating (sp)def boost/penalty.'):
         return 'text'
+    # These pinned diagnostics describe a modifier or refused status attempt.
+    if line in ('|debug|rain water boost', '|debug|set status [tox] interrupted'):
+        return 'text'
     if kind in ('-hint','-message'):
         return 'text' if len(parts)==3 and parts[2].strip() else None
     # The frozen owner streams include the Focus Punch callback and Reversal power.
