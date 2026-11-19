@@ -11,6 +11,9 @@ import re
 from .fresh200_native_identity import to_id
 
 
+SWITCH_CHOICES = frozenset(('switch', 'instaswitch'))
+
+
 class UnmappedNativeHistory(ValueError):
     pass
 
@@ -162,23 +165,35 @@ class NativeHistory:
 
     def _commit(self, frame):
         side=frame.enter['subject'].get('n');need(type(side) is int and side in (0,1),'literal Native committing side required')
-        choice=fields(frame.enter['before']['sides'][side]['fields']['choice'])
+        before = frame.enter['before']
+        choice = fields(before['sides'][side]['fields']['choice'])
         for action in items(choice['actions']):
-            action=fields(action);kind=action['choice'];need(kind in ('move','switch','pass'),'unrepresented Native committed choice')
-            if kind=='switch':
-                target=pokemon(action['target']);need(target[0]==side,'Native switch target crosses sides')
-                self.pending_switches.append(dict(side=side,target=target[1],call=frame.call))
+            action = fields(action)
+            kind = action['choice']
+            need(kind in ('move', 'pass') or kind in SWITCH_CHOICES, 'unrepresented Native committed choice')
+            if kind in SWITCH_CHOICES:
+                forced = before.get('fields', {}).get('requestState') == 'switch'
+                need((kind == 'instaswitch') == forced, 'Native switch commit differs from its request phase')
+                actor, target = pokemon(action['pokemon']), pokemon(action['target'])
+                need(actor[0] == target[0] == side and actor != target, 'Native switch actor/target differs')
+                self.pending_switches.append(dict(side=side, actor=actor, target=target, kind=kind, call=frame.call))
             self.event('COMMITTED_CHOICE',frame,side=side,choice=action)
 
     def _switch(self, frame):
-        if not frame.leave['result']:return
+        if not frame.leave['result'] or frame.leave['result'] == 'pursuitfaint':return
         arguments=items(frame.enter['arguments']);target=pokemon(arguments[0])
         action=self.ancestor(frame,'Battle.runAction')
         if action is None:return
-        resolved=fields(items(action.enter['arguments'])[0])
-        if resolved.get('choice')!='switch':return  # actual initial entry or forced phazing is not a chosen switch
-        need(pokemon(resolved['target'])==target,'Native queued and installed switch target differs')
-        matches=[x for x in self.pending_switches if (x['side'],x['target'])==target]
+        resolved = fields(items(action.enter['arguments'])[0])
+        kind = resolved.get('choice')
+        if kind not in SWITCH_CHOICES:
+            return  # Initial entry and phazing have no committed switch choice.
+        if kind == 'instaswitch':
+            need(frame.leave['result'] is True, 'forced Native replacement did not report installation')
+        actor = pokemon(resolved['pokemon'])
+        need(pokemon(resolved['target']) == target, 'Native queued and installed switch target differs')
+        matches = [choice for choice in self.pending_switches
+                   if choice['actor'] == actor and choice['target'] == target and choice['kind'] == kind]
         need(len(matches)==1,'installed Native chosen switch lacks unique committed target')
         installed=items(frame.leave['after']['sides'][target[0]]['fields']['active'])
         need(len(installed)==1 and pokemon(installed[0])==target,'Native successful switch did not install its literal target')
