@@ -18,7 +18,7 @@ except ImportError:
 
 if torch is not None:
     import test_v2_trainer as fixture
-    from pokezero import v2_trainer as v2, v5_training as v5
+    from pokezero import checkpoint_self_moves as encoding, v2_trainer as v2, v5_training as v5
     from pokezero.v2_native_embedding import _Embedding, embedding_dense_gradient, lookup, validate
 
 
@@ -151,32 +151,39 @@ class NativeEmbeddingTests(unittest.TestCase):
         trainer.train(store, max_updates=2)
         with tempfile.TemporaryDirectory() as directory:
             checkpoint = Path(directory)/'prefix.pt'
-            v2.save_checkpoint(checkpoint, runtime)
+            receipt = v2.save_checkpoint(checkpoint, runtime)
+            binding = dict(expected_self_moves=False, expected_checkpoint_sha256=receipt['sha256'],
+                           off_provenance=encoding.off_from_receipt(receipt['encoding_receipt']))
             suffix = trainer.train(store, max_updates=4)
             state = copy.deepcopy((runtime.model.state_dict(), v2._canonical_optimizer_state(runtime.optimizer),
                 runtime.rng, runtime.cursor, runtime.steps, runtime.rows))
-            resumed = v2.load_checkpoint(checkpoint, enable_v5=True, device='cpu')
+            resumed = v2.load_checkpoint(checkpoint, enable_v5=True, device='cpu', **binding)
             again = v2.Trainer(resumed).train(store, max_updates=4)
             self.assertEqual(suffix['updates'], again['updates'])
             self.equal_tree(state, (resumed.model.state_dict(), v2._canonical_optimizer_state(resumed.optimizer),
                 resumed.rng, resumed.cursor, resumed.steps, resumed.rows))
             for changed in (replace(config, native_embedding_backward=False), replace(config, mode='compiled', fallback_random=True)):
                 with self.assertRaisesRegex(ValueError, 'original embedding/RNG'):
-                    v2.load_checkpoint(checkpoint, enable_v5=True, device='cpu', v2_config=changed)
+                    v2.load_checkpoint(checkpoint, enable_v5=True, device='cpu', v2_config=changed, **binding)
 
     def test_legacy_checkpoint_without_both_new_flags_loads_off(self):
         model, loss, train = fixture.configurations()
         runtime = v2.create(model, loss, train, enable_v5=True, device='cpu')
         with tempfile.TemporaryDirectory() as directory:
-            checkpoint = Path(directory)/'saved.pt'
             legacy = Path(directory)/'legacy.pt'
-            v2.save_checkpoint(checkpoint, runtime)
-            data = torch.load(checkpoint, weights_only=True)
-            for name in ('native_embedding_backward', 'fallback_random'):
-                data['v2']['config'].pop(name)
-            data['v2_sha256'] = v2._v2_digest(data['v2'])
-            torch.save(data, legacy)
-            restored = v2.load_checkpoint(legacy, enable_v5=True, device='cpu')
+            original_section = v2._v2_section
+
+            def legacy_section(runtime, rng_by_rank):
+                section = original_section(runtime, rng_by_rank)
+                for name in ('native_embedding_backward', 'fallback_random'):
+                    section['config'].pop(name)
+                return section
+
+            with patch.object(v2, '_v2_section', side_effect=legacy_section):
+                receipt = v2.save_checkpoint(legacy, runtime)
+            restored = v2.load_checkpoint(legacy, enable_v5=True, device='cpu', expected_self_moves=False,
+                expected_checkpoint_sha256=receipt['sha256'],
+                off_provenance=encoding.off_from_receipt(receipt['encoding_receipt']))
             self.assertFalse(restored.v2_config.native_embedding_backward)
             self.assertFalse(restored.v2_config.fallback_random)
 

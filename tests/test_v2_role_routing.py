@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 try:
     import torch
@@ -13,7 +14,7 @@ except ImportError:
 
 if torch is not None:
     import test_v2_trainer as fixture
-    from pokezero import v2_trainer as v2, v5_training as v5
+    from pokezero import checkpoint_self_moves as encoding, v2_trainer as v2, v5_training as v5
 
 
 @unittest.skipIf(torch is None, 'requires optional Torch/numpy runtime')
@@ -107,11 +108,13 @@ class RoleRoutingTests(unittest.TestCase):
         self.assertEqual(prefix['cursor']['step'], 2)
         with tempfile.TemporaryDirectory() as directory:
             checkpoint = Path(directory)/'prefix.pt'
-            v2.save_checkpoint(checkpoint, runtime)
+            receipt = v2.save_checkpoint(checkpoint, runtime)
             suffix = trainer.train(store, max_updates=4)
             expected = copy.deepcopy((runtime.model.state_dict(), v2._canonical_optimizer_state(runtime.optimizer),
                 runtime.rng, runtime.cursor, runtime.steps, runtime.rows))
-            resumed = v2.load_checkpoint(checkpoint, enable_v5=True, device='cpu')
+            resumed = v2.load_checkpoint(checkpoint, enable_v5=True, device='cpu', expected_self_moves=False,
+                expected_checkpoint_sha256=receipt['sha256'],
+                off_provenance=encoding.off_from_receipt(receipt['encoding_receipt']))
             actual = v2.Trainer(resumed).train(store, max_updates=4)
             self.assertEqual(suffix['updates'], actual['updates'])
             self.tree_equal(expected, (resumed.model.state_dict(), v2._canonical_optimizer_state(resumed.optimizer),
@@ -121,14 +124,19 @@ class RoleRoutingTests(unittest.TestCase):
         runtime, store = self.example(routing='indexed')
         v2.Trainer(runtime).train(store, max_updates=2)
         with tempfile.TemporaryDirectory() as directory:
-            checkpoint = Path(directory)/'saved.pt'
             legacy = Path(directory)/'legacy.pt'
-            v2.save_checkpoint(checkpoint, runtime)
-            payload = torch.load(checkpoint, weights_only=True)
-            payload['v2']['config'].pop('role_routing')
-            payload['v2_sha256'] = v2._v2_digest(payload['v2'])
-            torch.save(payload, legacy)
-            resumed = v2.load_checkpoint(legacy, enable_v5=True, device='cpu')
+            original_section = v2._v2_section
+
+            def legacy_section(runtime, rng_by_rank):
+                section = original_section(runtime, rng_by_rank)
+                section['config'].pop('role_routing')
+                return section
+
+            with patch.object(v2, '_v2_section', side_effect=legacy_section):
+                receipt = v2.save_checkpoint(legacy, runtime)
+            resumed = v2.load_checkpoint(legacy, enable_v5=True, device='cpu', expected_self_moves=False,
+                expected_checkpoint_sha256=receipt['sha256'],
+                off_provenance=encoding.off_from_receipt(receipt['encoding_receipt']))
             self.assertEqual(resumed.v2_config.role_routing, 'indexed')
             self.assertEqual(resumed.cursor, runtime.cursor)
 
@@ -137,10 +145,12 @@ class RoleRoutingTests(unittest.TestCase):
         v2.Trainer(runtime).train(store, max_updates=2)
         with tempfile.TemporaryDirectory() as directory:
             checkpoint = Path(directory)/'saved.pt'
-            v2.save_checkpoint(checkpoint, runtime)
+            receipt = v2.save_checkpoint(checkpoint, runtime)
+            binding = dict(expected_self_moves=False, expected_checkpoint_sha256=receipt['sha256'],
+                           off_provenance=encoding.off_from_receipt(receipt['encoding_receipt']))
             with self.assertRaisesRegex(ValueError, 'original role routing'):
                 v2.load_checkpoint(checkpoint, enable_v5=True, device='cpu',
-                    v2_config=replace(runtime.v2_config, role_routing='sliced'))
+                    v2_config=replace(runtime.v2_config, role_routing='sliced'), **binding)
 
 
 if __name__ == '__main__':

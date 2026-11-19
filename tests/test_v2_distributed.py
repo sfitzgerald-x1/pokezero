@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from pokezero import v2_distributed as vd, v2_trainer as v2
+from pokezero import checkpoint_self_moves as encoding, v2_distributed as vd, v2_trainer as v2
 import test_v2_trainer as fixture
 
 try:
@@ -50,10 +50,14 @@ def rank_test(rank, world, directory, dropout):
         store = vd.distribute_store(local, keys[selected], batches, runtime)
         trainer = vd.DistributedTrainer(runtime)
         prefix = trainer.train(store, max_updates=3)
-        checkpoint = Path(directory) / 'resume.pt'; v2.save_checkpoint(checkpoint, runtime)
+        checkpoint = Path(directory) / 'resume.pt'
+        receipt = [v2.save_checkpoint(checkpoint, runtime)]
+        dist.broadcast_object_list(receipt, src=0, group=dist.group.WORLD)
+        binding = dict(expected_self_moves=False, expected_checkpoint_sha256=receipt[0]['sha256'],
+                       off_provenance=encoding.off_from_receipt(receipt[0]['encoding_receipt']))
         suffix = trainer.train(store)
         expected = {k: t.clone() for k, t in runtime.model.state_dict().items()}
-        resumed = v2.load_checkpoint(checkpoint, enable_v5=True, process_group=dist.group.WORLD)
+        resumed = v2.load_checkpoint(checkpoint, enable_v5=True, process_group=dist.group.WORLD, **binding)
         again = vd.DistributedTrainer(resumed).train(store)
         for k, t in resumed.model.state_dict().items():
             if not torch.equal(t, expected[k]):
@@ -61,7 +65,8 @@ def rank_test(rank, world, directory, dropout):
         if again['updates'] != suffix['updates']:
             raise AssertionError('resume metrics/cursor differ')
         try:
-            v2.load_checkpoint(checkpoint, enable_v5=True, v2_config=v2.V2Config(), process_group=dist.group.WORLD)
+            v2.load_checkpoint(checkpoint, enable_v5=True, v2_config=v2.V2Config(), process_group=dist.group.WORLD,
+                               **binding)
         except ValueError as exc:
             if 'semantics' not in str(exc):
                 raise

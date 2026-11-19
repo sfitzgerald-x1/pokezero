@@ -344,7 +344,7 @@ class V5JaxActorTests(unittest.TestCase):
     def test_real_production_and_historical_wrappers_keep_all_bindings(self):
         from gpu_engine import v2_fused, v5_device_backend
         _, _, config, _, _, _ = self.fixtures[2]
-        plan = SimpleNamespace(model=config)
+        plan = SimpleNamespace(model=config, self_moves=False)
         backend = object.__new__(v5_device_backend.RuntimeBackend)
         backend.actors = {}; backend.model_sha256 = actor._sha(config.metadata())
         def resolve(name, digest):
@@ -354,7 +354,7 @@ class V5JaxActorTests(unittest.TestCase):
         store = SimpleNamespace(plan=plan, resolve=resolve)
         for index, producer in enumerate((actor.TORCH_SOURCE_SHA256, actor.LEGACY_ARCHIVE_TORCH_SOURCE_SHA256)):
             path, kwargs = self._archive_variant(producer, name=f'wrapper-{index}.npz')
-            snapshot = dict(archive=path.name, archive_sha256=kwargs['expected_archive_sha256'],
+            snapshot = dict(iteration=0, archive=path.name, archive_sha256=kwargs['expected_archive_sha256'],
                 checkpoint_sha256=kwargs['expected_checkpoint_sha256'], model_sha256=backend.model_sha256)
             fused = v2_fused.load_actor(plan, SimpleNamespace(**snapshot), path.parent)
             actual = backend._actor(snapshot, store)
@@ -362,7 +362,7 @@ class V5JaxActorTests(unittest.TestCase):
                 np.testing.assert_array_equal(actual[name], fused[name])
             with self.assertRaisesRegex(ValueError, 'cached actor checkpoint provenance'):
                 backend._actor(dict(snapshot, checkpoint_sha256='e'*64), store)
-            changed_plan = SimpleNamespace(model=replace(config, dropout=.3))
+            changed_plan = SimpleNamespace(model=replace(config, dropout=.3), self_moves=False)
             with self.assertRaisesRegex(ValueError, 'configuration differs'):
                 v2_fused.load_actor(changed_plan, SimpleNamespace(**snapshot), path.parent)
             other = object.__new__(v5_device_backend.RuntimeBackend)
