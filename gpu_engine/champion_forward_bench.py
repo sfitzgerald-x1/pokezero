@@ -101,6 +101,7 @@ def load_v2(args):
     import io
     from gpu_engine import v5_model, champion
     from gpu_engine.device_depth2_pricer import default_forward
+    from pokezero.checkpoint_self_moves import archive_self_moves
     from pokezero.v5_model import V5ModelConfig
     blob, digest = champion.snapshot(args.v2_archive)
     if digest != args.v2_archive_sha256:raise ValueError(f'--v2-archive sha256 {digest} differs from --v2-archive-sha256')
@@ -109,10 +110,13 @@ def load_v2(args):
     params, config, meta = v5_model.load(args.v2_archive, expected_archive_sha256=args.v2_archive_sha256, expected_checkpoint_sha256=args.v2_checkpoint_sha256,
         expected_category_vocabulary_sha256=args.v2_category_sha256 or recorded.category_vocabulary_sha256,
         expected_label_vocabulary_sha256=args.v2_label_sha256 or recorded.label_vocabulary.sha256, enable_v5=True)
-    from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta, context='champion forward bench')   # V2 self_moves
     header = dict(kind='v2', archive=args.v2_archive, archive_sha256=args.v2_archive_sha256, checkpoint_sha256=args.v2_checkpoint_sha256, arm=config.arm,
         replicate=config.replicate, precision='bfloat16', parameter_count=meta.get('parameter_count'), forward='device_depth2_pricer.default_forward(model)',
         category_vocabulary_sha256=config.category_vocabulary_sha256, label_vocabulary_sha256=config.label_vocabulary.sha256)
+    # This microbenchmark feeds synthetic tensors directly to forward.
+    # Record the archive's encoding without treating timing as encoder parity.
+    if archive_self_moves(meta):
+        header['self_moves'] = True
     return default_forward(config), params, header, config.category_vocab_size
 
 
