@@ -50,6 +50,12 @@ def classify(line):
     # no failure, ability reveal or secondary-effect event inferred from it.
     if line in ('|debug|move failed because it did nothing', '|debug|Shield Dust prevent secondary'):
         return 'text'
+    # Pinned f76228a1 pokemon.ts:1714,2257, battle.ts:2114, and the Gen 4
+    # Serene Grace handler inherited by Gen 3 (abilities.ts:377). These carry
+    # no literal recipient, status, HP delta, or ability reveal.
+    if line in ('|debug|natural status immunity', '|debug|weather immunity',
+                '|debug|immune to status', '|debug|doubling secondary chance'):
+        return 'text'
     if attract_idents(line) is not None:return 'attract'
     # Incidental proc tags retain their existing consumers; text cannot
     # manufacture a source ability/item reveal under this annotation contract.

@@ -47,6 +47,18 @@ class AnnotationLexicalTests(unittest.TestCase):
         self.assertIsNone(classify('|debug|Shield Dust prevent primary'))
         self.assertIsNone(classify('|debug|move failed because it did something'))
 
+    def test_exact_immunity_and_secondary_chance_diagnostics(self):
+        from gpu_engine.public_annotations import classify
+
+        diagnostics = ('|debug|natural status immunity', '|debug|weather immunity',
+                       '|debug|immune to status', '|debug|doubling secondary chance')
+        for line in diagnostics:
+            with self.subTest(line=line):
+                self.assertEqual(classify(line), 'text')
+                self.assertIsNone(classify(line + '|p2a: Vileplume'))
+                self.assertIsNone(classify(line + ' 2'))
+        self.assertIsNone(classify('|debug|tripling secondary chance'))
+
     def test_bounded_canonical_shapes_and_refusals(self):
         from gpu_engine.public_annotations import classify
         for line in (*SETUP,*ANNOTATIONS):self.assertIsNotNone(classify(line),line)
