@@ -29,7 +29,7 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
 
     torch.set_num_threads(1)
     rank = 0 if distribution is None else distribution.rank
-    model, loss, train = configurations(batch_size=8, epochs=2, dropout=.2)
+    model, loss, train = configurations(batch_size=8, epochs=2, dropout=.2, schedule='mit-thesis')
     batches = tuple((run.Batch(tuple(run.Game(i+1, f'game-{i}', 100+i, (2*i, 2*i+1))
                               for i in range(8*j, 8*j+8)), 10+j, 20+j),) for j in range(5))
     declaration = dict(fixture='fused-boundary', evaluation=None if evaluation is None else evaluation.metadata())
