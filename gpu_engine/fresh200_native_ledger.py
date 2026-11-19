@@ -206,8 +206,37 @@ class NativeHistory:
                     and old['fainted'] is True and old['hp'] == 0 and old['status'] in ('fnt', prior['status'])
                     and cleared['fainted'] is True and cleared['hp'] == 0 and cleared['status'] == ''):
                 prior['replacement_clear_sequence'] = frame.end
+        self._retire_arena_trap(frame, actor, target)
         self.pending_switches.remove(matches[0]);self.last_kind[target[0]]=1;self.last_index[target[0]]=target[1]
         self.event('INSTALLED_CHOSEN_SWITCH',frame,side=target[0],original_target=target[1],commit_call_id=matches[0]['call'])
+
+    def _retire_arena_trap(self, frame, actor, target):
+        if frame.leave['result'] is not True or actor == target or not self.trap_causes:
+            return
+        before, after = frame.enter['before'], frame.leave['after']
+        side = actor[0]
+        outgoing = items(before['sides'][side]['fields']['active'])
+        installed = items(after['sides'][side]['fields']['active'])
+        if len(outgoing) != 1 or not outgoing[0] or pokemon(outgoing[0]) != actor:
+            return
+        victims = items(before['sides'][1 - side]['fields']['active'])
+        if len(victims) != 1 or not victims[0] or victims != items(after['sides'][1 - side]['fields']['active']):
+            return
+        victim = pokemon(victims[0])
+        causes = [cause for cause in self.trap_causes.get(victim, ()) if cause.get('arena_trap_writer')]
+        if not causes:
+            return
+        earlier, current = member(before, victim), member(after, victim)
+        if (earlier['hp'] <= 0 or current['hp'] <= 0 or earlier['trapped'] != 'hidden'
+                or current['trapped'] != 'hidden'):
+            return
+        for cause in causes:
+            writer = cause['arena_trap_writer']
+            if (writer['source'] == outgoing[0] and writer['victim'] == victims[0]
+                    and writer['epoch'] + 1 == self.phase_epoch and cause['sequence'] < frame.sequence
+                    and 'arena_trap_departure' not in cause):
+                cause['arena_trap_departure'] = dict(replacement=installed[0], enter=frame.sequence,
+                                                      end=frame.end, epoch=self.phase_epoch)
 
     def _dispatch(self, frame):
         identity=pokemon(frame.enter['subject']);move=move_id(items(frame.enter['arguments'])[0]);side=identity[0]
@@ -349,7 +378,25 @@ class NativeHistory:
         if frame.leave['result'] is not True:return
         identity=pokemon(frame.enter['subject']);after=member(frame.leave['after'],identity)
         need(after['trapped'] is True or after['trapped']=='hidden','Native successful tryTrap lacks combined trap cache')
-        self.trap_causes.setdefault(identity,[]).append(dict(effect=self._cause(frame,None),call_id=frame.call,sequence=frame.end))
+        effect = self._cause(frame, None)
+        cause = dict(effect=effect, call_id=frame.call, sequence=frame.end)
+        if effect and (effect['id'], effect['effect_type']) == ('arenatrap', 'Ability') and after['trapped'] == 'hidden':
+            context = frame.enter.get('context', {})
+            state = context.get('effectState')
+            if type(state) is dict and 'fields' in state:
+                state = fields(state)
+                source = state.get('target')
+                if state.get('id') == 'arenatrap' and type(source) is dict and source.get('kind') == 'Pokemon':
+                    sid, slot = pokemon(source)
+                    before = frame.enter['before']
+                    sources = items(before['sides'][sid]['fields']['active'])
+                    victims = items(before['sides'][identity[0]]['fields']['active'])
+                    owner = member(before, (sid, slot))
+                    if (sid != identity[0] and sources == [source] and victims == [frame.enter['subject']]
+                            and owner['hp'] > 0 and owner['ability'] == 'arenatrap'
+                            and member(before, identity)['hp'] > 0 and member(before, identity)['trapped'] is False):
+                        cause['arena_trap_writer'] = dict(source=source, victim=victims[0], epoch=self.phase_epoch)
+        self.trap_causes.setdefault(identity, []).append(cause)
 
     def _condition_start(self, frame):
         if frame.leave['result'] is False:return

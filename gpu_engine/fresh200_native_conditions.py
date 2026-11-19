@@ -249,6 +249,36 @@ def _represented_traps(party, side, original, conditions):
     return effects
 
 
+def _retired_arena_trap(cause, boundary, observed, side, original):
+    writer = cause.get('arena_trap_writer')
+    departure = cause.get('arena_trap_departure')
+    phase = boundary.phase
+    if (not writer or not departure or phase.kind != 'replacement-before-residual'
+            or phase.pending_residual is not True or phase.queued_actor != -1
+            or phase.requested[side] or not phase.requested[1 - side]
+            or boundary.relations[side]['kind'] != 'inactive'
+            or boundary.relations[1 - side]['kind'] != 'forced-replacement'):
+        return False
+    effect = cause.get('effect')
+    if (not effect or (effect['id'], effect['effect_type']) != ('arenatrap', 'Ability')
+            or writer['epoch'] + 1 != departure['epoch'] or departure['epoch'] != boundary.history['phase_epoch']
+            or not cause['sequence'] < departure['enter'] < departure['end'] <= phase.snapshot_sequence):
+        return False
+    victim, source, replacement = writer['victim'], writer['source'], departure['replacement']
+    foe = 1 - side
+    if ((victim['side'], victim['original']) != (side, original) or source['side'] != foe
+            or replacement['side'] != foe or source == replacement
+            or items(observed['sides'][side]['fields']['active']) != [victim]
+            or items(observed['sides'][foe]['fields']['active']) != [replacement]):
+        return False
+    live = member(observed, (side, original))
+    fainted = member(observed, (foe, replacement['original']))
+    return (live['hp'] > 0 and live['trapped'] == 'hidden' and fainted['hp'] == 0 and fainted['fainted'] is True
+            and any(row['actor'] == [foe, replacement['original']]
+                    and departure['end'] < row['sequence'] <= phase.snapshot_sequence
+                    for row in boundary.history['retained_status']))
+
+
 def project_trapped(boundary, *, original_species, conditions):
     """Account for the Native combined trap cache before deriving residual traps."""
     _need(set(conditions) == CONDITION_FIELDS, 'typed Native conditions required before trapped projection')
@@ -263,8 +293,10 @@ def project_trapped(boundary, *, original_species, conditions):
         if cache:
             recorded = [cause for row in boundary.history['trap_causes'] if row['actor'] == actor
                         for cause in row['causes']]
-            _need(represented and all(cause['effect'] and cause['effect']['id'] in represented
-                                     and cause['sequence'] <= boundary.phase.snapshot_sequence for cause in recorded),
+            _need((represented or recorded) and all(
+                      (cause['effect'] and cause['effect']['id'] in represented
+                       and cause['sequence'] <= boundary.phase.snapshot_sequence)
+                      or _retired_arena_trap(cause, boundary, observed, side, original) for cause in recorded),
                   f'Native trap has an unexplained contribution for p{side+1} original slot {original}')
             # Shadow Tag writes the cache directly. The two hard-lock paths
             # are bound to the actual lock return. Other true writes require
