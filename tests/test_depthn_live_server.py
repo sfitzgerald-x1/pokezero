@@ -57,7 +57,136 @@ class FakeSearch:
         return[dict(schema=original.SCHEMA,request_id=r['request_id'],status='COMPLETE',warmed=self.warmed,arrival=r.get(live.ARRIVAL))for r in requests]
 
 
+class FakePipeline:
+    """A batching pipeline stand-in: holds what it is submitted; the test completes requests in any order it likes."""
+    def __init__(self):self.submitted=[];self.lock=threading.Lock();self.closed=False
+
+    def submit(self,request,done):
+        with self.lock:self.submitted.append((request,done))
+
+    def count(self):
+        with self.lock:return len(self.submitted)
+
+    def complete(self,i,**extra):
+        request,done=self.submitted[i];done(dict(schema=original.SCHEMA,request_id=request['request_id'],status='COMPLETE',n=i,**extra))
+
+    def close(self):self.closed=True
+
+
+async def serve_forever_closing_clients(self):
+    """CPython 3.13.18's asyncio.Server.serve_forever (Lib/asyncio/base_events.py), installed by the stop tests whatever this
+    Python's patch level: a cancelled serve_forever also closes every client connection (close_clients), before an accepted
+    request is answered. The server's stop must not rely on cancelling it."""
+    if self._serving_forever_fut is not None:raise RuntimeError(f'server {self!r} is already being awaited on serve_forever()')
+    if self._sockets is None:raise RuntimeError(f'server {self!r} is closed')
+    self._start_serving();self._serving_forever_fut=self._loop.create_future()
+    try:await self._serving_forever_fut
+    except asyncio.CancelledError:
+        try:self.close();self.close_clients();await self.wait_closed()
+        finally:raise
+    finally:self._serving_forever_fut=None
+
+
+def newer_asyncio():
+    import asyncio.base_events
+    return patch.object(asyncio.base_events.Server,'serve_forever',serve_forever_closing_clients)
+
+
+async def until(test,timeout=10.):
+    deadline=time.monotonic()+timeout
+    while not test():
+        if time.monotonic()>deadline:raise TimeoutError('condition never held')
+        await asyncio.sleep(.01)
+
+
+class PipelinedServerTests(unittest.TestCase):
+    """Server.consume with a pipeline (--prepare-workers): out-of-order completion, backpressure, drain on stop."""
+    def scenario(self,body,*,queue_limit=8,pipeline=None):
+        pipeline=pipeline or FakePipeline()
+        async def run():
+            server=S.Server(FakeSearch(),max_requests=1,queue_limit=queue_limit,pipeline=pipeline);port=free_port();ready=asyncio.Event()
+            task=asyncio.create_task(server.serve('127.0.0.1',port,on_ready=ready.set));await asyncio.wait_for(ready.wait(),10)
+            try:return await body(server,port,pipeline,task)
+            finally:
+                if not task.done():server.stop();await asyncio.wait_for(task,10)
+        return asyncio.run(run())
+
+    @staticmethod
+    async def client(port,i,got):
+        reader,writer=await asyncio.open_connection('127.0.0.1',port)
+        writer.write(original.encode(request(i)));await writer.drain()
+        row=await asyncio.wait_for(original.receive(reader),20);got.append(row['request_id'])
+        writer.close();await writer.wait_closed();return row
+
+    def test_completions_out_of_order_reach_their_own_connections(self):
+        async def body(server,port,pipeline,task):
+            got=[];clients=[asyncio.create_task(self.client(port,i,got))for i in range(2)]
+            await until(lambda:pipeline.count()==2)
+            order=sorted(range(2),key=lambda k:pipeline.submitted[k][0]['request_id'],reverse=True)   # r1 first, then r0
+            for k in order:pipeline.complete(k);await asyncio.sleep(.05)
+            rows=await asyncio.gather(*clients);return rows,got
+        rows,got=self.scenario(body)
+        self.assertEqual([r['request_id']for r in rows],['r0','r1']);self.assertEqual(got,['r1','r0'])   # each its own answer, as completed
+        self.assertTrue(all(r['server_wall_seconds']>=0 for r in rows))
+
+    def test_a_response_for_another_request_closes_that_connection(self):
+        async def body(server,port,pipeline,task):
+            got=[];client=asyncio.create_task(self.client(port,0,got));await until(lambda:pipeline.count()==1)
+            request_,done=pipeline.submitted[0];done(dict(schema=original.SCHEMA,request_id='someone-else',status='COMPLETE'))
+            with self.assertRaises((asyncio.IncompleteReadError,ConnectionError)):await client
+            return got
+        self.assertEqual(self.scenario(body),[])
+
+    def test_in_flight_is_capped_at_the_queue_limit(self):
+        async def body(server,port,pipeline,task):
+            got=[];clients=[asyncio.create_task(self.client(port,i,got))for i in range(5)]
+            await until(lambda:pipeline.count()==2);await asyncio.sleep(.3)
+            capped=(pipeline.count(),server.inflight)   # the rest wait in Codex's bounded queue (and the handle loop's put)
+            for k in range(5):
+                await until(lambda:pipeline.count()>k);pipeline.complete(k)
+            await asyncio.gather(*clients);return capped,sorted(got)
+        capped,got=self.scenario(body,queue_limit=2)
+        self.assertEqual(capped,(2,2));self.assertEqual(got,[f'r{i}'for i in range(5)])
+
+    def test_stop_answers_everything_accepted_then_closes_the_pipeline(self):
+        async def body(server,port,pipeline,task):
+            got=[];clients=[asyncio.create_task(self.client(port,i,got))for i in range(3)]
+            await until(lambda:pipeline.count()==3)
+            server.stop();await asyncio.sleep(.2)
+            self.assertFalse(task.done());self.assertFalse(pipeline.closed)   # draining: three answers owed
+            for k in range(3):pipeline.complete(k)
+            rows=await asyncio.gather(*clients);await asyncio.wait_for(task,10)
+            return rows,pipeline.closed
+        with newer_asyncio():rows,closed=self.scenario(body)   # CI's CPython 3.13.18 closed the three connections at stop()
+        self.assertEqual(sorted(r['request_id']for r in rows),['r0','r1','r2']);self.assertTrue(closed)
+
+    def test_a_fatal_error_closes_its_connection(self):
+        async def body(server,port,pipeline,task):
+            got=[];client=asyncio.create_task(self.client(port,0,got));await until(lambda:pipeline.count()==1)
+            pipeline.submitted[0][1](MemoryError('out'))
+            with self.assertRaises((asyncio.IncompleteReadError,ConnectionError)):await client
+            return got
+        self.assertEqual(self.scenario(body),[])
+
+
 class ServerTests(unittest.TestCase):
+    def test_stop_answers_the_requests_already_accepted(self):
+        """Serial serving (no pipeline): a stop while accepted requests are being searched answers them first, then serve
+        returns, under CPython 3.13.18's serve_forever too (it closes client connections when cancelled)."""
+        async def scenario():
+            search=FakeSearch(delay=.4);server=S.Server(search,max_requests=4);port=free_port();ready=asyncio.Event()
+            task=asyncio.create_task(server.serve('127.0.0.1',port,on_ready=ready.set));await asyncio.wait_for(ready.wait(),10)
+            async def client(i):
+                reader,writer=await asyncio.open_connection('127.0.0.1',port)
+                writer.write(original.encode(request(i)));await writer.drain()
+                row=await asyncio.wait_for(original.receive(reader),20);writer.close();await writer.wait_closed();return row
+            clients=[asyncio.create_task(client(i))for i in range(2)]
+            await until(lambda:sum(len(b)for _,b in search.batches)==2)   # both accepted and being searched
+            server.stop();rows=await asyncio.gather(*clients);await asyncio.wait_for(task,10)
+            return rows,server.closing
+        with newer_asyncio():rows,closing=asyncio.run(scenario())
+        self.assertEqual(sorted(r['request_id']for r in rows),['r0','r1']);self.assertTrue(closing)
+
     def test_requests_batch_through_codexs_queue_with_arrival_stamps(self):
         async def scenario():
             search=FakeSearch(delay=.05);server=S.Server(search,max_requests=4,batch_wait_seconds=.05);port=free_port();ready=asyncio.Event()
@@ -108,6 +237,19 @@ class ServerTests(unittest.TestCase):
         self.assertEqual((rows[1]['response']['request_id'],rows[1]['address']['battle_id'],rows[1]['lines'],rows[1]['budget_seconds']),('r1','b1',1,2.5))
         self.assertEqual(rows[1]['arrival_monotonic'],rows[1]['response']['arrival']);self.assertGreaterEqual(rows[1]['server_seconds'],0)
         self.assertEqual(rows[1]['response']['server_id'],'gpu0:7001')
+        keys=set(S.CompileCounter.KEYS);self.assertEqual(set(ready['warmup_compiles']),keys);self.assertLessEqual(keys,set(rows[1]))   # READY: the warmup's; a row: its own
+
+    def test_the_compile_counter_reads_compiles_cache_hits_misses_and_unreadable_entries_as_deltas(self):
+        import jax,warnings
+        counter=S.CompileCounter();counter.delta()
+        jax.monitoring.record_event_duration_secs(S.CompileCounter.EVENT,.25);jax.monitoring.record_event(S.CompileCounter.HIT)
+        jax.monitoring.record_event(S.CompileCounter.HIT);jax.monitoring.record_event(S.CompileCounter.MISS)
+        with warnings.catch_warnings():
+            warnings.simplefilter('always')   # shown (through the counter's hook), however often this test runs
+            warnings.warn("Error reading persistent compilation cache entry for 'jit_x': error: truncated")
+        got=counter.delta();self.assertEqual({k:got[k]for k in('compiles','cache_hits','cache_misses')},dict(compiles=1,cache_hits=2,cache_misses=1))
+        self.assertGreaterEqual(got['compile_seconds'],.25);self.assertGreaterEqual(got['cache_read_errors'],1)
+        self.assertEqual(counter.delta(),dict(compiles=0,compile_seconds=0.,cache_hits=0,cache_misses=0,cache_read_errors=0))
 
     def test_run_hands_prepare_its_warm_in_list(self):
         seen=[]
@@ -118,6 +260,52 @@ class ServerTests(unittest.TestCase):
                 warm_in=(dict(battle_id='x'),))
             S.run(FakeSearch(),host='127.0.0.1',port=free_port(),warmup_requests=[dict(battle_id='w')],max_requests=4,log=lambda row:None)   # no list: warmup(requests)
         self.assertEqual(seen,[([dict(battle_id='w')],[dict(battle_id='x')])])
+
+    def test_the_in_process_slot_warms_in_as_a_worker_does(self):
+        """With a pool and an in-process slot (local_battles), warmup's prepares run in this process: its warm-in is the
+        workers' two passes (warmup_saved: the warmup requests, leniently as the workers; then the list), or the warmup requests
+        alone without a list (R1: the slot warm at READY without --prepare-warm-in). Without the slot nothing prepares here, so
+        there is no warm-in."""
+        seen=[]
+        class Warming(FakeSearch):
+            constructor=object()
+            def warmup(self,requests,warm_in=(),warm_in_saved=False):seen.append((tuple(warm_in),warm_in_saved));return super().warmup(requests)
+            def attach_pool(self,pool):self.pool=pool
+        class Pool:
+            size=1;workers=();closed=False
+            def attach_local(self,constructor):self.local=constructor
+            def wait_ready(self):pass
+            def rss(self):return 0
+            def close(self):self.closed=True
+        class Pipeline:
+            def __init__(self,*a,**kw):pass
+            def start(self):return self
+        import gpu_engine.depthn_batching as batching
+        warmup,listed=[dict(battle_id='w')],(dict(battle_id='x'),dict(battle_id='y'))
+        with patch.object(S.asyncio,'run',lambda coroutine:coroutine.close()),patch.object(batching,'Pipeline',Pipeline):
+            for kw in(dict(warm_in=listed),dict()):
+                pool=Pool();S.run(Warming(),host='127.0.0.1',port=free_port(),warmup_requests=warmup,max_requests=4,log=lambda row:None,
+                    pool=pool,pipeline_options=dict(local_battles=2),**kw)
+                self.assertTrue(pool.closed)
+            S.run(Warming(),host='127.0.0.1',port=free_port(),warmup_requests=warmup,max_requests=4,log=lambda row:None,pool=Pool(),
+                pipeline_options=dict(local_battles=0),warm_in=listed)   # workers only: they warm in at their start
+        self.assertEqual(seen,[(listed,True),((),True),((),False)])
+
+    def test_main_closes_the_pool_whatever_fails_after_it_starts(self):
+        """The prepare workers start before build(): a build, a header or a telemetry file that raises closes them (no
+        orphaned workers warming in); so does a run that ends."""
+        class Pool:
+            def close(self):closed.append(True)
+        args=NS(warmup_requests='w.jsonl',host='127.0.0.1',port=free_port(),max_requests=4,batch_wait_seconds=.005,queue_limit=256,telemetry=None,server_id='s',
+            batch_window_seconds=.05,flush_guard_seconds=.15,reply_forward='reduce',local_battles=0,split_worlds=0,split_min_worlds=0)
+        for name,kw in(('build',dict(build=RuntimeError('no device'))),('header',dict(header=RuntimeError('no header'))),
+                       ('telemetry',dict(Recorder=OSError('telemetry unwritable')))):
+            with self.subTest(failing=name):
+                closed=[];stand={k:patch.object(S,k,side_effect=v)for k,v in kw.items()}
+                with patch.object(S,'options',return_value=args),patch.object(S,'read_requests',return_value=[]),patch.object(S,'read_warm_in',return_value=()),\
+                        patch.object(S,'make_pool',return_value=Pool()),patch.object(S,'build',return_value=FakeSearch()),patch.object(S,'header',return_value={}):
+                    with stand[next(iter(kw))],self.assertRaises((RuntimeError,OSError)):S.main([])
+                self.assertGreaterEqual(len(closed),1)
 
     def test_server_id_stamps_responses_only_when_given(self):
         plain=S.Recorder(FakeSearch()).process_many([request(1)]);self.assertNotIn('server_id',plain[0])   # no id: the search's responses, unchanged
@@ -150,6 +338,18 @@ class ServerTests(unittest.TestCase):
             with self.subTest(**bad),self.assertRaisesRegex(ValueError,'bounded shared search queue'):
                 S.run(search,host='127.0.0.1',port=free_port(),warmup_requests=[{}],**{'max_requests':4,**bad})
         self.assertFalse(search.warmed)
+
+    def test_build_refuses_a_shared_cache_without_whole_entry_writes(self):
+        """--compilation-cache with an atomic_compilation_cache.install() that cannot patch this JAX: build() refuses, before it
+        configures the cache or touches the device; without the flag the server starts (nothing shares a cache)."""
+        from gpu_engine import atomic_compilation_cache as atomic
+        base=['--showdown-root','s','--node-binary','n','--metadata','m','--expected-metadata-sha256','a'*64,'--vocabulary','v',
+            '--expected-vocabulary-sha256','b'*64,'--port','9000','--warmup-requests','w.jsonl','--champion-archive','c.npz','--champion-archive-sha256','c'*64,
+            '--champion-checkpoint-sha256','d'*64,'--tree-commit','t'*40]
+        with tempfile.TemporaryDirectory()as tmp:
+            with patch.dict(os.environ,PINNED):args=S.options(base+['--compilation-cache',tmp])
+            with patch.object(atomic,'install',return_value=False),patch.object(S,'matmul_precision',return_value='highest'):
+                with self.assertRaisesRegex(ValueError,'whole-entry cache writes'):S.build(args)
 
     def test_build_passes_the_command_line_through(self):
         """build() on stand-ins for the GPU, Codex's inputs, the champion and the pricers: --refuse-classes (and the queue
@@ -381,6 +581,30 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(S.read_warm_in(listed),(dict(battle_id='a'),dict(battle_id='b')))
             path.write_text('[1]\n')
             with self.assertRaisesRegex(ValueError,'one JSON object per line'):S.read_requests(path)
+
+
+class SelfMovesBuildGuards(unittest.TestCase):
+    def test_shared_constructor_keeps_catalog_and_evaluator_guards_before_executor(self):
+        import jax
+        from gpu_engine import constructor_worlds as cw
+        args = NS(matmul_precision='highest', compilation_cache=None, rung=next(iter(live.RUNGS)))
+        for catalog_on, model_on in ((True, False), (False, True), (False, False)):
+            with self.subTest(catalog_on=catalog_on, model_on=model_on):
+                constructor = NS(catalog=NS(masks=NS(self_moves=catalog_on)), source=object(), metadata={})
+                evaluator = NS(meta={'self_moves': model_on})
+                with (patch.object(S, 'matmul_precision', return_value='highest'),
+                      patch.object(S.atomic_compilation_cache, 'install', return_value=True),
+                      patch.object(jax, 'devices', return_value=[NS(platform='gpu')]),
+                      patch.object(S, 'build_constructor', return_value=constructor) as build,
+                      patch.object(S.evaluators, 'load_from_arguments', return_value=evaluator),
+                      patch.object(cw, 'live_executor', side_effect=RuntimeError('executor reached')) as executor):
+                    if catalog_on or model_on:
+                        with self.assertRaisesRegex(ValueError, 'not threaded yet'):S.build(args)
+                        executor.assert_not_called()
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'executor reached'):S.build(args)
+                        executor.assert_called_once_with(constructor.metadata, constructor.catalog)
+                    build.assert_called_once_with(args)
 
 
 if __name__=='__main__':unittest.main()

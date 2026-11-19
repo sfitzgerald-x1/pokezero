@@ -149,9 +149,13 @@ def _exact_own(request, state, catalog, source, metadata, owner, *, defer_sleep=
     own['active'][()] = active[0]
     current = {} if replacement else request['active'][0]
     own['forced_switch'][()] = replacement
-    if current.get('maybeTrapped') and 'trapped' not in current:
-        raise Refusal('OWN_TRAP_STATE_UNAVAILABLE')
-    own['trapped'][()] = bool(current.get('trapped', False))
+    # The side-level flag stays False for every request trap. `trapped` (a known trap) and `maybeTrapped` (Showdown's
+    # getMoveRequestData shows it for a hidden ability trap and for a merely possible one alike) are both reproduced by
+    # the world itself: the device derives an ability trap at every request from that world's abilities and types
+    # (transition.action_mask -> combat.switch_trapped) and a Mean Look trap from trap_source (state.legal_actions), and
+    # materialize_protocol refuses a world whose root mask does not reproduce a `trapped` request. state.trapped is
+    # cleared only by phazing (phazing.py), so a request trap sealed into it would outlast the trapper in search.
+    own['trapped'][()] = False
     public_names = [normalize_id(catalog.species.names[int(x)]) for x in _host(state.mons.species)[0, owner]]
     joined = {}
     for slot, mon in enumerate(party):
@@ -338,11 +342,12 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     fresh=protocol_facts.get('fresh_substitutes',{}) if protocol_facts is not None else {}
     own_species=normalize_id(v['species'][int(own['species'][own_slot])])
     # Engine-held public volatiles (fidelity A2/M2). Destiny Bond's flag rides the own volatile below on every route.
-    # Perish Song's and Yawn's counts (not own fields) and Encore's lock and drawn count (written after the own update)
-    # come only from the protocol world (map_spec held_volatiles, _write_held_counts, _write_encores), so they are
+    # Perish Song's and Yawn's counts (not own fields), Encore's lock and drawn count (written after the own update) and a
+    # partial trap's drawn count and trapper (partiallytrapped: Showdown never shows its duration, to us either) come only
+    # from the protocol world (map_spec held_volatiles, _write_held_counts, _write_encores, _write_wraps), so they are
     # admitted only on that route (protocol_facts); elsewhere they still refuse.
     allowed = {'', 'leechseed', 'ingrain', 'trapped', 'destinybond'}
-    if protocol_facts is not None:allowed |= {'perish1', 'perish2', 'perish3', 'yawn', 'encore'}   # encore: a drawn count
+    if protocol_facts is not None:allowed |= {'perish1', 'perish2', 'perish3', 'yawn', 'encore', 'partiallytrapped'}   # encore, partiallytrapped: a drawn count
     if fresh.get('p'+str(owner+1))==own_species:
         allowed.add('substitute');hp_slot=own_slot
         origin=(protocol_facts.get('substitute_origins') or {}).get('p'+str(owner+1))
@@ -362,7 +367,8 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     for name, bit in (('leechseed',LEECH_SEED),('ingrain',ROOTED),('destinybond',DESTINY_BOND)):
         if name in own_vols:own['volatile'][own_slot] |= bit
     # Trap link names the current opposing active in the sampled physical map;
-    # the existing materializer rebases this link using the retained public fact.
+    # the existing materializer rebases this link using the retained public fact
+    # (on the protocol route, phase_d_protocol_world._write_own_meanlook).
     if 'trapped' in own_vols or mon_features['meanlook_trap'][0,owner,pub_slot]:own['trap_source'][own_slot] = 0
     own_last = int(last[0,owner,pub_slot])
     if own_last > 0:

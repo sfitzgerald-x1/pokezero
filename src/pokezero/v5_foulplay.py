@@ -67,7 +67,9 @@ def _recipe(config,factory):
     if _checkpoint_sha(config.checkpoint)!=factory.contract.checkpoint_sha256:
         raise ValueError('original explicit v5 checkpoint path differs from archived source')
     resolved=json.loads(json.dumps(asdict(config),default=_json_default,allow_nan=False))
-    return dict(schema=SCHEMA,actor_version='v5',config=resolved,actor_namespace=factory.contract.namespace,
+    # V2 self_moves: an on factory (an archive declaring it) records it; off recipes are byte-identical.
+    declared=dict(self_moves=True) if getattr(factory.contract,'self_moves',False) else {}
+    return dict(schema=SCHEMA,actor_version='v5',config=resolved,actor_namespace=factory.contract.namespace,**declared,
         archive_sha256=json.loads(factory.metadata)['weights_archive_sha256'],
         checkpoint_sha256=factory.contract.checkpoint_sha256,
         category_vocabulary_sha256=factory.config.category_vocabulary_sha256,
@@ -82,7 +84,7 @@ async def load_and_run(config,archive,*,catalog,contract,expected_archive_sha256
     """Actual explicit archive load -> owning actor -> original FP game body."""
     if enable_v5 is not True:raise ValueError('explicit v5 FP enablement required')
     import jax
-    from gpu_engine.v5_live_protocol import load_factory
+    from gpu_engine.v5_live_protocol import load_factory   # V2 self_moves: it serves the archive as declared
     # Own matched main-thread setup, restoring it when this explicit call ends.
     with jax.default_matmul_precision('highest'),jax.enable_x64(False):
         factory=load_factory(archive,catalog=catalog,contract=contract,
@@ -142,7 +144,7 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
             if status!='COMPLETE' and actual.get('score') is not None:raise ValueError('unknown panel outcome cannot carry a score')
             if status=='RUNNING':expected.update(status='FAILED',score=None,reason='interrupted-original-root-not-replayed')
         started=previous['started_unix']
-    masks=dict(factory.contract.feature_masks);masks['opponent_tendency_stats_block']=masks.pop('stats_block')
+    masks=factory.contract.encoder_masks();masks['opponent_tendency_stats_block']=masks.pop('stats_block')
     masks=ObservationFeatureMasks(**masks)
     path=None if progress_path is None else Path(progress_path)
     if path is not None and path.exists() and (previous is None or _sha(json.loads(path.read_bytes()))!=expected_previous_sha256):

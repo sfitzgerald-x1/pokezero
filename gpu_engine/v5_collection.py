@@ -98,6 +98,12 @@ def load_actor(prepared, archive, *, expected_archive_sha256, expected_checkpoin
         expected_archive_sha256=expected_archive_sha256, expected_checkpoint_sha256=expected_checkpoint_sha256,
         expected_category_vocabulary_sha256=expected_category_vocabulary_sha256,
         expected_label_vocabulary_sha256=expected_label_vocabulary_sha256)
+    # V2 self_moves: the archive's declaration (absent = off) must be the driver catalog's.
+    from pokezero.checkpoint_self_moves import archive_self_moves
+    declared=archive_self_moves(metadata);catalog_declared=getattr(r['catalog'].masks,'self_moves',False)
+    if type(catalog_declared) is not bool:raise ValueError('explicit bool collector catalog self_moves required')
+    if declared != catalog_declared:
+        raise ValueError('v5 archive self_moves differs from the collector catalog')
     adapter = v5_observation.compile_adapter(r['catalog'],model_config=config)
     params = MappingProxyType(dict(params)); metadata = json.dumps(metadata,sort_keys=True,allow_nan=False)
     actor = Actor(params,config,adapter,metadata)

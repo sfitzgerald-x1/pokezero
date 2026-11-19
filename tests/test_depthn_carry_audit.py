@@ -45,35 +45,38 @@ def citations(text):
 # a removed one loses it.
 CITATION_ANCHORS = {
     'gpu_engine/baton.py:16': 'batonpass',
-    'gpu_engine/constructor_worlds.py:482': 'OPPONENT_RECHARGE_UNREPRESENTED',
-    'gpu_engine/constructor_worlds.py:843': 'def fix_recharge',
+    'gpu_engine/constructor_worlds.py:489': 'OPPONENT_RECHARGE_UNREPRESENTED',
+    'gpu_engine/constructor_worlds.py:916': 'def fix_recharge',
     'gpu_engine/effects.py:175': 'def stall_success',
     'gpu_engine/effects.py:46': 'destinybond',
     'gpu_engine/encore.py:14-20': '^def from_metadata',
     'gpu_engine/encore.py:33-52': '^def apply',
-    'gpu_engine/engine_device_observation.py:290-302': "own['moves']",
+    'gpu_engine/engine_device_observation.py:346-368': "own['moves']",
     'gpu_engine/engine_request_source.py:261-265': '^_unsafe_history',
     'gpu_engine/engine_request_source.py:341': 'charge_move',
     'gpu_engine/engine_request_source.py:341-342': '^encore',
     'gpu_engine/engine_request_source.py:380': 'LOCK',
-    'gpu_engine/entry.py:50': 'spikes',
+    'gpu_engine/entry.py:51': 'spikes',
     'gpu_engine/focus_punch.py:15-19': 'focuspunch',
-    'gpu_engine/future_state.py:155': 'lockedmove',
-    'gpu_engine/future_state.py:476': 'RECHARGE_UNREPRESENTED',
+    'gpu_engine/future_state.py:164': 'lockedmove',
+    'gpu_engine/future_state.py:494': 'RECHARGE_UNREPRESENTED',
     'gpu_engine/items.py:27-28': 'trick: jax.Array',
     'gpu_engine/linked_traps.py:12-14': 'meanlook',
     'gpu_engine/linked_traps.py:12-25': 'meanlook',
-    'gpu_engine/phase_d_live_worlds.py:278-279': 'PUBLIC_TRANSFORM_NOT_MATERIALIZED',
-    'gpu_engine/phase_d_live_worlds.py:344-345': "'perish1'",
-    'gpu_engine/phase_d_live_worlds.py:355-356': 'OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE',
-    'gpu_engine/phase_d_live_worlds.py:362': 'DESTINY_BOND',
-    'gpu_engine/phase_d_protocol_constructor.py:175': 'load_gen3_randbat_source_cached',
-    'gpu_engine/phase_d_protocol_world.py:130-132': '^PUBLIC_ITEM_SWAP_NOT_SUPPORTED',
-    'gpu_engine/phase_d_protocol_world.py:201-219': '^_defer_yawn',
-    'gpu_engine/phase_d_protocol_world.py:222-237': '^_perish_counts',
-    'gpu_engine/phase_d_protocol_world.py:309-320': '^def _write_held_counts',
-    'gpu_engine/phase_d_protocol_world.py:465-466': 'approximate_partial_trap_turns=False',
-    'gpu_engine/phase_d_protocol_world.py:478': 'map_spec',
+    'gpu_engine/phase_d_live_worlds.py:282-283': 'PUBLIC_TRANSFORM_NOT_MATERIALIZED',
+    'gpu_engine/phase_d_live_worlds.py:349-350': "'partiallytrapped'",
+    'gpu_engine/phase_d_live_worlds.py:360-361': 'OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE',
+    'gpu_engine/phase_d_live_worlds.py:367': 'DESTINY_BOND',
+    'gpu_engine/phase_d_protocol_constructor.py:222': 'load_gen3_randbat_source_cached',
+    'gpu_engine/phase_d_protocol_world.py:150-152': '^PUBLIC_ITEM_SWAP_NOT_SUPPORTED',
+    'gpu_engine/phase_d_protocol_world.py:221-239': '^_defer_yawn',
+    'gpu_engine/phase_d_protocol_world.py:242-257': '^_perish_counts',
+    'gpu_engine/phase_d_protocol_world.py:329-339': '^def _write_held_counts',
+    'gpu_engine/phase_d_protocol_world.py:345-353': '^def wrap_support',
+    'gpu_engine/phase_d_protocol_world.py:356-382': '^def _wrap_facts',
+    'gpu_engine/phase_d_protocol_world.py:385-402': '^def _defer_traps',
+    'gpu_engine/phase_d_protocol_world.py:426-443': '^def _write_wraps',
+    'gpu_engine/phase_d_protocol_world.py:687': 'map_spec',
     'gpu_engine/public_active.py:217-233': '^PERISH_START',
     'gpu_engine/public_active.py:46': 'perish',
     'gpu_engine/public_refresh_stream.py:17': 'TRANSFORM',
@@ -87,47 +90,49 @@ CITATION_ANCHORS = {
     'gpu_engine/solar_beam.py:1': 'Solar Beam',
     'gpu_engine/solar_beam.py:14-15': 'solarbeam',
     'gpu_engine/state.py:14': 'LEECH_SEED',
-    'gpu_engine/state.py:146-148': '^def usable_moves',
+    'gpu_engine/state.py:159-161': '^def usable_moves',
     'gpu_engine/state.py:16-17': '^FOCUS_PUNCH',
     'gpu_engine/state.py:21': 'DESTINY_BOND',
-    'gpu_engine/state.py:24-92': '^class BattleState',
-    'gpu_engine/state.py:36-39': 'status_counter',
-    'gpu_engine/state.py:38': 'sleep_skipped',
-    'gpu_engine/state.py:43': 'choice_move',
-    'gpu_engine/state.py:47-48': 'encore_counter',
-    'gpu_engine/state.py:49-50': '^charge_move',
-    'gpu_engine/state.py:57': 'protect_counter',
-    'gpu_engine/state.py:58': 'substitute_hp',
-    'gpu_engine/state.py:63': 'trap_source',
-    'gpu_engine/state.py:75': 'spikes',
-    'gpu_engine/state.py:76-77': '^wish_counter',
-    'gpu_engine/state.py:78-79': 'weather_counter',
-    'gpu_engine/state.py:84': 'truant_loaf',
-    'gpu_engine/state.py:85': 'item_knocked',
-    'gpu_engine/state.py:87': 'recharge_counter',
-    'gpu_engine/state.py:89': 'perish_counter',
-    'gpu_engine/state.py:90': 'yawn_counter',
-    'gpu_engine/state.py:91-92': '^partial_trap_counter',
+    'gpu_engine/state.py:25-93': '^class BattleState',
+    'gpu_engine/state.py:37-40': 'status_counter',
+    'gpu_engine/state.py:39': 'sleep_skipped',
+    'gpu_engine/state.py:44': 'choice_move',
+    'gpu_engine/state.py:48-49': 'encore_counter',
+    'gpu_engine/state.py:50-51': '^charge_move',
+    'gpu_engine/state.py:58': 'protect_counter',
+    'gpu_engine/state.py:59': 'substitute_hp',
+    'gpu_engine/state.py:64': 'trap_source',
+    'gpu_engine/state.py:76': 'spikes',
+    'gpu_engine/state.py:77-78': '^wish_counter',
+    'gpu_engine/state.py:79-80': 'weather_counter',
+    'gpu_engine/state.py:85': 'truant_loaf',
+    'gpu_engine/state.py:86': 'item_knocked',
+    'gpu_engine/state.py:88': 'recharge_counter',
+    'gpu_engine/state.py:90': 'perish_counter',
+    'gpu_engine/state.py:91': 'yawn_counter',
+    'gpu_engine/state.py:92-93': '^partial_trap_counter',
     'gpu_engine/sustain.py:22-27': 'leechseed',
-    'gpu_engine/transition.py:1680-1689': '^_trick=',
-    'gpu_engine/transition.py:1690-1701': '_white_herb_pair',
-    'gpu_engine/transition.py:1729-1737': '^_perish_used',
-    'gpu_engine/transition.py:1742-1750': '^_yawn_try',
-    'gpu_engine/transition.py:1913-1922': '^seed_target',
-    'gpu_engine/transition.py:1950-1955': '^_wrap_set',
-    'gpu_engine/transition.py:2543-2563': "^POSITIONS['wrap']",
-    'gpu_engine/transition.py:2564-2592': "^POSITIONS['yawn']",
-    'gpu_engine/transition.py:2574-2578': '^_yawn_clause',
-    'gpu_engine/transition.py:2620-2633': '^_perish_continues',
-    'gpu_engine/transition.py:2700-2704': 'truant_loaf=work.truant_loaf',
-    'gpu_engine/transition.py:611-612': '^charge_moves',
-    'gpu_engine/transition.py:641-643': 'initial_loaf = (table.entry.truant',
-    'gpu_engine/transition.py:82-114': '^def tables_from_metadata',
-    'gpu_engine/transition.py:825': 'charge_locked',
-    'gpu_engine/transition.py:832-836': '~DESTINY_BOND&0xffffffff',
-    'gpu_engine/transition.py:840-845': '^_recharge_turn',
-    'gpu_engine/transition.py:851-852': 'loafing=table.entry.truant',
-    'gpu_engine/transition.py:852': 'loafing=table.entry.truant',
+    'gpu_engine/transition.py:1831-1840': '^_trick=',
+    'gpu_engine/transition.py:1841-1852': '_white_herb_pair',
+    'gpu_engine/transition.py:1899-1907': '^_perish_used',
+    'gpu_engine/transition.py:1912-1920': '^_yawn_try',
+    'gpu_engine/transition.py:2083-2092': '^seed_target',
+    'gpu_engine/transition.py:2120-2125': '^_wrap_set',
+    'gpu_engine/transition.py:2749-2769': "^POSITIONS['wrap']",
+    'gpu_engine/transition.py:2770-2798': "^POSITIONS['yawn']",
+    'gpu_engine/transition.py:2780-2784': '^_yawn_clause',
+    'gpu_engine/transition.py:2835-2849': '^_perish_continues',
+    'gpu_engine/transition.py:2928-2932': 'truant_loaf=work.truant_loaf',
+    'gpu_engine/transition.py:679-680': '^charge_moves',
+    'gpu_engine/transition.py:709-711': 'initial_loaf = (table.entry.truant',
+    'gpu_engine/transform.py:132': 'def revert',
+    'gpu_engine/transform.py:70': 'def apply',
+    'gpu_engine/transition.py:88-121': '^def tables_from_metadata',
+    'gpu_engine/transition.py:935': 'charge_locked',
+    'gpu_engine/transition.py:942-946': '~DESTINY_BOND&0xffffffff',
+    'gpu_engine/transition.py:950-955': '^_recharge_turn',
+    'gpu_engine/transition.py:961-962': 'loafing=table.entry.truant',
+    'gpu_engine/transition.py:962': 'loafing=table.entry.truant',
     'gpu_engine/v5_hypothetical_state.py:119': 'DESTINY_BOND',
     'gpu_engine/v5_hypothetical_state.py:121': 'perish_counter',
 }
@@ -201,10 +206,13 @@ class EnumerationTests(unittest.TestCase):
         source = (ROOT / 'gpu_engine/engine_request_source.py').read_text().splitlines()
         self.assertIn('LOCK', source[379]);self.assertIn('charge_move', source[340])
         state = (ROOT / 'gpu_engine/state.py').read_text().lower()
-        # an effect the engine models in-tree (engine_since) names its state; the others still have none
+        # an effect the engine models in-tree (engine_since) names its state; the others still have none. Transform is in-tree from
+        # its PR, before its merge exists to be the engine_since (set with the guard change that follows): pending until then.
         words = dict(recharge='recharge', perish_count='perish', drowsy='yawn', destiny_bond='destiny', partial_trap='partial', transform='transform')
+        pending = {'transform'}
         for e in A.EFFECTS:
-            if e.id in words:(self.assertIn if e.engine_since else self.assertNotIn)(words[e.id], state, e.id)
+            if e.id in pending:self.assertEqual(e.engine_since, '', f'{e.id} has its engine_since: drop it from pending')
+            if e.id in words:(self.assertIn if e.engine_since or e.id in pending else self.assertNotIn)(words[e.id], state, e.id)
         traps = (ROOT / 'gpu_engine/linked_traps.py').read_text().splitlines()[12]
         self.assertIn('meanlook', traps);self.assertNotIn('wrap', traps)
         transition = (ROOT / 'gpu_engine/transition.py').read_text()
@@ -513,6 +521,23 @@ class CaptureHookTests(unittest.TestCase):
             from gpu_engine.constructor_worlds import price
             return price(None, None)
         with self.assertRaises(RuntimeError):A.check_turn2_call_sites(search=bound)
+
+    def test_price_stage_must_keep_the_live_module_lookup(self):
+        from gpu_engine import depthn_live_search as live
+        from scripts import depthn_rr_reprice as rr
+        stages = rr.search_stages()
+        self.assertIn(live.DepthNLiveSearch._price, stages)
+        self.assertTrue(A.check_turn2_call_sites(search=stages))
+        with self.assertRaises(RuntimeError):
+            A.check_turn2_call_sites(search=tuple(s for s in stages if s is not live.DepthNLiveSearch._price))
+
+        # Keep the live globals so this fails specifically because the module lookup disappeared.
+        from types import FunctionType
+        def cached(self, prepared, bucket=None):
+            return self.cached_price(prepared, bucket)
+        cached = FunctionType(cached.__code__, vars(live))
+        with patch.object(live.DepthNLiveSearch, '_price', cached):
+            with self.assertRaises(RuntimeError):A.check_turn2_call_sites()
 
     def test_price_wrapper_under_the_live_search(self):
         from tests import test_depthn_rr_reprice as RT

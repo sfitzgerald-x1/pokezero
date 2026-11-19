@@ -49,7 +49,9 @@ def prepare(args):
         runtime = worker._record(config['runtime']);labels = contract.LabelVocabulary(**worker._record(config['labels']))
         profile, vocabulary, gender, category = worker._runtime_metadata(runtime, expected_pool_sha256=config['bank']['pool_sha256'])
         if gender is None:raise ValueError('original gender metadata for declared pool required')
-        plan = smoke.build_plan(config['bank'], profile, labels, category, arm=args.arm, iterations=args.iterations)
+        # V2 self_moves: the config's optional declaration (absent = off); Plan refuses a non-bool value.
+        plan = smoke.build_plan(config['bank'], profile, labels, category, arm=args.arm, iterations=args.iterations,
+            self_moves=config.get('self_moves', False))
         inputs = worker.Inputs(plan, profile, json.dumps(runtime), json.dumps(vocabulary), json.dumps(gender), runs._sha(plan.manifest()))
         declared = dict(config_sha256=hashlib.sha256(blob).hexdigest())
     else:
@@ -76,10 +78,14 @@ def sha(path):
 
 def load_actor(plan, snapshot, root):
     from gpu_engine import v5_model
-    params, config, _ = v5_model.load(Path(root, snapshot.archive), expected_archive_sha256=snapshot.archive_sha256,
+    params, config, meta = v5_model.load(Path(root, snapshot.archive), expected_archive_sha256=snapshot.archive_sha256,
         expected_checkpoint_sha256=snapshot.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
         expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
     if config != plan.model:raise ValueError('loaded actor configuration differs from plan')
+    from gpu_engine.private_self_moves import check_run_actor,checked_actor_initializer
+    initializer=checked_actor_initializer(meta,plan_self_moves=plan.self_moves,snapshot=snapshot,root=root)
+    check_run_actor(meta, plan_self_moves=plan.self_moves, iteration=snapshot.iteration, context='v2 fused actor',
+        initializer=initializer)
     return params
 
 
@@ -189,13 +195,14 @@ def main(argv=None):
     import torch
     from pokezero import v5_run as runs, v2_trainer as v2t
     from gpu_engine import v5_model, v2_collector as v2c, v2_bench_trainer as bench
+    from pokezero import checkpoint_self_moves as encoding
     from gpu_engine.v5_device_backend import RuntimeBackend
     context = prepare(args);plan = context['plan']
     if args.torch_memory_fraction > 0:
         # The runtime probe caps Torch for the file pipeline; V2 holds the row store in Torch too.
         torch.cuda.set_per_process_memory_fraction(args.torch_memory_fraction, 0)
     log('PREPARED', seconds=context['preparation_seconds'], iterations=len(plan.iterations), games=len(plan.games), **context['declared'])
-    events = journal(args.reference_run)
+    _, _, events = encoding.verified_run(args.reference_run)
     initial = [e['payload'] for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1]
     if len(initial) != 1:raise ValueError('one initial snapshot required in the reference run')
     first = runs.Snapshot(**initial[0])
@@ -205,11 +212,17 @@ def main(argv=None):
     state_path = out / 'state.json'
     if state_path.exists():
         saved = json.loads(state_path.read_text())
+        if saved.get('declaration_sha256') != runs._sha(plan.manifest()):
+            raise ValueError('original fused run declaration binding required')
+        encoding_receipts = saved.get('checkpoint_encoding_receipts', {})
         snapshots = [runs.Snapshot(**x) for x in saved['snapshots']];reports = saved['reports']
         for snapshot in snapshots[1:]:roots[snapshot.archive_sha256] = out
         checkpoint = out / snapshots[-1].checkpoint
         runtime = v2t.load_checkpoint(checkpoint, enable_v5=True, v2_config=v2_config, expected_model_config=plan.model,
-            expected_loss_config=plan.loss, expected_train_config=plan.train, device='cuda')
+            expected_loss_config=plan.loss, expected_train_config=plan.train, device='cuda',expected_self_moves=plan.self_moves,
+            expected_checkpoint_sha256=snapshots[-1].checkpoint_sha256,
+            off_provenance=(encoding.off_from_receipt(encoding_receipts[snapshots[-1].checkpoint_sha256])
+                if snapshots[-1].checkpoint_sha256 in encoding_receipts and not plan.self_moves else None))
         recorded = saved.get('row_order')
         if recorded is None and args.row_order is None:
             raise SystemExit('state.json does not record its row order (older runs defaulted to tick); pass --row-order explicitly')
@@ -219,9 +232,14 @@ def main(argv=None):
         log('RESUMED', completed_iterations=len(reports), checkpoint=str(checkpoint), steps=runtime.steps, row_order=row_order)
     else:
         snapshots = [first];reports = [];row_order = args.row_order or 'file'
-        model, loss, train, weights, _ = bench.configurations(Path(args.reference_run, first.checkpoint))
+        encoding_receipts = {}
+        initializer, proof = encoding.original_initializer(args.reference_run, first)
+        model, loss, train, weights, _ = bench.configurations(Path(args.reference_run, first.checkpoint),
+            expected_checkpoint_sha256=first.checkpoint_sha256,expected_self_moves=plan.self_moves,
+            off_provenance=proof,weights_only_initializer=initializer)
         if model != plan.model or loss != plan.loss or train != plan.train:raise ValueError('initial checkpoint recipe differs from plan')
-        runtime = v2t.create(plan.model, plan.loss, plan.train, v2_config, enable_v5=True, device='cuda')
+        runtime = v2t.create(plan.model, plan.loss, plan.train, v2_config, enable_v5=True, device='cuda',
+            self_moves=plan.self_moves)
         runtime.model.load_state_dict(weights)
     trainer = v2t.Trainer(runtime)
     params = {}
@@ -289,9 +307,11 @@ def main(argv=None):
         train_report = trainer.train(store, window=runs.learning_rate_window(plan, iteration))
         torch.cuda.synchronize();mark('train')
         del store, tensors;gc.collect()
-        checkpoint = out / 'artifacts' / f'train-{iteration}.pt';v2t.save_checkpoint(checkpoint, runtime)
+        checkpoint = out / 'artifacts' / f'train-{iteration}.pt';receipt=v2t.save_checkpoint(checkpoint, runtime)
         archive = out / 'artifacts' / f'actor-{iteration}.npz';checkpoint_sha = sha(checkpoint)
-        metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=checkpoint_sha, enable_v5=True)
+        encoding_receipts[checkpoint_sha]=receipt['encoding_receipt']
+        metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=checkpoint_sha, enable_v5=True,
+            self_moves=plan.self_moves,off_provenance=(encoding.off_from_receipt(receipt['encoding_receipt']) if not plan.self_moves else None))
         snapshot = runs.Snapshot(iteration=iteration, checkpoint=f'artifacts/train-{iteration}.pt', checkpoint_sha256=checkpoint_sha,
             archive=f'artifacts/actor-{iteration}.npz', archive_sha256=metadata['weights_archive_sha256'],
             model_sha256=runs._sha(plan.model.metadata()))
@@ -312,7 +332,8 @@ def main(argv=None):
             games_per_second_steady=round(report['games_per_second_steady'], 2), phase_seconds={k: round(v, 1) for k, v in phase.items()},
             history=history, reused=reused, occupancy=round(stats.get('occupancy', 0), 3), dispositions=report['dispositions'],
             final_epoch_loss=report['training'].get('final_epoch_mean', {}).get('loss'), matching=same)
-        write_json(state_path, dict(snapshots=[asdict(s) for s in snapshots], reports=reports, row_order=row_order))
+        write_json(state_path, dict(snapshots=[asdict(s) for s in snapshots], reports=reports, row_order=row_order,
+            declaration_sha256=runs._sha(plan.manifest()),checkpoint_encoding_receipts=encoding_receipts))
         del rows, result, roster, tree;gc.collect()
         keep = {s.archive_sha256 for s in snapshots[-1 - plan.historical_window:]}
         for digest in list(params):

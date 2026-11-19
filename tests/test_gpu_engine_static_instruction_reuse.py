@@ -12,6 +12,63 @@ from gpu_engine import v4_encoder as e
 
 BASE = 'de4180168925e163cb87d3220d58975086f8e96f'
 
+# V2 self_moves (gpu_engine/private_self_moves.py) changed v4_encoder.py after the static-instruction reuse. Its documented
+# delta, reversed below so the source-reverse pin still proves everything else is the original program: one import and two
+# module constants added; three dataclass fields added; Masks.from_checkpoint, compile_encoder, parse_own_requests and
+# encode changed exactly by these (current, original) replacements over ast.unparse; parse_own_requests' docstring grew.
+SELF_MOVES_ADDED = frozenset({'OPTIONAL_KEYS', 'ENCODE_ONLY'})
+SELF_MOVES_FIELDS = {'Masks': 'self_moves: bool = False', 'Catalog': 'self_moves: object = None', 'OwnFacts': 'self_moves: object = None'}
+SELF_MOVES_DELTAS = {
+    'Masks': (
+        ("        from pokezero.observation import resolve_self_moves\n"
+         "        required = set(cls.__dataclass_fields__) - OPTIONAL_KEYS\n"
+         "        if not isinstance(values, dict) or not required <= set(values) <= set(cls.__dataclass_fields__):",
+         "        if not isinstance(values, dict) or set(values) != set(cls.__dataclass_fields__):"),
+        ("return cls(**{**values, 'self_moves': resolve_self_moves(values.get('self_moves'))})", "return cls(**values)")),
+    'compile_encoder': (
+        ("    self_moves = private_self_moves.compile_self_moves(moves, features, vocabulary) if masks.self_moves else None\n", ""),
+        ("masks={k: v for k, v in feature_masks.items() if k not in ENCODE_ONLY}", "masks=feature_masks"),
+        (", checkpoint_sha256, self_moves=self_moves)", ", checkpoint_sha256)")),
+    'parse_own_requests': (
+        ("owner_sides, own_lines=None):", "owner_sides):"),
+        ("    if own_lines is not None and len(own_lines) != len(requests):\n"
+         "        raise ValueError('one own line history per request required')\n", ""),
+        (", catalog.binding, None if catalog.self_moves is None or own_lines is None else private_self_moves.parse_own_moves("
+         "request, owner_side=owner, catalog=catalog.self_moves, lines=own_lines[len(rows)])))", ", catalog.binding))")),
+    'encode': (
+        ("    if catalog.masks.self_moves:\n"
+         "        if catalog.self_moves is None or own.self_moves is None:\n"
+         "            raise ValueError('self_moves requires the self-move catalog and own move facts (parse_own_requests own_lines)')\n"
+         "        result = v4_assembly.overlay(result, private_self_moves.project(own.self_moves, mons, own.status, "
+         "catalog.self_moves.device, observer_side=observer, exact_state=catalog.masks.exact_state), section='own')\n", ""),),
+}
+SELF_MOVES_DOCSTRINGS = {'parse_own_requests': 'Read only the supplied owning packets, never the opponent request.'}
+
+
+def reverse_self_moves(module):
+    """`module` without the V2 self_moves delta above; each replacement must match exactly once."""
+    body = []
+    for node in module.body:
+        if (isinstance(node, ast.ImportFrom) and [a.name for a in node.names] == ['private_self_moves']
+                or isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in SELF_MOVES_ADDED for t in node.targets)):
+            continue
+        name = getattr(node, 'name', None)
+        if name in SELF_MOVES_FIELDS:
+            kept = [n for n in node.body if ast.unparse(n) != SELF_MOVES_FIELDS[name]]
+            assert len(kept) == len(node.body) - 1, name
+            node.body = kept
+        if name in SELF_MOVES_DOCSTRINGS:
+            node.body[0].value.value = SELF_MOVES_DOCSTRINGS[name]
+        if name in SELF_MOVES_DELTAS:
+            text = ast.unparse(node)
+            for new, original in SELF_MOVES_DELTAS[name]:
+                assert text.count(new) == 1, (name, new)
+                text = text.replace(new, original)
+            node = ast.parse(text).body[0]
+        body.append(node)
+    module.body = body
+    return module
+
 
 @dataclass
 class Facts:
@@ -165,6 +222,7 @@ class StaticInstructionReuseTests(unittest.TestCase):
                     return None
                 return self.generic_visit(node)
         current = Reverse().visit(current)
+        current = reverse_self_moves(current)
         self.assertEqual(ast.dump(current, include_attributes=False), ast.dump(ast.parse(old), include_attributes=False))
         path='gpu_engine/engine_retained_encoder_driver.py'
         self.assertEqual((root/path).read_bytes(),subprocess.check_output(['git','show','b8092a85:'+path],cwd=root))
@@ -179,7 +237,7 @@ class StaticInstructionReuseTests(unittest.TestCase):
             return ast.dump(tree,include_attributes=False)
         # The reviewed witness body is integration 11ce1be7's (M2's 7476bce7 moved ENCORE's cutpoints from 12 to 16).
         self.assertEqual(without_pins((root/path).read_text()),without_pins(subprocess.check_output(['git','show','11ce1be7:'+path],cwd=root,text=True)))
-        self.assertEqual(len(witness.SOURCE_PINS),89)   # 88, and residual_order.py since §6
+        self.assertEqual(len(witness.SOURCE_PINS),92)   # 88, residual_order.py since §6, plus infatuation.py, transform.py and forecast.py
 
 
 if __name__ == '__main__':

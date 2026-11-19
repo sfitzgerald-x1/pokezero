@@ -137,7 +137,7 @@ class EndToEndMaterialize(unittest.TestCase):
             state = jax.tree_util.tree_map(lambda x: np.array(x), physical) if host else physical
             with patch.object(protocol, 'HOST_WORLDS', host), patch.object(protocol, 'battle_spec_from_payload', return_value=world), \
                     patch.object(protocol, 'map_spec', return_value=NS(state=state)), patch.object(protocol, 'unpack_team', side_effect=unpack), \
-                    patch.object(protocol.public_worlds, '_revealed', return_value=()):
+                    patch.object(protocol.public_worlds, '_revealed', return_value=()), patch.object(protocol, '_set_posteriors', return_value={}):
                 made[host] = protocol.materialize_protocol(public, start, inputs=inputs, seed=17)
         a, b = made[False], made[True]
         self.assertIsNotNone(a.state, a.refusals);self.assertEqual(a.refusals, b.refusals)

@@ -807,7 +807,9 @@ def _strike_damage(
     attack_mods: list[tuple[float, float]] = []
     attack_direct_mods: list[tuple[float, float]] = []
     guts_active = ability == "guts" and (context.attacker_status or "") in _GUTS_STATUSES
-    if guts_active:
+    # Guts is an onModifyAtk handler only (data/abilities.ts at f76228a1; no gen3 override): it raises the Attack stat
+    # of a physical move and never Sp. Atk. guts_active still gates the burn exemption below (physical only anyway).
+    if guts_active and category == "Physical":
         attack_mods.append((1.5, 1))
     if ability == "hustle" and category == "Physical":
         attack_direct_mods.append((1.5, 1))

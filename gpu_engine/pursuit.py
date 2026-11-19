@@ -14,6 +14,7 @@ from . import action_history as history
 from . import pressure as pp_cost
 from . import critical as crits
 from . import secondary as secondaries
+from . import combat as traits
 
 
 class PursuitTable(NamedTuple):
@@ -24,13 +25,34 @@ def from_metadata(metadata):
     return PursuitTable(jnp.asarray([name == "pursuit" for name in metadata["vocabulary"]["moves"]]))
 
 
-def intercept(state, side, slot, move, chance, table, *, eligible, contact_roll):
+def _effectiveness(state, side, move, table):
+    rows = jnp.arange(state.hp.shape[0]); foe = 1-side
+    target_types = state.types[rows,foe,state.active[:,foe]]
+    typ = table.type[move]
+    return (typ, table.type_num[typ,target_types[:,0]]*table.type_num[typ,target_types[:,1]],
+            table.type_den[typ,target_types[:,0]]*table.type_den[typ,target_types[:,1]])
+
+
+def wonder_guard_blocked(state, side, move, table):
+    """[B] Fidelity tier D: the outgoing target's Wonder Guard blocks this Pursuit (combat.wonder_guard_blocks).
+    Dark is super-effective on Shedinja, so only a Traced Wonder Guard on a non-Ghost, non-Psychic holder blocks."""
+    if table.combat is None:
+        return jnp.zeros(state.hp.shape[0], bool)
+    rows = jnp.arange(state.hp.shape[0]); foe = 1-side
+    typ, num, den = _effectiveness(state, side, move, table)
+    return traits.wonder_guard_blocks(table.combat, state.ability[rows,foe,state.active[:,foe]], move, typ, num, den)
+
+
+def intercept(state, side, slot, move, chance, table, *, eligible, contact_roll, sleep_roll=None, _reveal_masks=False):
     """Hit the outgoing target before switch clearing/entry, consuming one move.
 
     Caller snapshots beforeTurn registration (sleep/freeze/Truant exclude it), excludes
     forced replacements and retains the chosen switch after KO in Gen 3.
     Interception bypasses paralysis/confusion/flinch and their counters. Wider
-    contact/item events beyond selected Static remain placeholders.
+    item events remain placeholders. Fidelity tier D: Wonder Guard's TryHit applies (useMove runs tryMoveHit) and
+    the contact abilities fire as for any contact hit; sleep_roll is the attacker's effect[s][2] (Effect Spore; the
+    transition always passes it, a direct caller without one reads 0). _reveal_masks: also return the contact
+    abilities' public reveal masks (secondary.apply_contact) as a fourth value, (target's, pursuer's).
     """
     rows = jnp.arange(state.hp.shape[0])
     foe = 1-side
@@ -61,7 +83,7 @@ def intercept(state, side, slot, move, chance, table, *, eligible, contact_roll)
         attack_num=attack_num,attack_den=attack_den,
         defense_num=defense_num,defense_den=defense_den,
         stab=jnp.any(own_types==typ[:,None],axis=1),effectiveness_num=num,
-        effectiveness_den=den,immune=num==0,roll=85+chance[:,5])
+        effectiveness_den=den,immune=(num==0)|wonder_guard_blocked(state,side,move,table),roll=85+chance[:,5])
     # beingCalledBack makes accuracy unconditional, but Substitute still caps
     # actual damage and prevents spill into the outgoing Pokemon's HP.
     sub = get(state.substitute_hp,foe,target)
@@ -69,9 +91,12 @@ def intercept(state, side, slot, move, chance, table, *, eligible, contact_roll)
     after_hp = hp-jnp.where(sub>0,0,dealt)
     state = state._replace(hp=state.hp.at[rows,foe,target].set(after_hp),
         substitute_hp=state.substitute_hp.at[rows,foe,target].set(sub-jnp.where(sub>0,dealt,0)))
+    reveals = (jnp.zeros_like(used), jnp.zeros_like(used))
     if table.secondary is not None:
-        state = secondaries.apply_contact(state,side,move,contact_roll,table.secondary,
-            eligible=used & (dealt>0) & (sub==0))
+        state,*reveals = secondaries.apply_contact(state,side,move,contact_roll,table.secondary,
+            eligible=used & (dealt>0) & (sub==0),
+            sleep_roll=jnp.zeros_like(contact_roll) if sleep_roll is None else sleep_roll,_reveal_masks=True,
+            infatuation_table=table.infatuation)
     cost = 1
     if table.pressure is not None:
         cost = pp_cost.cost(table.pressure,move,own_types,get(state.ability,foe,target),hp)
@@ -88,4 +113,6 @@ def intercept(state, side, slot, move, chance, table, *, eligible, contact_roll)
         lock = successful & table.items.choice_band[get(state.item,side,own)] & (old_lock==0)
         state = state._replace(choice_move=state.choice_move.at[rows,side,own].set(
             jnp.where(lock,move,old_lock)))
+    if _reveal_masks:
+        return state,used,used & (after_hp==0),tuple(reveals)
     return state,used,used & (after_hp==0)

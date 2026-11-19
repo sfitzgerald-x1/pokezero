@@ -89,6 +89,26 @@ class CriticalTests(unittest.TestCase):
             self.assertTrue(bool(j.array_equal(x[:2],y)))
         for x,y in zip(s,a.state):self.assertTrue(bool(j.array_equal(x[2:],y[2:])))
 
+    def test_stick_ratio_threshold_and_species(self):
+        """Stick (critical.ratio): 1 + high-crit + 2 for a Farfetch'd holding it; thresholds 1, 2, 4 on the [0,16) draw
+        (ratio 4, 1/3, reads 5: documented as not exact and refused by the planners; ratio 5 reads 8, exact)."""
+        j=self.j
+        meta={"vocabulary":{"moves":["_none","return","slash"],"abilities":["_none","battlearmor"],
+            "items":["_none","stick","leftovers"],"species":["_none","farfetchd","mew"]}}
+        t=self.c.from_metadata(meta);roll=j.arange(16)
+        self.assertEqual(self.c.CRIT_THRESHOLD,(0,1,2,4,5,8))
+        for move,item,species,ratio,count in ((1,0,1,1,1),(1,1,1,3,4),(1,1,2,1,1),(1,2,1,1,1),(2,0,1,2,2),(2,1,1,4,5),
+                                               (2,1,2,2,2)):
+            self.assertEqual(int(self.c.ratio(t,move,item=j.asarray(item),species=j.asarray(species))),ratio)
+            hits=self.c.is_critical(t,move,0,roll,item=j.asarray(item),species=j.asarray(species))
+            self.assertEqual(int(hits.sum()),count,(move,item,species))
+            self.assertEqual(hits.tolist(),[r<count for r in range(16)])
+            self.assertFalse(bool(j.any(self.c.is_critical(t,move,1,roll,item=j.asarray(item),species=j.asarray(species)))))
+        # Without the attacker's item (Pursuit's intercept) there is no Stick; a table without the vocabularies has none.
+        self.assertEqual(int(self.c.is_critical(t,1,0,roll).sum()),1)
+        bare=self.c.from_metadata({"vocabulary":{"moves":["_none","return"],"abilities":["_none"]}})
+        self.assertEqual(bare.stick.tolist(),[False]);self.assertEqual(bare.farfetchd.tolist(),[False])
+
     @unittest.skipUnless(NODE and SHOWDOWN,"requires pinned Showdown and Node")
     def test_pinned_catalog_chance_and_armor_veto(self):
         p=subprocess.run([NODE,str(Path(__file__).with_name("gpu_critical_oracle.cjs")),
@@ -104,6 +124,34 @@ class CriticalTests(unittest.TestCase):
             self.assertEqual(result[name]["draws"],[[1,den]])
             self.assertEqual(result[name]["crit"],crit)
         self.assertGreater(result["high"]["damage"],result["battle"]["damage"])
+        # Stick: Farfetch'd's Return at critRatio 3 (1/4), Slash at 4 (1/3); another holder and a bare Farfetch'd at 1.
+        for name,den in (("stick",4),("stick_high",3),("stick_other",16),("farfetchd",16)):
+            self.assertEqual(result[name]["draws"],[[1,den]],name)
+
+
+@unittest.skipUnless(SHOWDOWN,"requires the pinned Showdown checkout")
+class StickReachTests(unittest.TestCase):
+    """No Gen 3 randbats state reaches critRatio 4 or 5, which the [0,16) draw cannot hold exactly (ratio 4) or which
+    the planners refuse: a pool change that makes one reachable trips this. Pure Python over the pinned sources."""
+    def test_no_pool_set_reaches_ratio_four(self):
+        import re
+        from gpu_engine import critical as c
+        root=Path(SHOWDOWN)
+        sets=json.loads((root/"data/random-battles/gen3/sets.json").read_text())
+        teams=(root/"data/random-battles/gen3/teams.ts").read_text()
+        # Only getItem's Farfetch'd branch hands out Stick, and no crit-ratio item at all otherwise.
+        self.assertEqual(re.findall(r".*'Stick'.*",teams),["\t\tif (species.id === 'farfetchd') return 'Stick';"])
+        for item in ("Scope Lens","Razor Claw","Lucky Punch","Leek"):self.assertNotIn(item,teams)
+        # Farfetch'd's own moves: no high-crit move and nothing that calls or copies one (Sleep Talk, Metronome, Mimic,
+        # Mirror Move, Assist, Nature Power, Sketch; Encore only repeats a move it has).
+        callers={"sleeptalk","metronome","mimic","mirrormove","assist","naturepower","sketch","transform"}
+        moves={m for s in sets["farfetchd"]["sets"] for m in s["movepool"]}
+        self.assertFalse(moves&set(c.HIGH_CRIT));self.assertFalse(moves&callers)
+        # +2 from Focus Energy (its own, or Baton Passed by any holder) or a copied focusenergy volatile: no pool set has it.
+        everything={m for v in sets.values() for s in v["sets"] for m in s["movepool"]}
+        self.assertFalse(everything&{"focusenergy"})
+        # A Transformed Ditto is species farfetchd but keeps Ditto's own item, never Stick (getItem above).
+        self.assertIn("farfetchd",sets);self.assertEqual(len(sets["farfetchd"]["sets"]),1)
 
 
 if __name__=="__main__":unittest.main()

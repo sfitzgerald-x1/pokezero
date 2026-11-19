@@ -94,6 +94,9 @@ class RuntimeBackend:
             if self.teacher.plan!=plan:raise ValueError('same original D teacher Plan required')
         elif self.teacher is not None:raise ValueError('D teacher cannot label A/B treatment')
         if self.prepared.pool_sha256!=plan.pool_sha256:raise ValueError('original declared constructor pool differs')
+        # V2 self_moves: the plan's declaration is the prepared catalog's (prepare_device_runtime compiles it from the plan).
+        if bool(getattr(getattr(self.prepared.catalog,'masks',None),'self_moves',False))!=bool(getattr(plan,'self_moves',False)):
+            raise ValueError('prepared encoder self_moves differs from the plan declaration')
         if self._plan is not None and plan is not self._plan and plan!=self._plan:
             raise ValueError('one original worker plan required')
         if self._plan is None:
@@ -114,6 +117,11 @@ class RuntimeBackend:
                 expected_checkpoint_sha256=checkpoint,expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
                 expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256,enable_v5=True)
             if config!=plan.model:raise ValueError('loaded original actor configuration differs')
+            # V2 self_moves: the archive's declaration against the plan's (private_self_moves.check_run_actor).
+            from .private_self_moves import check_run_actor
+            # (Planner opponents are Snapshot objects, journal payloads dicts; a binding without an iteration is not initial.)
+            iteration=snapshot.get('iteration') if isinstance(snapshot,dict) else getattr(snapshot,'iteration',None)
+            check_run_actor(metadata,plan_self_moves=bool(getattr(plan,'self_moves',False)),iteration=iteration,context='device backend')
             self.actors[digest]=(params,metadata)
         params,metadata=self.actors[digest]
         if metadata['checkpoint_sha256']!=checkpoint:raise ValueError('cached actor checkpoint provenance differs')
@@ -157,6 +165,8 @@ class RuntimeBackend:
         # Original pure constructor-field helper, including retained explicit
         # genders and its source binding; no lifecycle or captured writer.
         raw=_gender(raw,self.pool,indices,gender_initialization)
+        if np.any((np.asarray(raw.species)>0)&~np.isin(np.asarray(raw.gender),(0,1,2))):
+            raise ValueError('fresh self-play requires retained or prospectively initialized genders')
         truth=rollout.constructor_truth(raw,self.pool,indices,source=self.prepared.source,
             compiled_source=self.prepared.catalog.source,vocabulary=self._plan.model.label_vocabulary)
         if self.measure_runtime:

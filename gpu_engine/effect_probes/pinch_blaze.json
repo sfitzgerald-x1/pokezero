@@ -1,0 +1,203 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "pinch_blaze",
+ "note": "Tier D PINCH (Blaze: gen4 onBasePowerPriority 2, chainModify 1.5 while hp <= maxhp/3, inherited by Gen 3). Charizard (L74, 237 HP) takes two level-79 Seismic Tosses to exactly floor(237/3) = 79 and its flamethrower is boosted; Typhlosion (L79, 253 HP) takes two level-84 ones to 85, one above floor(253/3), and its flamethrower is not.",
+ "teams": [
+  [
+   {
+    "species": "Charizard",
+    "moves": [
+     "flamethrower",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Blaze",
+    "item": "",
+    "level": 74
+   },
+   {
+    "species": "Typhlosion",
+    "moves": [
+     "flamethrower",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Blaze",
+    "item": "",
+    "level": 79
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "drillpeck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Blissey",
+    "moves": [
+     "seismictoss",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Natural Cure",
+    "item": "",
+    "level": 79
+   },
+   {
+    "species": "Chansey",
+    "moves": [
+     "seismictoss",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Natural Cure",
+    "item": "",
+    "level": 84
+   },
+   {
+    "species": "Snorlax",
+    "moves": [
+     "splash",
+     "rest",
+     "protect",
+     "bodyslam"
+    ],
+    "ability": "Thick Fat",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Gengar",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "icepunch"
+    ],
+    "ability": "Levitate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Tyranitar",
+    "moves": [
+     "splash",
+     "protect",
+     "rockslide",
+     "earthquake"
+    ],
+    "ability": "Sand Stream",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "switch 2",
+   "switch 2"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "draws.0.5",
+   "steps": [
+    2,
+    6
+   ],
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}

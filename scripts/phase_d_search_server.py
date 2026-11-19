@@ -36,7 +36,9 @@ def build(args):
     metadata=read_bound(args.metadata,args.expected_metadata_sha256)
     original=load_gen3_randbat_source_cached(args.showdown_root)
     catalog=v4_encoder.compile_encoder(public_belief.compile_source(original),load_showdown_dex_cached(args.showdown_root),
-        vocabulary,checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+        vocabulary,checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
+    from gpu_engine.private_self_moves import refuse_search_serving   # V2 self_moves: fail closed until the search threading lands
+    refuse_search_serving(catalog=catalog,context='phase_d search server')
     source=device_public_worlds.compile_source(original,metadata,expected_source_hash=contract.belief_set_source_hash,
         expected_source_rows_sha256=v5_contract.source_variant_census(original)['source_rows_sha256'])
     return Search(args.archive,expected_archive_sha256=args.expected_archive_sha256,catalog=catalog,source=source,
