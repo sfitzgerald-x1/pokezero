@@ -714,22 +714,22 @@ class DepthNPricer:
         self.digest=digest;self.forward=forward if forward is not None else depth2.default_forward(model)
         self.evaluator_suffix=evaluators.program_suffix(forward)
         self._world_suffix=()  # set per price(): () for D3's own worlds, (('worlds', tag, carry signature),) for pre-built ones
-        self.program_cache=program_cache;self.cache_params=None
+        self.program_cache=program_cache
         self.programs={};self.compiles=();self.param_key=None;self.params=None;self.source_params=None;self.last_timing=None
 
     def bind(self,params):
         if not 0<len(params)<=self.actor_capacity:raise ValueError('declared actor bank exceeds fixed capacity')
         key=tuple(map(id,params))
         if key!=self.param_key:
+            if self.param_key is not None:self.program_cache=None   # the executable namespace pins the original archive
             self.params=tuple(params);self.param_key=key;self.programs={};self.source_params=tuple(params)
-            if self.program_cache is not None and self.cache_params is None:self.cache_params=self.params
 
     def _program(self,key,build,*args):
         """Lower and compile once per shape key, evaluator and world source (the key gains `evaluator_suffix`, then the call's
         world suffix: nothing for D3's own worlds); later calls reuse the executable (args must keep their shapes and dtypes)."""
         key=key+self.evaluator_suffix+self._world_suffix
         if key not in self.programs:
-            if self.program_cache is None or self.params is not self.cache_params:
+            if self.program_cache is None:
                 clock=time.perf_counter();lowered=build().lower(*args);lower=time.perf_counter()-clock
                 clock=time.perf_counter();compiled=lowered.compile();compile_time=time.perf_counter()-clock
                 del lowered
