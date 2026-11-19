@@ -276,7 +276,7 @@ def two_variant_tables(**over):
     from gpu_engine import device_set_posterior as dsp
     c = base_case(**over)
     arrays = variant_arrays([c])
-    for v, (item, ability, moves) in enumerate([('_none', '_none', c['moves']), ('choiceband', '_none', c['moves']),
+    for v, (item, ability, moves) in enumerate([(c['item'], '_none', c['moves']), ('choiceband', '_none', c['moves']),
                                                 ('_none', '_none', ['tackle', 'hiddenpowerice', 'surf', 'toxic']),
                                                 ('_none', 'blaze', c['moves'])]):
         arrays['valid'][1, v] = arrays['participant'][1, v] = True
