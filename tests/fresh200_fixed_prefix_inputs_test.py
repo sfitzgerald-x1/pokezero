@@ -10,6 +10,45 @@ from gpu_engine import fresh200_fixed_prefix as prefix
 
 
 class FrozenPrefixInputsTest(unittest.TestCase):
+    def test_batch_reads_each_chunk_once_and_keeps_distinct_owner_extents(self):
+        games = [dict(original_ordinal=row, stream_id=100+row, battle_id=f'b-{row}',
+                      seed=200+row, team_indices=[row, row+1]) for row in (3, 5)]
+        addresses = [
+            dict(game, row=game['original_ordinal'], frame=frame, step=frame, live=True, requested=[True, True])
+            for game, endpoint in zip(games, (8, 9), strict=True) for frame in range(endpoint+1)
+        ]
+        selected = [dict(addresses[8], root_index=2, owner=1), dict(addresses[-1], root_index=3, owner=0)]
+        chunks = [dict(start_step=start, steps=4, link=f'l{start}', arrays=f'a{start}', replay_inputs=f'i{start}')
+                  for start in (0, 4, 8)]
+        links = {chunk['link']: dict(parents=[previous, chunk['arrays'], chunk['replay_inputs']],
+                    payload=dict(start_step=chunk['start_step'], steps=4))
+                 for chunk, previous in zip(chunks, ('construction', 'l0', 'l4'), strict=True)}
+        opens, reads = [], []
+
+        class ReplayInputs:
+            def __init__(self, root, reference, storage, *, source, kind, start_step, steps):
+                self.reference, self.start_step = reference, start_step
+                opens.append(reference)
+
+            def identity(self):
+                return self.reference
+
+            def replay_inputs(self, relative, row):
+                frame = self.start_step + relative
+                reads.append((row, frame))
+                return dict(streams=100+row, frames=frame, status=0, requested=np.asarray([True, True]),
+                            actions=np.asarray([1, 2]), chance={name: np.asarray(0) for name in prefix.CHANCE_FIELDS})
+
+        with patch.object(prefix, 'SealedInputs', ReplayInputs), patch.object(
+                prefix, '_manifest', side_effect=lambda root, reference, source: links[reference]):
+            groups = prefix._read_step_groups(None, None, None, dict(addresses=addresses, chunks=chunks),
+                list(zip(selected, games, strict=True)), 'construction', links['l0'], bind_consumed=True)
+        self.assertEqual(opens, ['i0', 'i4', 'i8'])
+        self.assertEqual(len(reads), 17)
+        self.assertEqual(set(reads), {(row, frame) for row, endpoint in ((3, 8), (5, 9)) for frame in range(endpoint)})
+        self.assertEqual([(len(steps), [item['consumed_steps'] for item in inputs]) for steps, inputs in groups],
+                         [(8, [4, 4]), (9, [4, 4, 1])])
+
     def test_bind_original_ordered_roster_and_owner_counts(self):
         selected = [dict(root_index=index, frame=8, original_ordinal=index, owner=int(index >= 107))
                     for index in range(200)]

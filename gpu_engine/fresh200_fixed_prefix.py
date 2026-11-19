@@ -140,9 +140,8 @@ def _selected_game(capture, construction, rows, root_index):
     return address, game
 
 
-def _read_steps(root, source, storage, capture, game, row, construction_reference, initial_link, selected,
-                *, bind_consumed=False):
-    stream = game['stream_id']
+def _prefix_addresses(capture, game, selected):
+    row = selected['row']
     endpoint = selected['step']
     addresses = {}
     for address in capture['addresses']:
@@ -153,12 +152,34 @@ def _read_steps(root, source, storage, capture, game, row, construction_referenc
     _need(set(addresses) == set(range(endpoint + 1)), 'frozen prefix address is missing')
     _need(all(selected[key] == value for key, value in addresses[endpoint].items()),
           'endpoint PRE address differs from the selected root')
-    steps = []
-    source_inputs = []
+    return addresses
+
+
+def _frozen_step(record, address, index, stream):
+    requested = tuple(record['requested'].tolist())
+    actions = tuple(record['actions'].tolist())
+    frame = int(record['frames'])
+    _need(int(record['streams']) == stream and frame == index == address['frame']
+          and int(record['status']) == 0 and list(requested) == address['requested'],
+          'action/chance row has a different stream, frame, status or request mask')
+    _need(len(requested) == len(actions) == 2 and all(type(flag) is bool for flag in requested) and any(requested)
+          and all(type(action) is int and (not flag or 0 <= action < 9)
+                  for flag, action in zip(requested, actions)), 'frozen action row is outside the nine physical lanes')
+    chance = record['chance']
+    _need(set(chance) == set(CHANCE_FIELDS), 'frozen chance row has missing fields')
+    chance_wire = _wire({name: chance[name].tolist() for name in CHANCE_FIELDS})
+    return FrozenStep(index, frame, requested, actions, chance_wire)
+
+
+def _read_step_groups(root, source, storage, capture, selections, construction_reference, initial_link, *, bind_consumed):
+    addresses = [_prefix_addresses(capture, game, selected) for selected, game in selections]
+    outputs = [([], []) for _ in selections]
+    endpoint = max(selected['step'] for selected, _ in selections)
     previous_link = construction_reference
+    cursor = 0
     for chunk in capture['chunks']:
         start, count = chunk['start_step'], chunk['steps']
-        _need(type(start) is int and start == len(steps) and type(count) is int and 1 <= count <= 4
+        _need(type(start) is int and start == cursor and type(count) is int and 1 <= count <= 4
               and start + count <= CAPTURE_HORIZON, 'action/chance chunk is outside the frozen capture')
         link = initial_link if start == 0 else _manifest(root, chunk['link'], source)
         _need(link['parents'] == [previous_link, chunk['arrays'], chunk['replay_inputs']]
@@ -166,33 +187,30 @@ def _read_steps(root, source, storage, capture, game, row, construction_referenc
               'replay input link differs from the frozen capture')
         reader = SealedInputs(root, chunk['replay_inputs'], storage, source=source, kind='replay',
                               start_step=start, steps=count)
-        consumed = min(count, endpoint - start)
         identity = reader.identity()
-        source_inputs.append(dict(identity=identity, consumed_start=start, consumed_steps=consumed)
-                             if bind_consumed else identity)
-        for relative in range(consumed):
-            record = reader.replay_inputs(relative, row)
-            index = start + relative
-            address = addresses[index]
-            requested = tuple(record['requested'].tolist())
-            actions = tuple(record['actions'].tolist())
-            frame = int(record['frames'])
-            _need(int(record['streams']) == stream and frame == index == address['frame']
-                  and int(record['status']) == 0 and list(requested) == address['requested'],
-                  'action/chance row has a different stream, frame, status or request mask')
-            _need(len(requested) == len(actions) == 2
-                  and all(type(flag) is bool for flag in requested) and any(requested)
-                  and all(type(action) is int and (not flag or 0 <= action < 9)
-                          for flag, action in zip(requested, actions)),
-                  'frozen action row is outside the nine physical lanes')
-            chance = record['chance']
-            _need(set(chance) == set(CHANCE_FIELDS), 'frozen chance row has missing fields')
-            chance_wire = _wire({name: chance[name].tolist() for name in CHANCE_FIELDS})
-            steps.append(FrozenStep(index, frame, requested, actions, chance_wire))
+        for (selected, game), steps_by_frame, (steps, source_inputs) in zip(selections, addresses, outputs, strict=True):
+            consumed = min(count, selected['step'] - start)
+            if consumed <= 0:
+                continue
+            source_inputs.append(dict(identity=identity, consumed_start=start, consumed_steps=consumed)
+                                 if bind_consumed else identity)
+            for relative in range(consumed):
+                index = start + relative
+                record = reader.replay_inputs(relative, selected['row'])
+                steps.append(_frozen_step(record, steps_by_frame[index], index, game['stream_id']))
         previous_link = chunk['link']
-        if len(steps) == endpoint:
-            return tuple(steps), source_inputs
+        cursor += count
+        if cursor >= endpoint:
+            return [(tuple(steps), sources) for steps, sources in outputs]
     raise ValueError('frozen action/chance prefix is incomplete')
+
+
+def _read_steps(root, source, storage, capture, game, row, construction_reference, initial_link, selected,
+                *, bind_consumed=False):
+    _need(row == selected['row'], 'frozen prefix input row differs')
+    result, = _read_step_groups(root, source, storage, capture, [(selected, game)], construction_reference,
+                                initial_link, bind_consumed=bind_consumed)
+    return result
 
 
 def _pack(teams, *, node, native_root):
@@ -217,6 +235,24 @@ def _pack(teams, *, node, native_root):
 def bind_frozen_prefix(*, capsule, reference, source, storage, pool_path, node, native_root, root_index=0,
                        device_reference=None, device_source=None):
     """Bind a selected root's exact input prefix without opening expected state."""
+    result, = _bind_frozen_prefixes(capsule, reference, source, storage, pool_path, node, native_root,
+                                    (root_index,), device_reference, device_source)
+    return result
+
+
+def bind_frozen_prefixes(*, capsule, reference, source, storage, pool_path, node, native_root, root_indices,
+                         device_reference, device_source):
+    """Bind a consecutive frozen roster slice using one read per input chunk."""
+    _need(type(root_indices) is tuple and 1 <= len(root_indices) <= 8
+          and all(type(index) is int and 1 <= index < 200 for index in root_indices)
+          and root_indices == tuple(range(root_indices[0], root_indices[0] + len(root_indices))),
+          'bounded consecutive nonlegacy frozen roots required')
+    return _bind_frozen_prefixes(capsule, reference, source, storage, pool_path, node, native_root,
+                                root_indices, device_reference, device_source)
+
+
+def _bind_frozen_prefixes(capsule, reference, source, storage, pool_path, node, native_root,
+                          root_indices, device_reference, device_source):
     _need(type(storage) is SealedStorage and storage.rows == 256
           and reference.get('sha256') == CAPTURE_SHA and source['engine_commit'] == INTEGRATION,
           'the original frozen fresh200 capture and source layout are required')
@@ -224,9 +260,10 @@ def bind_frozen_prefix(*, capsule, reference, source, storage, pool_path, node, 
     _need(capture['schema'] == 'pokezero.fresh200.capture.v1' and capture['status'] == 'CAPTURED_ONLY'
           and capture['actual_horizon'] == CAPTURE_HORIZON and capture['selection_error'] is None,
           'complete sealed capture required')
-    _need(type(root_index) is int and 0 <= root_index < 200, 'frozen root index is out of bounds')
+    _need(all(type(index) is int and 0 <= index < 200 for index in root_indices), 'frozen root index is out of bounds')
+    legacy = root_indices == (0,)
     roster_sha256 = None
-    if root_index == 0:
+    if legacy:
         _need(device_reference is None and device_source is None, 'unexpected device roster for the v1 binding')
     else:
         _need(type(device_reference) is dict and device_reference.get('sha256') == DEVICE_REPLAY_SHA
@@ -238,25 +275,35 @@ def bind_frozen_prefix(*, capsule, reference, source, storage, pool_path, node, 
     _need(construction_ref['path'] == 'construction.json', 'constructor manifest address differs')
     construction = _manifest(capsule, construction_ref, source)
     _need(capture['constructor_input'] in construction['parents'], 'constructor input is missing from sealed construction')
-    selected, game = _selected_game(capture, construction['payload'], storage.rows, root_index)
-    _need(root_index != 0 or selected['step'] == PREFIX_STEPS, 'v1 frozen root does not end at PRE8')
-    row = selected['row']
-    steps, replay_inputs = _read_steps(capsule, source, storage, capture, game, row, construction_ref, initial_link,
-                                       selected, bind_consumed=root_index != 0)
-
+    selections = [_selected_game(capture, construction['payload'], storage.rows, index) for index in root_indices]
+    _need(not legacy or selections[0][0]['step'] == PREFIX_STEPS, 'v1 frozen root does not end at PRE8')
+    groups = _read_step_groups(capsule, source, storage, capture, selections, construction_ref, initial_link,
+                               bind_consumed=not legacy)
     reader = SealedInputs(capsule, capture['constructor_input'], storage, source=source, kind='constructor')
-    constructor = reader.constructor(row)
+    _need(Path(pool_path).resolve() == Path(storage.binding['pool_path']).resolve(), 'team pool path differs from admitted storage')
+    with np.load(pool_path, allow_pickle=False) as archive:
+        pool = {key: archive[key] for key in (*FROZEN_FIELDS, 'nature', 'ivs', 'evs')}
+        metadata = document(archive['metadata_utf8'].tobytes().decode('utf8'))
+    results = []
+    for (selected, game), (steps, replay_inputs) in zip(selections, groups, strict=True):
+        constructor = reader.constructor(selected['row'])
+        results.append(_seal_input_binding(
+            reference, source, selected, game, construction_ref, reader.identity(), steps, replay_inputs,
+            constructor, pool, metadata, node=node, native_root=native_root,
+            device_reference=device_reference, device_source=device_source, roster_sha256=roster_sha256))
+    return tuple(results)
+
+
+def _seal_input_binding(reference, source, selected, game, construction_ref, constructor_identity,
+                        steps, replay_inputs, constructor, pool, metadata, *, node, native_root,
+                        device_reference, device_source, roster_sha256):
+    row, root_index = selected['row'], selected['root_index']
     _need(int(constructor['streams']) == game['stream_id'], 'constructor stream differs from the selected game')
     raw = SimpleNamespace(**{key: np.expand_dims(value, 0) for key, value in constructor['raw'].items()})
     indices = game['team_indices']
     _need(type(indices) is list and len(indices) == 2 and all(type(index) is int and index >= 0 for index in indices),
           'frozen pool team addresses required')
-    _need(Path(pool_path).resolve() == Path(storage.binding['pool_path']).resolve(), 'team pool path differs from admitted storage')
-    with np.load(pool_path, allow_pickle=False) as archive:
-        pool = {key: archive[key] for key in (*FROZEN_FIELDS, 'nature', 'ivs', 'evs')}
-        metadata = document(archive['metadata_utf8'].tobytes().decode('utf8'))
-        teams = literal_teams(pool, metadata, raw, row=0, team_indices=indices)
-
+    teams = literal_teams(pool, metadata, raw, row=0, team_indices=indices)
     team_wire, packed, packing = _pack(teams, node=node, native_root=native_root)
     initial = _wire(initial_packet(raw, np.expand_dims(constructor['initial_tie'], 0), row=0))
     words = constructor['raw']['keys']
@@ -269,7 +316,7 @@ def bind_frozen_prefix(*, capsule, reference, source, storage, pool_path, node, 
         schema='pokezero.fresh200.fixed_prefix_inputs.v1' if root_index == 0 else 'pokezero.fresh200.fixed_prefix_inputs.v2',
         qualification=False,
         capture_reference=reference, source=source, selected_root=selected,
-        game=game, construction=construction_ref, constructor_input=reader.identity(),
+        game=game, construction=construction_ref, constructor_input=constructor_identity,
         replay_inputs=replay_inputs, packing=packing, initial_sha256=_sha(initial), start_sha256=_sha(start),
         steps=[dict(step=x.step, frame=x.frame, requested=x.requested, actions=x.actions,
                     chance_sha256=_sha(x.chance_wire)) for x in steps],
