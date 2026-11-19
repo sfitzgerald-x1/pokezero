@@ -172,6 +172,16 @@ class TransformConstructorTests(unittest.TestCase):
                     self.compare_protocol_device(root,packet,lines,owner)
 
     def compare_protocol_device(self,root,packet,lines,owner):
+        from gpu_engine import phase_d_protocol_world as protocol
+        public, packed, inputs, device, seed = self.world_inputs(root, packet, lines, owner)
+        other=protocol.materialize_protocol(public,packed,inputs=inputs,seed=seed)
+        self.assertIsNotNone(other.state,other.refusals)
+        for name in device.state._fields:
+            np.testing.assert_array_equal(getattr(device.state,name),getattr(other.state,name),err_msg=name)
+        for (path,a),(other_path,b) in zip(jax.tree_util.tree_flatten_with_path(device.public)[0],jax.tree_util.tree_flatten_with_path(other.public)[0],strict=True):
+            self.assertEqual(path,other_path);np.testing.assert_array_equal(a,b,err_msg=str(path))
+
+    def world_inputs(self, root, packet, lines, owner):
         from pokezero.v5_teacher_public_root import capture_root
         from pokezero.v5_gumbel import Recipe
         from pokezero.env import BattleStartOverride
@@ -192,12 +202,77 @@ class TransformConstructorTests(unittest.TestCase):
             own.append(_fixture_from_variant_payload(variant.to_summary(),fallback_species=species,set_source=self.source.original,gender='N'))
         packed=BattleStartOverride({f'p{owner+1}':pack_team(own),f'p{2-owner}':pack_team(start.opponent_fixtures)})
         inputs=protocol.ProtocolInputs(root,lines,self.catalog,self.metadata,self.source)
-        other=protocol.materialize_protocol(public,packed,inputs=inputs,seed=states.kernel_seed(root,0,recipe))
-        self.assertIsNotNone(other.state,other.refusals)
-        for name in device.state._fields:
-            np.testing.assert_array_equal(getattr(device.state,name),getattr(other.state,name),err_msg=name)
-        for (path,a),(other_path,b) in zip(jax.tree_util.tree_flatten_with_path(device.public)[0],jax.tree_util.tree_flatten_with_path(other.public)[0],strict=True):
-            self.assertEqual(path,other_path);np.testing.assert_array_equal(a,b,err_msg=str(path))
+        return public, packed, inputs, device, states.kernel_seed(root,0,recipe)
+
+    def test_base_copy_keeps_its_type_when_rain_starts_after_donor_departure(self):
+        from gpu_engine import phase_d_protocol_world as protocol, public_wire
+        from gpu_engine import v5_owning_history as capture, v5_public_world as world
+
+        for owner in (0, 1):
+            own, foe = f'p{owner+1}', f'p{2-owner}'
+            first = request(self.source, 'castform', owner)
+            packet = request(self.source, 'snorlax', owner)
+            hp = first['side']['pokemon'][0]['condition']
+            next_hp = packet['side']['pokemon'][0]['condition']
+            lines = (
+                '|start',
+                f'|switch|{own}a: castform|castform, L80|{hp}',
+                f'|switch|{foe}a: ditto|ditto, L80|100/100',
+                '|turn|1',
+                '|request|' + json.dumps(first),
+                f'|move|{foe}a: ditto|Transform|{own}a: castform',
+                f'|-transform|{foe}a: ditto|{own}a: castform',
+                '|upkeep', '|turn|2',
+                f'|switch|{own}a: snorlax|snorlax, L80|{next_hp}',
+                '|-weather|RainDance',
+                '|upkeep', '|turn|3',
+                '|request|' + json.dumps(packet),
+            )
+            adapter = self.adapter(lines, owner)
+            root = live.from_b2(adapter, packet, self.source, self.metadata,
+                                address=DecisionAddress(1, 1, owner), lines=lines)
+            public, packed, inputs, device, seed = self.world_inputs(root, packet, lines, owner)
+            self.assertFalse(transform_facts.history(lines)['copies'][foe]['overridden'])
+            with self.subTest(owner=owner, route='protocol'):
+                result = protocol.materialize_protocol(public, packed, inputs=inputs, seed=seed)
+                self.assertIsNotNone(result.state, result.refusals)
+                self.assert_copy_keeps_base_type(result.state, device.state, 1-owner)
+
+            with self.subTest(owner=owner, route='retained'):
+                prepared = object()
+                binding = (0,) * 8
+                vocabulary = self.metadata['vocabulary']
+                party = first['side']['pokemon']
+                species = tuple(vocabulary['species'].index(row['details'].split(',')[0]) for row in party)
+                moves = tuple(tuple(vocabulary['moves'].index(move) for move in row['moves']) for row in party)
+                max_pp = tuple(tuple(self.metadata['moves'][move]['pp'] * 8 // 5 for move in row) for row in moves)
+                constructor = tuple(dict(binding=binding, species=species, moves=moves, max_pp=max_pp).items())
+                state = public_wire.WireState()
+                frames = []
+                for index, (prefix, request_packet) in enumerate(((lines[:4], first), (lines[5:-1], packet))):
+                    state, packets = public_wire.project_lines(state, prefix, **v4_encoder.wire_kwargs(self.catalog))
+                    words = tuple(tuple(map(int, event.words())) for batch in packets for event in batch.events)
+                    frames.append(capture.Frame(index, (words,), ((True,) * len(words),), (False,),
+                                                json.dumps(request_packet), ()))
+                history = capture.History((0, id(prepared), 0), 0, owner, 1, self.catalog, constructor, tuple(frames))
+                static = world.OwnStatic(1, owner, binding, (255,) * 6)
+                runtime = {'catalog': self.catalog, 'request': {'metadata': json.dumps(self.metadata),
+                    'rules': NS(device=NS(engine_binding=binding))}}
+                with (patch.object(world.driver, '_checked', return_value=runtime),
+                      patch.object(capture, 'decode', return_value=NS(complete=True, lines=inputs.lines)),
+                      patch.object(world, 'public_carry', return_value=adapter.state)):
+                    result = world.materialize(public, packed, prepared=prepared, history=history,
+                                               own_static=static, seed=seed)
+                self.assertIsNotNone(result.branch, result.refusals)
+                self.assert_copy_keeps_base_type(result.branch.state, device.state, 1-owner)
+
+    def assert_copy_keeps_base_type(self, state, device, side):
+        self.assertTrue(bool(state.transformed[0, side]))
+        self.assertEqual(int(state.weather[0]), 1)  # Rain in the engine state.
+        active = int(state.active[0, side])
+        expected = self.metadata['vocabulary']['types'].index('Normal')
+        self.assertEqual(device.types[0, side, int(device.active[0, side])].tolist(), [expected, 0])
+        self.assertEqual(state.types[0, side, active].tolist(), [expected, 0])
 
     def test_weather_forme_copied_before_donor_departure_refuses_in_both_routes(self):
         import hashlib
