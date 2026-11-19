@@ -814,15 +814,23 @@ def set_posterior_enabled(c):
         and c.trackers.belief_mask is not None)
 
 
+def posterior_move_hard(c,state,side,move_id,use):
+    """Pursuit's tagged move declaration, evaluated without committing its public writes."""
+    evidence=Context(c.trackers,c.belief_tables,c.port_tables)
+    move(evidence,state,side,move_id,use,pp_use=True,from_tag=True)
+    return evidence.trackers.belief_mask
+
+
 def set_posterior_strike(c,state,side,move,caller_move,critical,hits_sub,endured,dealt,hp_before,hp_after,num,den,use,
-                         *,pursuit=False,hit_by=None):
+                         *,pursuit=False,hit_by=None,hard_mask=None):
     """Narrowing A at one damage reveal: side's move hit the other side's active (device_set_posterior.in_tree). An
     admitted strike's fitting variants narrow the attacker's standing pin (narrow_pin) and refresh it, as B2 installs
     set_posterior's support. Reads only operands the step already computed; no draw."""
     if not set_posterior_enabled(c):return c
     from . import device_set_posterior
+    evidence={} if hard_mask is None else dict(hard_mask=hard_mask)
     trackers,_=device_set_posterior.in_tree(c.trackers,c.belief_tables,state,side,move,caller_move,critical,hits_sub,
-        endured,dealt,hp_before,hp_after,num,den,use,pursuit=pursuit,hit_by=hit_by)
+        endured,dealt,hp_before,hp_after,num,den,use,pursuit=pursuit,hit_by=hit_by,**evidence)
     return c._replace(trackers=trackers)
 
 

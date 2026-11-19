@@ -495,13 +495,14 @@ def enable(belief_tables, posterior):
 
 
 def in_tree(trackers, belief_tables, state, side, move, caller_move, critical, hits_sub, endured, dealt, hp_before, hp_after,
-            num, den, use, *, pursuit=False, hit_by=None):
+            num, den, use, *, pursuit=False, hit_by=None, hard_mask=None):
     """The producer at one damage reveal of the engine step (the hook beside device_public.damage, and the Pursuit
     intercept): side's active hit the other side's active with `move` for `dealt` HP (exact; 0 on a Substitute hit).
 
     Every operand is one the engine already computed (no draw): the resolved crit, the Substitute and Endure gates, the
     actual HP, and num/den of the true move type (the printed effectiveness line). The attacker's public facts come from
-    the carry (its public encounter slot, its species, its hard mask and its shown HP percent); the defender is the
+    the carry (its public encounter slot, its species, its hard mask and its shown HP percent). Pursuit supplies the
+    hard mask after its tagged move declaration, before later public reveals. The defender is the
     observer's own active, read exactly from state. Refusals that only engine state can tell are the caller bits:
     called (a Sleep Talk callee: move != caller_move), hit-substitute, endure-or-focusband, transform (either participant), type-change (sticky public type-event history
     on either side, including restoration to native types), ability-overridden (ability != base_ability: Trace), item-changed (B2's item_mutated
@@ -519,7 +520,7 @@ def in_tree(trackers, belief_tables, state, side, move, caller_move, critical, h
     target_slot = j.clip(get(trackers.physical_to_public, foe, target), 0, 5)
     species = li.take(trackers.species, r, side, slot)
     source_species = belief_tables.source_species[j.clip(species, 0, belief_tables.source_species.shape[0] - 1)]
-    hard = li.take(trackers.belief_mask, r, side, slot)
+    hard = li.take(trackers.belief_mask if hard_mask is None else hard_mask, r, side, slot)
     mutated = trackers.mon_features.get('item_mutated') if trackers.mon_features is not None else None
     changed = j.zeros(b, bool) if mutated is None else (li.take(mutated, r, side, slot) != 0) | (li.take(mutated, r, foe, target_slot) != 0)
     # Host provenance is sticky until switch/faint. Comparing current and base

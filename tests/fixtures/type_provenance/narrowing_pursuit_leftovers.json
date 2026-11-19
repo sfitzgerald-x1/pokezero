@@ -1,0 +1,173 @@
+{
+  "schema": "pokezero.effect_probe.scenario.v1",
+  "move": "narrowing_pursuit_leftovers",
+  "note": "Pursuit hits a switching Poison Point holder. The two attacker sets fit the hit; a later Lum Berry reveal must not turn the damage-time support into a singleton.",
+  "teams": [
+    [
+      {
+        "species": "Tyranitar",
+        "moves": [
+          "pursuit",
+          "splash",
+          "protect",
+          "rest"
+        ],
+        "ability": "Sand Stream",
+        "item": "Leftovers"
+      },
+      {
+        "species": "Starmie",
+        "moves": [
+          "splash",
+          "surf",
+          "recover",
+          "protect"
+        ],
+        "ability": "Natural Cure",
+        "item": "Leftovers"
+      },
+      {
+        "species": "Skarmory",
+        "moves": [
+          "splash",
+          "protect",
+          "spikes",
+          "drillpeck"
+        ],
+        "ability": "Keen Eye",
+        "item": "Leftovers"
+      },
+      {
+        "species": "Metagross",
+        "moves": [
+          "splash",
+          "protect",
+          "meteormash",
+          "earthquake"
+        ],
+        "ability": "Clear Body",
+        "item": "Leftovers"
+      },
+      {
+        "species": "Celebi",
+        "moves": [
+          "splash",
+          "protect",
+          "psychic",
+          "recover"
+        ],
+        "ability": "Natural Cure",
+        "item": "Leftovers"
+      },
+      {
+        "species": "Suicune",
+        "moves": [
+          "splash",
+          "protect",
+          "surf",
+          "icebeam"
+        ],
+        "ability": "Pressure",
+        "item": "Leftovers"
+      }
+    ],
+    [
+      {
+        "species": "Nidoking",
+        "moves": [
+          "splash",
+          "protect",
+          "rest",
+          "earthquake"
+        ],
+        "ability": "Poison Point",
+        "item": ""
+      },
+      {
+        "species": "Blissey",
+        "moves": [
+          "splash",
+          "softboiled",
+          "protect",
+          "seismictoss"
+        ],
+        "ability": "Natural Cure",
+        "item": ""
+      },
+      {
+        "species": "Snorlax",
+        "moves": [
+          "splash",
+          "rest",
+          "protect",
+          "bodyslam"
+        ],
+        "ability": "Thick Fat",
+        "item": "Leftovers"
+      },
+      {
+        "species": "Gengar",
+        "moves": [
+          "splash",
+          "protect",
+          "thunderbolt",
+          "icepunch"
+        ],
+        "ability": "Levitate",
+        "item": "Leftovers"
+      },
+      {
+        "species": "Tyranitar",
+        "moves": [
+          "splash",
+          "protect",
+          "rockslide",
+          "earthquake"
+        ],
+        "ability": "Sand Stream",
+        "item": "Leftovers"
+      },
+      {
+        "species": "Jolteon",
+        "moves": [
+          "splash",
+          "protect",
+          "thunderbolt",
+          "batonpass"
+        ],
+        "ability": "Volt Absorb",
+        "item": "Leftovers"
+      }
+    ]
+  ],
+  "script": [
+    [
+      "move 1",
+      "switch 2"
+    ]
+  ],
+  "axes": [
+    {
+      "name": "roll",
+      "field": "phazing.0",
+      "steps": [
+        0
+      ],
+      "values": [
+        0
+      ]
+    }
+  ],
+  "expect": {
+    "exact": true
+  },
+  "require_fields": [
+    "perish_counter",
+    "yawn_counter",
+    "partial_trap_counter",
+    "partial_trap_source",
+    "item_knocked",
+    "destiny_bond",
+    "effect"
+  ]
+}
