@@ -660,7 +660,7 @@ def _ply_widths(k,depth,name,limit):
 
 class DepthNPricer:
     def __init__(self,executor,model,*,capacity,depth,k_own,k_opp,k1_own=9,k1_opp=9,block_lanes=2187,blocks_per_call=16,selection='prior',
-            fixed_capacity=False,digest=False,forward=None,actor_capacity=33,leaf_layout='blocks',wide_nodes=None):
+            fixed_capacity=False,digest=False,forward=None,actor_capacity=33,leaf_layout='blocks',wide_nodes=None,program_cache=None):
         """`k_own`/`k_opp`: one integer per ply 2..N (an int repeats). In `prior` mode they are the slot widths (top-k by prior).
         In `searched` mode the ply-2 entries are the search widths k of `searched_maps(frame, k_own, k_opp)`, and the pricer
         derives the ply-2 SLOT widths from them with `searched_widths` (k_own+1 for the learner, up to k_own+2 for the
@@ -714,6 +714,7 @@ class DepthNPricer:
         self.digest=digest;self.forward=forward if forward is not None else depth2.default_forward(model)
         self.evaluator_suffix=evaluators.program_suffix(forward)
         self._world_suffix=()  # set per price(): () for D3's own worlds, (('worlds', tag, carry signature),) for pre-built ones
+        self.program_cache=program_cache
         self.programs={};self.compiles=();self.param_key=None;self.params=None;self.source_params=None;self.last_timing=None
 
     def bind(self,params):
@@ -727,8 +728,16 @@ class DepthNPricer:
         world suffix: nothing for D3's own worlds); later calls reuse the executable (args must keep their shapes and dtypes)."""
         key=key+self.evaluator_suffix+self._world_suffix
         if key not in self.programs:
-            fn=build();clock=time.perf_counter();lowered=fn.lower(*args);lower=time.perf_counter()-clock
-            clock=time.perf_counter();self.programs[key]=lowered.compile();self.compiles+=((key,lower,time.perf_counter()-clock),)
+            if self.program_cache is None:
+                clock=time.perf_counter();lowered=build().lower(*args);lower=time.perf_counter()-clock
+                clock=time.perf_counter();compiled=lowered.compile();compile_time=time.perf_counter()-clock
+                del lowered
+            else:
+                # P1's capacity and the static input shapes identify its bucket. Calls with identical
+                # executable geometry (such as wide leaf calls) share across buckets.
+                identity=('pricer',key,self.k1_own,self.k1_opp,self.digest)
+                compiled,lower,compile_time=self.program_cache.acquire(identity,build,args)
+            self.programs[key]=compiled;self.compiles+=((key,lower,compile_time),)
         return self.programs[key]
 
     def _block_program(self,p,b):

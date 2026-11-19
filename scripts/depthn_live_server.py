@@ -46,10 +46,12 @@ records it in every response's pricer identity. The champion's own precision fla
 import argparse
 import asyncio
 from contextlib import suppress
+from dataclasses import astuple
 import json
 import os
 from pathlib import Path
 import queue
+import re
 from types import SimpleNamespace
 import signal
 import socket
@@ -317,6 +319,9 @@ def run(search,*,host,port,warmup_requests,max_requests,batch_wait_seconds=.005,
             if(pipeline_options or{}).get('reply_forward')=='device'and getattr(search,'reply',None)is not None:
                 search.reply_batches=tuple(search.buckets)   # warmup compiles each bucket's batched reply forward, both seats
         warm=search.warmup(warmup_requests,**({'warm_in':warm_in}if warm_in else{}),**({'warm_in_saved':True}if warm_saved else{}));buckets=warm.get('buckets',{})
+        if (cache:=getattr(search,'program_cache',None)) is not None:
+            from gpu_engine.depthn_aot import heap_stats
+            warm=dict(warm,aot=dict(cache.stats(),heap=heap_stats()))
         if pool is not None:
             from gpu_engine.depthn_batching import Pipeline
             server.pipeline=Pipeline(search,pool,max_batch=max_requests,**(pipeline_options or{})).start()
@@ -419,6 +424,7 @@ def parser():
     p.add_argument('--server-id',help='this process\'s name in READY and every response (default HOSTNAME:PORT)')
     p.add_argument('--tree-commit',help='the code commit served (default: this checkout\'s HEAD, +dirty when tracked files differ)')
     p.add_argument('--compilation-cache',help='absolute directory for JAX\'s persistent compilation cache')
+    p.add_argument('--aot-cache',help='trusted directory for serialized DepthN executables (opt-in, matching misses use normal compilation)')
     p.add_argument('--reply-archive',help='br_fp: a reply model (a champion_evaluator .npz export, e.g. pi_FP-red2) whose logits on each '
         'world\'s peer view replace root_peer_logits before averaging; default off (the champion\'s own averaging)')
     p.add_argument('--reply-archive-sha256',help='sha256 of --reply-archive\'s bytes (required with it)')
@@ -522,9 +528,22 @@ def tree_commit():
     return head+('+dirty'if dirty else'')
 
 
+def aot_source(args):
+    """Use the checkout's actual commit, or the identity of an extracted source archive."""
+    root=Path(__file__).resolve().parents[1]
+    if (root/'.git').exists():
+        source=tree_commit()
+    else:
+        source=os.environ.get('V2_SOURCE_COMMIT') or args.tree_commit
+    if not source or not re.fullmatch(r'[a-f0-9]{40}',source) or args.tree_commit not in (None,source):
+        raise ValueError('--aot-cache requires a clean checkout or an extracted source archive with its exact commit')
+    return source
+
+
 def build(args):
     """The DepthNLiveSearch the arguments name, on the one visible GPU (module docstring)."""
     import jax
+    aot_head=aot_source(args) if getattr(args,'aot_cache',None) else None
     jax.config.update('jax_enable_x64',False)   # pinned off, as phase_d_ladder_server
     if matmul_precision()!=args.matmul_precision:   # the hard pin, again once JAX is imported, before anything loads or warms up
         raise ValueError(f'JAX default matmul precision {matmul_precision()!r} differs from the pinned {args.matmul_precision!r}')
@@ -541,11 +560,21 @@ def build(args):
     from gpu_engine.private_self_moves import refuse_search_serving   # V2 self_moves: fail closed until the search threading lands
     refuse_search_serving(catalog=catalog,meta=getattr(evaluator,'meta',None),context='depthn live server')
     executor=cw.live_executor(metadata,catalog)   # the constructor's own engine metadata and catalog (the depth-N gate's CONSTRUCTOR_ROOTS uses the same)
+    binding=cw.binding(source,metadata,catalog)
+    cache=None
+    if aot_head is not None:
+        from gpu_engine.depthn_aot import ExecutableCache
+        static=(astuple(binding),evaluators.identity(evaluator),W,live.DEPTH,live.WIDTH,
+            args.reply_archive_sha256,args.reply_checkpoint_sha256,args.reply_views,
+            args.leaf_layout,args.wide_nodes,args.block_lanes,args.blocks_per_call,
+            args.peer_view_b,args.ability_guard,args.redact_private_reveals,args.eager_peer_fold)
+        cache=ExecutableCache(args.aot_cache,source=aot_head,static=static,device=jax.devices()[0])
+    cache_option={} if cache is None else dict(program_cache=cache)
     params=(evaluator.params,)
     from gpu_engine import depthn_guard_inputs as guard_inputs
     pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call,
         labels=guard_inputs.ability_labels if getattr(args,'ability_guard',False)else guard_inputs.child_labels,
-        leaf_layout=getattr(args,'leaf_layout','blocks'),wide_nodes=getattr(args,'wide_nodes',None))
+        leaf_layout=getattr(args,'leaf_layout','blocks'),wide_nodes=getattr(args,'wide_nodes',None),**cache_option)
     reply=None
     if getattr(args,'reply_archive',None):   # br_fp: the reply model at the champion's precision, on the same executor's views
         from gpu_engine.depthn_reply_prior import ReplyPrior
@@ -554,13 +583,16 @@ def build(args):
         check_reply_view(getattr(model,'meta',None),args)
         refuse_search_serving(meta=getattr(model,'meta',None),context='depthn live server reply model')
         reply=ReplyPrior(executor,model,mode=args.reply_views,identity=dict(archive_sha256=args.reply_archive_sha256,
-            checkpoint_sha256=args.reply_checkpoint_sha256,view=reply_view(getattr(model,'meta',None))))
-    return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),
-        recipe=v5_gumbel.Recipe(args.recipe_seed),tree_commit=args.tree_commit or tree_commit(),min_price_seconds=args.min_price_seconds,
+            checkpoint_sha256=args.reply_checkpoint_sha256,view=reply_view(getattr(model,'meta',None))),**cache_option)
+    search=live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=binding,
+        recipe=v5_gumbel.Recipe(args.recipe_seed),tree_commit=args.tree_commit or aot_head or tree_commit(),min_price_seconds=args.min_price_seconds,
         max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes,
         redact_private_reveals=bool(getattr(args,'redact_private_reveals',False)),reply=reply,
         root_operator=getattr(args,'root_operator',live.ROOT_OPERATOR),
         **({'peer_view_b':True}if getattr(args,'peer_view_b',False)else{}),**({'ability_guard':True}if getattr(args,'ability_guard',False)else{}))
+    if cache is not None:
+        search.program_cache=cache
+    return search
 
 
 def build_constructor(args):
