@@ -122,13 +122,23 @@ class EntryTests(unittest.TestCase):
             self.assertTrue(bool(self.j.all(getattr(r,field)[:,0,0] == 0)))
         self.assertTrue(bool(self.j.all(r.boosts[:,0,0] == 0)))
 
-    def test_non_cure_switch_retains_status_and_resets_only_toxic_escalation(self):
+    def test_non_cure_departure_retains_status_and_counter(self):
         from gpu_engine import mechanics as m
-        for status,counter in ((m.TOX,0),(m.SLP,4),(m.PAR,4)):
+        for status in (m.TOX,m.SLP,m.PAR):
             s = self.live()._replace(status=self.live().status.at[0,0,0].set(status),
                 status_counter=self.live().status_counter.at[0,0,0].set(4))
             r = self.play(s,[[4,0]])
-            self.assertEqual((int(r.status[0,0,0]),int(r.status_counter[0,0,0])),(status,counter))
+            self.assertEqual((int(r.status[0,0,0]),int(r.status_counter[0,0,0])),(status,4))
+
+    def test_ordinary_toxic_reentry_resets_before_residual(self):
+        from gpu_engine import mechanics as m
+        s = self.live()
+        s = s._replace(status=s.status.at[0,0,0].set(m.TOX),
+            status_counter=s.status_counter.at[0,0,0].set(4))
+        switched = self.play(s,[[4,0]])
+        returned = self.play(switched,[[4,0]])
+        self.assertEqual(int(returned.active[0,0]),0)
+        self.assertEqual((int(returned.status_counter[0,0,0]),int(returned.hp[0,0,0])),(1,95))
 
     def test_spikes_layers_floor_and_only_damage_the_incoming_grounded_mon(self):
         for layers,damage in ((1,12),(2,16),(3,25)):
@@ -187,6 +197,41 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(r.active.tolist(),[[1,1]])
         self.assertEqual(r.hp[0,:,1].tolist(),[0,101])
         self.assertEqual(int(r.weather[0]),self.w.NONE)
+
+    def test_skipped_toxic_switch_in_keeps_stage_for_resumed_residual(self):
+        from gpu_engine import mechanics as m
+        j = self.j
+        s = self.live(2)
+        hp = s.hp.at[:,:,0].set(0).at[:,0,1].set(1)
+        status = s.status.at[:,1,1].set(m.TOX).at[0,0,1].set(m.TOX)
+        counters = s.status_counter.at[:,1,1].set(1).at[0,0,1].set(4)
+        # Same double-faint replacement in both rows. Only the first has
+        # lethal Spikes, so only it skips the slower poisoned entrant's callback.
+        s = s._replace(hp=hp,status=status,status_counter=counters,
+            spikes=s.spikes.at[0,0].set(1),pending_residual=j.ones(2,bool))
+        waiting = self.play(s,[[4,4],[4,4]])
+        self.assertEqual(waiting.active.tolist(),[[1,1],[1,1]])
+        self.assertEqual(waiting.pending_residual.tolist(),[True,False])
+        # The entrant which did run the hazard callback resets even at HP 0.
+        self.assertEqual((int(waiting.hp[0,0,1]),int(waiting.status_counter[0,0,1])),(0,0))
+        self.assertEqual(waiting.status_counter[:,1,1].tolist(),[1,1])
+        self.assertEqual(waiting.hp[:,1,1].tolist(),[101,95])
+        resumed = self.play(waiting,[[5,0],[0,0]])
+        self.assertEqual(resumed.active[0].tolist(),[2,1])
+        self.assertFalse(bool(resumed.pending_residual[0]))
+        self.assertEqual((int(resumed.status_counter[0,1,1]),int(resumed.hp[0,1,1])),(2,89))
+
+    def test_baton_pass_retains_departure_stage_and_resets_recipient_stage(self):
+        from gpu_engine import mechanics as m
+        s = self.live()
+        s = s._replace(status=s.status.at[0,0,:2].set(m.TOX),
+            status_counter=s.status_counter.at[0,0,:2].set(self.j.array([2,4])),
+            baton_pass=s.baton_pass.at[0,0].set(True),
+            forced_switch=s.forced_switch.at[0,0].set(True))
+        r = self.play(s,[[4,0]])
+        self.assertEqual(int(r.active[0,0]),1)
+        self.assertEqual(r.status[0,0,:2].tolist(),[m.TOX,m.TOX])
+        self.assertEqual(r.status_counter[0,0,:2].tolist(),[2,0])
 
     def test_later_cloudnine_does_not_resort_an_already_queued_swift_swim_entry(self):
         s = self.live()._replace(weather=self.j.array([self.w.RAIN]))
@@ -277,6 +322,8 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(actual["forced_attack_stages"],[-1,-1])
         self.assertEqual(actual["forced_hazard_hp"],[0,101])
         self.assertEqual(actual["forced_suppression_hazard_hp"],[0,1])
+        self.assertEqual(actual["toxic_replacement"],[[1,95]])
+        self.assertEqual(actual["toxic_replacement_after_spikes"],[[1,101],[2,89]])
 
 
 if __name__ == "__main__":

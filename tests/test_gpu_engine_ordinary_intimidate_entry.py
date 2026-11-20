@@ -251,12 +251,14 @@ class OrdinaryIntimidateEntryTests(unittest.TestCase):
   # ... and neither unknown bit the guard rows above require appears without a guard (bit 1, UNINSTRUMENTED, is the tape's baseline).
   self.assertFalse(bool((clean.refusal[:7]&512).any()));self.assertFalse(bool((clean.refusal[:7]&256).any()))
  def test_original_default_ast_constructor_api_and_source_callback(self):
-  path=Path('gpu_engine/entry.py');old=subprocess.check_output(['git','show','f3c9dbea:'+str(path)],text=True)
-  self.assertEqual(default_entry_program(old),default_entry_program(path.read_text(),require_infatuation=True))
+  from gpu_engine_transition_certification import CURRENT_TRANSITION
+  path=Path('gpu_engine/entry.py');old=subprocess.check_output(['git','show',CURRENT_TRANSITION+':'+str(path)],text=True)
+  expected=default_entry_program(old,require_infatuation=True)
+  self.assertEqual(expected,default_entry_program(path.read_text(),require_infatuation=True))
   for old_numeric,new_numeric in [('jnp.maximum(-6,old-1)','jnp.maximum(-5,old-1)'),
       ('jnp.maximum(-6,old-1)','jnp.maximum(-6,old-2)')]:
    self.assertIn(old_numeric,path.read_text())
-   self.assertNotEqual(default_entry_program(old),
+   self.assertNotEqual(expected,
     default_entry_program(path.read_text().replace(old_numeric,new_numeric),require_infatuation=True))
   original=ast.parse(subprocess.check_output(['git','show','f3c9dbea:gpu_engine/engine_intimidate_callbacks.py'],text=True))
   current=ast.parse(Path('gpu_engine/engine_intimidate_callbacks.py').read_text())

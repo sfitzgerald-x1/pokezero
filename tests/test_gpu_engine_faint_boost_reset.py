@@ -26,6 +26,14 @@ class FaintBoostResetTests(unittest.TestCase):
         cls.old=types.ModuleType('gpu_engine._original_faint_boost_fixture')
         cls.old.__package__='gpu_engine';sys.modules[cls.old.__name__]=cls.old
         exec(compile(cls.old_source,'<original546-transition>','exec'),vars(cls.old))
+        # This transition predates the Toxic SwitchIn callback and still calls
+        # the sleep-only helper. Restore it only in the historical fixture.
+        old_entry = subprocess.check_output(['git', 'show', BASE + ':gpu_engine/entry.py'], text=True)
+        restore_sleep = next(node for node in ast.parse(old_entry).body
+                             if isinstance(node, ast.FunctionDef) and node.name == 'restore_sleep')
+        arrival = dict(vars(cls.old.arrival))
+        exec(compile(ast.Module(body=[restore_sleep], type_ignores=[]), '<original546-entry>', 'exec'), arrival)
+        cls.old.arrival = types.SimpleNamespace(**arrival)
 
     def chance(self,b):
         z=j.zeros((b,2),j.int32)

@@ -10,6 +10,7 @@ import jax.numpy as j
 import numpy as np
 from gpu_engine import engine_direct_hit_controls as direct,engine_execution_completeness as ex
 from gpu_engine import engine_lifecycle_callbacks as life,engine_public_events as public,engine_outcome_diagnostics as d
+from gpu_engine_transition_certification import CURRENT_TRANSITION
 import test_gpu_engine_outcome_diagnostics as fixture
 BASE='de4180168925e163cb87d3220d58975086f8e96f'
 # Tier D changes combat abilities and Pursuit's Wonder Guard/contact reveals.
@@ -129,6 +130,8 @@ class DirectSpanDiagnosticTests(unittest.TestCase):
   physical='action_history absorption encore focus_punch linked_traps phazing pressure self_destruct sleep_talk solar_beam weather'.split()
   for name in physical+['engine_retained_encoder_driver','engine_kernel_frame_risk','engine_full_v4_event_device','engine_lifecycle_event_device','benchmark_capture_gap_census']:
    ref=TIER_D_SOURCE if name in ('combat','pursuit') else 'b8092a85'
+   if name == 'phazing':
+    ref = CURRENT_TRANSITION  # The Toxic SwitchIn fix changes the table-free drag path.
    path='gpu_engine/'+name+'.py'
    self.assertEqual(subprocess.check_output(['git','show','215b1da7:'+path]),subprocess.check_output(['git','show','b8092a85:'+path]))
    self.assertEqual(Path(path).read_bytes(),subprocess.check_output(['git','show',ref+':'+path]))

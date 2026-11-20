@@ -19,5 +19,6 @@ Train B composes retained genders, infatuation and the v6 chance tape at 766833f
 Train B adds Forecast while preserving all prior state at 77a780c2.
 The explicit wide-draw Perish side-index correction moves it to 500dcc84.
 The Shed Skin composition retains that correction and adds the saved cure bank at f62255ca.
+Gen 3 Toxic SwitchIn composes with the saved Shed Skin cure bank at 85abfe4f.
 """
-CURRENT_TRANSITION = 'f62255ca35e615eb13a7df0b94bd1657a7f558ef'
+CURRENT_TRANSITION = '85abfe4ff255af8a1b91fd4811ddf9baec0ce644'
