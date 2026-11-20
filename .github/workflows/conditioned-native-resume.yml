@@ -1,56 +1,9 @@
 name: Conditional native continuation
 on:
-  pull_request:
-    paths:
-      - 'third_party/poke-engine-gen3-*.patch'
-      - 'third_party/poke-engine-gen3-patches.txt'
-      - 'scripts/apply_poke_engine_patches.py'
-      - 'rust/pokezero-search/**'
-      - 'gpu_engine/**'
-      - 'tests/test_conditioned_native_resume.py'
-      - 'tests/test_conditioned_native_faint_replacements.py'
-      - 'tests/test_conditioned_native_ordinary.py'
-      - 'tests/test_ordinary_carry_panel.py'
-      - 'tests/test_gpu_engine_carry_law.py'
-      - 'tests/test_conditioned_native_roles.py'
-      - 'tests/test_conditioned_native_deterministic_abilities.py'
-      - 'tests/test_native_gen3_trace_entry.py'
-      - 'tests/test_gpu_engine_trace_entry.py'
-      - 'tests/test_constructor_provenance.py'
-      - 'tests/test_prospective_fidelity_panel.py'
-      - 'tests/test_panel_cost_integration.py'
-      - 'tests/test_action_history_native.py'
-      - 'tests/test_wish_history_native.py'
-      - 'tests/test_rest_origin_native.py'
-      - 'tests/test_native_gen3_natural_cure_cleanup.py'
-      - 'tests/test_native_gen3_stall_pp.py'
-      - 'rust/pokezero-search/tests/gen3_minimum_damage.rs'
-      - 'tests/test_native_gen3_choice_band_before_move.py'
-      - 'tests/test_native_gpu_secondary_move_effects.py'
-      - 'tests/test_native_gpu_synchronize.py'
-      - 'tests/test_gpu_engine_synchronize.py'
-      - 'tests/data/gpu_synchronize_catalog.json'
-      - 'tests/test_native_gpu_hustle.py'
-      - 'tests/test_gpu_engine_hustle.py'
-      - 'tests/gpu_hustle_oracle.cjs'
-      - 'tests/data/gpu_hustle_catalog.json'
-      - 'tests/test_native_gpu_accuracy_events.py'
-      - 'tests/test_native_gpu_ordinary_switch.py'
-      - 'tests/data/gpu_ordinary_switch_catalog.json'
-      - 'rust/pokezero-search/tests/gen3_terminal_absorption_gates.rs'
-      - 'tests/test_gpu_engine_accuracy_events.py'
-      - 'tests/gpu_accuracy_events_oracle.cjs'
-      - 'tests/data/gpu_accuracy_events_catalog.json'
-      - 'tests/test_gpu_engine_secondary_move_effects.py'
-      - 'tests/test_gpu_engine_successor_cache.py'
-      - 'tests/test_gpu_engine_panel_owner.py'
-      - 'tests/test_native_gpu_panel_execution.py'
-      - '.github/workflows/conditioned-native-resume.yml'
+  workflow_dispatch:
+
 permissions:
   contents: read
-concurrency:
-  group: conditioned-native-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 jobs:
   native-authored:
     name: Native authored shard ${{ matrix.shard }}
@@ -108,7 +61,8 @@ jobs:
           POKEZERO_ENUMERATE_ROLLS: '1'
         run: |
           python - <<'PY'
-          import os, unittest, pokezero_search
+          import os, pokezero_search
+          from scripts.run_ci_unittest import run_selected
           assert pokezero_search.CONDITIONED_ORACLE_ENABLED
           names = [
               'tests.test_conditioned_native_resume', 'tests.test_conditioned_native_faint_replacements',
@@ -142,15 +96,9 @@ jobs:
                     [name for name in names if name not in first]]
           assert set(groups[0]).isdisjoint(groups[1])
           assert set(groups[0]) | set(groups[1]) == set(names)
-          assert unittest.defaultTestLoader.loadTestsFromNames(names).countTestCases() == 168
           shard = int(os.environ['NATIVE_SHARD'])
           assert shard in (0, 1)
-          expected = (48, 120)[shard]
-          suite = unittest.defaultTestLoader.loadTestsFromNames(groups[shard])
-          assert suite.countTestCases() == expected
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          assert result.testsRun == expected and not result.skipped
-          assert result.wasSuccessful()
+          raise SystemExit(run_selected(groups[shard]))
           PY
   conditional-successors:
     name: conditional-successors

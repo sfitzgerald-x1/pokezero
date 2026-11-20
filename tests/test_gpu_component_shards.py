@@ -731,6 +731,24 @@ class Case(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'extended manifest names modules discovery does not have'):
                 partition_tier(suite, modules, 0, 1, 'extended', heavy, extended | {'test_gpu_engine_gone'})
 
+    def test_fresh_process_honors_nightly_exclusions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log = self.fixture(root)
+            code = """
+import sys, unittest
+from scripts.run_gpu_component_shard import run_process_blocks
+suite = unittest.TestLoader().discover(sys.argv[1], 'test_gpu_engine*.py')
+raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier='light',
+    excluded={'test_gpu_engine_beta'}))
+"""
+            result = subprocess.run([sys.executable, '-c', code, str(root)], cwd=ROOT,
+                                    text=True, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            events = [json.loads(line) for line in log.read_text().splitlines()]
+            self.assertEqual([event['label'] for event in events],
+                             ['custom_reverse', 'alpha_b', 'alpha_a', 'custom_package', 'package', 'nested'])
+
     def test_real_extended_process_blocks_run_only_their_tier(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); log = self.fixture(root)
@@ -827,24 +845,23 @@ raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier=sys
                 path = Path(tmp) / 'extended.json';path.write_text(json.dumps(bad))
                 with self.assertRaises(ValueError):load_extended_modules(path)
 
-    def test_extended_tier_runs_on_integration_push_and_by_hand_never_per_pull_request(self):
+    def test_extended_tier_runs_nightly_and_by_hand(self):
         workflow = (ROOT / '.github' / 'workflows' / 'gpu-engine-components-extended.yml').read_text()
         self.assertEqual(workflow.count('python scripts/run_gpu_component_shard.py'), 1)
         self.assertIn("python scripts/run_gpu_component_shard.py --tier extended --index '${{ matrix.shard }}' --count 4"
                       " --process-blocks", workflow)
         self.assertIn('        shard: [0, 1, 2, 3]\n', workflow)
         triggers = workflow[workflow.index('\non:\n'):workflow.index('\npermissions:')]
-        self.assertIn("  push:\n    branches: ['scott/v2-engine-accel-20261104']\n", triggers)
+        self.assertNotIn('push:', triggers)
         self.assertIn('  workflow_dispatch:\n', triggers)
-        self.assertNotIn('pull_request', workflow)
-        self.assertNotIn('paths', triggers)   # every integration push: no path filter can skip these modules' only coverage
-        # no concurrency group: a group would cancel an older pending push run, and each push's run must finish
-        self.assertNotIn('\nconcurrency:', workflow);self.assertNotIn('cancel-in-progress', workflow)
+        self.assertIn('  workflow_call:\n', triggers)
+        self.assertNotIn('pull_request:', triggers)
+        nightly = (ROOT / '.github' / 'workflows' / 'ci-nightly.yml').read_text()
+        self.assertIn('  schedule:', nightly)
+        self.assertIn('    uses: ./.github/workflows/gpu-engine-components-extended.yml', nightly)
         self.assertIn('python scripts/run_component_memory_check.py', workflow)   # the same memory gate as the light tier
         self.assertEqual(workflow.count('runs-on: ubuntu-latest'), 2)
         light = (ROOT / '.github' / 'workflows' / 'gpu-engine-components.yml').read_text()
-        self.assertIn("- 'tests/gpu_component_extended.json'", light)
-        self.assertIn("- '.github/workflows/gpu-engine-components-extended.yml'", light)
         # Moving a module must preserve every existing case-specific compiler setting.
         cases = re.findall(r'--low-optimization-case (test_gpu_engine_\S+)', light)
         self.assertTrue(cases)
@@ -853,18 +870,21 @@ raise SystemExit(run_process_blocks(suite, 0, 1, start_dir=sys.argv[1], tier=sys
         self.assertEqual(len(actual), len(set(actual)))
         self.assertEqual(set(actual), expected)
 
-    def test_per_pull_request_checks_run_only_the_light_tier(self):
+    def test_nightly_light_excludes_archival_and_manual_modules(self):
         workflow = (ROOT / '.github' / 'workflows' / 'gpu-engine-components.yml').read_text()
-        self.assertEqual(workflow.count('python scripts/run_gpu_component_shard.py'), 1)
-        self.assertIn("python scripts/run_gpu_component_shard.py --tier light --index '${{ matrix.shard }}' --count 16", workflow)
-        self.assertIn("- 'tests/gpu_component_heavy.json'", workflow)
-        # The default runner is hosted. Main's isolated runner (#1819) is opt-in through repository configuration,
-        # for same-repository pull requests only, and runs the same light-tier command.
-        self.assertEqual(workflow.count('runs-on:'), 2)
-        self.assertIn("    runs-on: ${{ fromJSON((github.event.pull_request.head.repo.full_name == github.repository"
-                      " && github.head_ref == vars.CPU_COMPONENT_RUNNER_BRANCH && vars.CPU_COMPONENT_RUNNER)"
-                      " || '\"ubuntu-latest\"') }}\n", workflow)
-        self.assertIn('    runs-on: ubuntu-latest\n', workflow)
+        self.assertNotIn('pull_request:', workflow)
+        self.assertIn('    uses: ./.github/workflows/gpu-engine-components.yml',
+                      (ROOT / '.github' / 'workflows' / 'ci-nightly.yml').read_text())
+        cases = unittest.TestSuite([unittest.FunctionTestCase(lambda: None) for _ in range(4)])
+        modules = ['test_gpu_engine_live', 'test_gpu_engine_archive',
+                   'test_gpu_engine_extended', 'test_gpu_engine_heavy']
+        kwargs = dict(heavy={modules[3]}, extended={modules[2]})
+        _, indices, _ = partition_tier(cases, modules, 0, 1, 'light', **kwargs)
+        self.assertEqual(indices, [0, 1])
+        _, indices, _ = partition_tier(cases, modules, 0, 1, 'light', excluded={modules[1]}, **kwargs)
+        self.assertEqual(indices, [0])
+        with self.assertRaises(ValueError):
+            partition_tier(cases, modules, 0, 1, 'extended', excluded={modules[2]}, **kwargs)
 
     def test_invalid_partition_and_empty_discovery_fail(self):
         suite = unittest.TestSuite([unittest.TestSuite()])

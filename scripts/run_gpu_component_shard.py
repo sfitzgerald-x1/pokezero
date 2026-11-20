@@ -96,12 +96,14 @@ def _discover_modules(spec):
     return suite, modules
 
 
-def partition_tier(suite, modules, index: int, count: int, tier="all", heavy=frozenset(), extended=frozenset()):
+def partition_tier(suite, modules, index: int, count: int, tier="all", heavy=frozenset(), extended=frozenset(), *, excluded=frozenset()):
     """partition_suite over one tier's blocks, keeping original top-level indices. Tier "all" is partition_suite itself;
     "light", "heavy" and "extended" split every block by its module's membership in `heavy` or `extended` (disjoint), so
-    the three tiers are disjoint and together are every block (same tests, same blocks, same order). A block whose module
-    failed to import (or skipped at import) is light whatever the manifests say: it costs nothing to run and a heavy or
-    extended module's import failure must fail per PR."""
+    the three tiers are disjoint. Nightly exclusions omit only named light modules.
+    Non-excluded import failures and import-time skips
+    surface in light even when the module belongs to another tier."""
+    if excluded and tier != "light":
+        raise ValueError("nightly exclusions require the light tier")
     if tier == "all":
         return partition_suite(suite, index, count)
     if tier not in TIERS:
@@ -125,7 +127,10 @@ def partition_tier(suite, modules, index: int, count: int, tier="all", heavy=fro
         if _import_outcome(block) is not None:
             return "light"
         return "heavy" if name in heavy else "extended" if name in extended else "light"
-    eligible = [offset for offset, (name, block) in enumerate(zip(modules, blocks)) if block_tier(name, block) == tier]
+    eligible = [
+        offset for offset, (name, block) in enumerate(zip(modules, blocks))
+        if name not in excluded and block_tier(name, block) == tier
+    ]
     indices = eligible[index::count]
     if not indices:
         raise ValueError("empty component shard")
@@ -382,7 +387,8 @@ def _child(plan_path, plan_sha256, block_index, receipt_path, case_index=None):
     discovered, modules = _discover_modules(plan["discovery"])
     blocks = list(discovered)
     _, indices, total = partition_tier(discovered, modules, plan["index"], plan["count"],
-        plan.get("tier", "all"), frozenset(plan.get("heavy_modules", ())), frozenset(plan.get("extended_modules", ())))
+        plan.get("tier", "all"), frozenset(plan.get("heavy_modules", ())), frozenset(plan.get("extended_modules", ())),
+        excluded=frozenset(plan.get("excluded_modules", ())))
     if ([_manifest(block) for block in blocks] != plan["manifest"]
             or indices != plan["selected_blocks"] or total != len(plan["manifest"])
             or type(block_index) is not int or block_index not in indices):
@@ -415,7 +421,7 @@ def _child(plan_path, plan_sha256, block_index, receipt_path, case_index=None):
 def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engine*.py",
                        top_level_dir=None, stream=None, resource_interval_seconds=0,
                        isolate_standard_classes=(), tier="all", heavy=frozenset(), extended=frozenset(),
-                       low_optimization_cases=()):
+                       low_optimization_cases=(), excluded=frozenset()):
     """Optional sequential fresh-exec blocks; default whole-suite API unchanged.
 
     Discovery is repeated and verified in each fresh sys.executable process.
@@ -434,13 +440,15 @@ def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engi
     if top_level_dir is not None:
         spec["top_level_dir"] = str(Path(top_level_dir).resolve())
     blocks = list(suite)
+    if excluded and tier != "light":
+        raise ValueError("nightly exclusions require the light tier")
     if tier == "all":
         _, indices, _ = partition_suite(suite, index, count)
     else:   # the block modules come from a recording rediscovery, which must describe the same blocks
         rediscovered, modules = _discover_modules(spec)
         if [_manifest(block) for block in rediscovered] != [_manifest(block) for block in blocks]:
             raise ValueError("tiered selection rediscovery differs from the given suite")
-        _, indices, _ = partition_tier(suite, modules, index, count, tier, frozenset(heavy), frozenset(extended))
+        _, indices, _ = partition_tier(suite, modules, index, count, tier, frozenset(heavy), frozenset(extended), excluded=excluded)
     if (type(low_optimization_cases) not in (tuple, list)
             or any(type(name) is not str or not name for name in low_optimization_cases)):
         raise ValueError('low optimization requires explicit original case identities')
@@ -457,6 +465,8 @@ def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engi
         isolate_standard_classes=classes, execution_units=units, isolation_decisions=decisions)
     if tier != "all":
         plan.update(tier=tier, heavy_modules=sorted(heavy), extended_modules=sorted(extended))
+    if excluded:
+        plan["excluded_modules"] = sorted(excluded)
     for unit in units:
         names = _identities(_unit_manifest(plan, unit['block_index'], unit['case_index']))
         if set(names).intersection(low_opt) and (unit['case_index'] is None or len(names) != 1):
@@ -532,11 +542,11 @@ def main() -> int:
     parser.add_argument('--isolate-standard-class', action='append', default=[],
         help='explicit class whose plain suite cases each get fresh module/class fixtures')
     parser.add_argument("--tier", choices=TIERS, default="all",
-        help="all (default) shards every block; light omits the heavy and extended manifests' modules (per pull "
-             "request); heavy runs only the heavy manifest's (nightly and before main); extended runs only the extended "
+        help="all (default) shards every block; light omits the heavy and extended manifests' modules (nightly); heavy runs only the heavy manifest's (on a suitably provisioned runner); extended runs only the extended "
              "manifest's (on push to integration and on demand)")
     parser.add_argument("--heavy-manifest", default=str(HEAVY_MANIFEST), help=argparse.SUPPRESS)
     parser.add_argument("--extended-manifest", default=str(EXTENDED_MANIFEST), help=argparse.SUPPRESS)
+    parser.add_argument("--exclude-modules", type=Path, help="nightly light omissions by module")
     parser.add_argument('--low-optimization-case', action='append', default=[],
         help='original case identity to run alone with reduced compiler optimization; never changes test shapes')
     parser.add_argument("--_child-plan", help=argparse.SUPPRESS)
@@ -554,10 +564,23 @@ def main() -> int:
         parser.error("--index and --count are required")
     if args.low_optimization_case and not args.process_blocks:
         parser.error('--low-optimization-case requires --process-blocks')
+    excluded = frozenset()
+    if args.exclude_modules:
+        if args.tier != "light":
+            parser.error("--exclude-modules requires the light tier")
+        entries = json.loads(args.exclude_modules.read_text())
+        if (not isinstance(entries, dict) or set(entries) != {"historical", "manual"}
+                or any(not isinstance(group, list) for group in entries.values())):
+            parser.error("nightly exclusions require historical and manual module lists")
+        names = entries["historical"] + entries["manual"]
+        if any(type(name) is not str or not name.startswith("test_gpu_engine_") or not name.isidentifier()
+               for name in names):
+            parser.error("nightly exclusions must be component module names")
+        excluded = frozenset(names)
     heavy = frozenset() if args.tier == "all" else load_heavy_modules(args.heavy_manifest)
     extended = frozenset() if args.tier == "all" else load_extended_modules(args.extended_manifest)
     discovered, modules = _discover_modules(dict(start_dir=str(ROOT / "tests"), pattern="test_gpu_engine*.py"))
-    selected, indices, total = partition_tier(discovered, modules, args.index, args.count, args.tier, heavy, extended)
+    selected, indices, total = partition_tier(discovered, modules, args.index, args.count, args.tier, heavy, extended, excluded=excluded)
     print(json.dumps({"shard": args.index, "count": args.count, "tier": args.tier,
         "discovery_blocks": total, "selected_blocks": indices,
         "test_cases": selected.countTestCases()}), flush=True)
@@ -565,7 +588,7 @@ def main() -> int:
         return run_process_blocks(discovered, args.index, args.count, start_dir=ROOT / "tests",
             resource_interval_seconds=args.resource_interval_seconds,
             isolate_standard_classes=args.isolate_standard_class, tier=args.tier, heavy=heavy, extended=extended,
-            low_optimization_cases=args.low_optimization_case)
+            low_optimization_cases=args.low_optimization_case, excluded=excluded)
     return run_suite(selected)
 
 

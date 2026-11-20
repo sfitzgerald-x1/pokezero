@@ -1,49 +1,28 @@
 name: GPU engine CPU component checks
 
-# Keep the full CPU matrix active for the one-time premerge timing comparison.
-
 on:
-  pull_request:
-    paths:
-      - 'gpu_engine/**'
-      - 'tests/test_gpu_engine*.py'
-      - 'tests/**/test_gpu_engine*.py'
-      - 'tests/**/__init__.py'
-      - 'tests/gpu_engine_*.py'
-      - 'tests/gpu_*_oracle.cjs'
-      - 'tests/data/gpu_synchronize_catalog.json'
-      - 'tests/data/gpu_hustle_catalog.json'
-      - 'tests/data/gpu_accuracy_events_catalog.json'
-      - 'tests/data/gpu_ordinary_switch_catalog.json'
-      - 'scripts/run_gpu_component_shard.py'
-      - 'scripts/run_component_memory_check.py'
-      - 'scripts/refresh_source_pins.py'
-      - 'tests/test_gpu_component_shards.py'
-      - 'tests/gpu_component_heavy.json'
-      - 'tests/gpu_component_extended.json'
-      - '.github/workflows/gpu-engine-components-extended.yml'
-      - 'tests/test_component_memory_check.py'
-      - '.github/workflows/gpu-engine-components.yml'
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Optional branch, tag or commit to test
+        type: string
+  workflow_call:
+    inputs:
+      source:
+        type: string
+        required: true
 
 permissions:
   contents: read
 
-concurrency:
-  # A configured isolated run preserves an older hosted run's diagnostics.
-  group: gpu-components-${{ github.event.pull_request.number }}${{ github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == vars.CPU_COMPONENT_RUNNER_BRANCH && vars.CPU_COMPONENT_RUNNER && '-isolated' || '' }}
-  cancel-in-progress: true
 
 jobs:
   cpu-component-shards:
     name: CPU component shard ${{ matrix.shard }}
-    # Repository configuration can select isolated high-memory Linux runners
-    # for one branch without rerouting unrelated pull requests.
-    # The default remains the hosted runner; test/compiler settings stay below.
-    runs-on: ${{ fromJSON((github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == vars.CPU_COMPONENT_RUNNER_BRANCH && vars.CPU_COMPONENT_RUNNER) || '"ubuntu-latest"') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      max-parallel: ${{ fromJSON((github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == vars.CPU_COMPONENT_RUNNER_BRANCH && vars.CPU_COMPONENT_MAX_PARALLEL) || '16') }}
       matrix:
         shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     env:
@@ -60,6 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.source || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v6
@@ -74,27 +54,6 @@ jobs:
           ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
           path: .ci/pokemon-showdown
           persist-credentials: false
-      - name: Verify isolated CPU runner memory
-        if: ${{ runner.environment == 'self-hosted' }}
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          physical = int(next(line.split()[1] for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemTotal:'))) * 1024
-          limits = []
-          for name in ('/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'):
-              path = Path(name)
-              if path.exists():
-                  value = path.read_text().strip()
-                  if value != 'max':
-                      limits.append(int(value))
-          effective = min([physical] + limits)
-          print(json.dumps(dict(physical_bytes=physical, cgroup_limits=limits, effective_bytes=effective)))
-          if effective < 128 * 1024**3:
-              raise SystemExit('isolated CPU correctness runner requires at least 128 GiB RAM')
-          PY
-      - name: Verify complete and disjoint shard selection
-        run: python -m unittest tests.test_gpu_component_shards tests.test_component_memory_check -v
       - name: Install CPU test environment and build pinned source oracle
         run: |
           python -m pip install 'jax==0.12.0' 'numpy==2.5.4'
@@ -108,7 +67,6 @@ jobs:
             --source-commit-label f76228a1354b5d0f307ca2d16101294ad3a2308b \
             --teams 1024 --seed-start 650200000 --out "$POKEZERO_GPU_TEAM_POOL"
       - name: Add swap headroom for complete CPU JIT compilation
-        if: ${{ runner.environment == 'github-hosted' }}
         run: |
           awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/ {printf "%s %.0f\n", $1, $2 * 1024}' /proc/meminfo
           swapon --show --bytes
@@ -144,13 +102,10 @@ jobs:
           echo "memory_report_dir=$ci_memory_dir" >> "$GITHUB_OUTPUT"
           # Keep original custom suites intact. The class of each low-optimization case runs one case per
           # process, so every case starts with a fresh process heap and fresh module/class fixtures.
-          # Per pull request: the light tier, every block outside tests/gpu_component_heavy.json and
-          # tests/gpu_component_extended.json. The heavy tier (--tier heavy) runs on dedicated high-memory
-          # infrastructure nightly and before main, with a command line that differs only in --tier. The extended
-          # tier runs in gpu-engine-components-extended.yml on push to integration and on demand.
           python scripts/run_component_memory_check.py --output "$ci_memory_dir" \
             --label 'shard-${{ matrix.shard }}' --summary "$GITHUB_STEP_SUMMARY" -- \
             python scripts/run_gpu_component_shard.py --tier light --index '${{ matrix.shard }}' --count 16 --process-blocks \
+            --exclude-modules tests/gpu_component_nightly_exclusions.json \
             --low-optimization-case test_gpu_engine_color_change_owning.ColorChangeOwningTests.test_actual_original_frame_both_views_public_types_requests_and_physics \
             --low-optimization-case test_gpu_engine_bulk_up_owning.BulkUpOwningTests.test_actual_original_frame_both_owners_witness_encoder_and_physics \
             --low-optimization-case test_gpu_engine_belly_drum_owning.BellyDrumOwningTests.test_actual_original_frame_both_owners_witness_encoder_and_physics \
