@@ -145,18 +145,61 @@ def rendezvous(args, rank, world_size):
     return store
 
 
-def _probe(args, rank, world_size, distribution):
-    """Collective smoke used by the CPU/gloo launch tests: every rank sees every other rank."""
+def _bench(distribution, device, *, floats):
+    """Pre-flight fabric numbers: node-0 <-> node-1 ping-pong latency/bandwidth, a learner-sized all-reduce, an all-to-all."""
     import torch
     import torch.distributed as dist
+    group = distribution.process_group; rank = distribution.rank; sync = torch.cuda.synchronize if device == 'cuda' else (lambda: None)
+
+    def timed(action, reps):
+        sync(); start = time.perf_counter()
+        for _ in range(reps):
+            action()
+        sync(); return (time.perf_counter() - start) / reps
+
+    results = dict(device=device, floats=floats)
+    if distribution.nodes > 1:
+        peer = distribution.ranks_per_node                      # first rank of node 1
+        if rank in (0, peer):
+            other = peer if rank == 0 else 0
+            small, big = torch.zeros(1, device=device), torch.zeros(floats, device=device)
+            def pingpong(tensor):
+                if rank == 0:
+                    dist.send(tensor, other, group=group); dist.recv(tensor, other, group=group)
+                else:
+                    dist.recv(tensor, other, group=group); dist.send(tensor, other, group=group)
+            timed(lambda: pingpong(small), 5); timed(lambda: pingpong(big), 2)
+            results['cross_node_latency_us'] = timed(lambda: pingpong(small), 50) / 2 * 1e6
+            results['cross_node_bandwidth_gbps'] = 2 * big.numel() * 4 * 8 / timed(lambda: pingpong(big), 5) / 1e9
+            del big
+    distribution.barrier()
+    gradient = torch.ones(floats, device=device)                 # the learner gradient is ~10M fp32
+    timed(lambda: dist.all_reduce(gradient, group=group), 3)
+    results['all_reduce_ms'] = timed(lambda: dist.all_reduce(gradient, group=group), 20) * 1e3
+    world = distribution.world_size
+    chunk = floats // world * world
+    sent, received = torch.ones(chunk, device=device), torch.empty(chunk, device=device)
+    timed(lambda: dist.all_to_all_single(received, sent, group=group), 2)
+    seconds = timed(lambda: dist.all_to_all_single(received, sent, group=group), 5)
+    results['all_to_all_ms'] = seconds * 1e3
+    results['all_to_all_gbps_per_rank'] = chunk * 4 * 8 * (world - 1) / world / seconds / 1e9
+    return results
+
+
+def _probe(args, rank, world_size, distribution):
+    """Collective smoke used by the CPU/gloo launch tests and the GPU pre-flight: every rank sees every other rank."""
+    import torch
+    import torch.distributed as dist
+    device = 'cuda' if args.backend == 'nccl' else 'cpu'
     ranks = distribution.gather(dict(rank=rank, node=distribution.node_index, local=distribution.local_rank,
                                      host=socket.gethostname()))
-    total = torch.tensor([float(rank)]); dist.all_reduce(total, group=distribution.process_group)
+    total = torch.tensor([float(rank)], device=device); dist.all_reduce(total, group=distribution.process_group)
     if [r['rank'] for r in ranks] != list(range(world_size)) or int(total.item()) != world_size * (world_size - 1) // 2:
         raise ValueError('probe collectives disagree with the declared world')
+    bench = _bench(distribution, device, floats=10_000_000 if device == 'cuda' else 100_000) if world_size > 1 else None
     distribution.barrier()
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
-    (out / f'probe-rank-{rank}.json').write_text(json.dumps(dict(ranks=ranks, **distribution.topology())) + '\n')
+    (out / f'probe-rank-{rank}.json').write_text(json.dumps(dict(ranks=ranks, bench=bench, **distribution.topology())) + '\n')
     return 0
 
 
@@ -303,6 +346,8 @@ def main(argv=None):
             log.close()
         for local, process in enumerate(processes):
             codes.setdefault(args.node_index * args.ranks + local, process.returncode)
+        if any(code for code in codes.values()):
+            print(f'node {args.node_index}: rank exit codes {codes}; see rank-*.log in {out}', file=sys.stderr, flush=True)
         name = 'rank-exit.json' if args.nodes == 1 else f'rank-exit-node-{args.node_index}.json'
         (out / name).write_text(json.dumps(dict(codes=codes, wall_seconds=time.monotonic() - started,
             world_size=world_size, nodes=args.nodes, node_index=args.node_index, ranks_per_node=args.ranks,

@@ -126,7 +126,8 @@ class TwoNodeRendezvousTests(unittest.TestCase):
             out = Path(folder) / 'run'
             nodes = [supervisor(out, node, 2, port) for node in (1, 0)]   # node 1 may start before the master
             outputs = [(node.wait(timeout=180), node.stdout.read()) for node in nodes]
-            self.assertEqual([code for code, _ in outputs], [0, 0], outputs)
+            logs = {p.name: p.read_text()[-3000:] for p in sorted(out.glob('rank-*.log'))}
+            self.assertEqual([code for code, _ in outputs], [0, 0], (outputs, logs))
             probes = [json.loads((out / f'probe-rank-{r}.json').read_text()) for r in range(8)]
             exits = [json.loads((out / f'rank-exit-node-{n}.json').read_text()) for n in (0, 1)]
         for probe in probes:
@@ -135,6 +136,11 @@ class TwoNodeRendezvousTests(unittest.TestCase):
                              [(r, r // 4, r % 4) for r in range(8)])
         self.assertEqual([sorted(int(k) for k in e['codes']) for e in exits], [[0, 1, 2, 3], [4, 5, 6, 7]])
         self.assertTrue(all(code == 0 for e in exits for code in e['codes'].values()))
+        bench = probes[0]['bench']
+        self.assertGreater(bench['cross_node_bandwidth_gbps'], 0)
+        self.assertGreater(bench['all_reduce_ms'], 0)
+        self.assertGreater(bench['all_to_all_gbps_per_rank'], 0)
+        self.assertNotIn('cross_node_bandwidth_gbps', probes[1]['bench'])   # only the node-0/node-1 pair measures the link
 
     def test_missing_partner_node_fails_every_rank_within_the_rendezvous_deadline(self):
         port = free_port()
