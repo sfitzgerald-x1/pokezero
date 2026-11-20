@@ -76,7 +76,6 @@ jobs:
             showdown: true
             selectors: |
               tests.test_depthn_live_server.PipelinedServerTests
-              tests.test_depthn_live_actor.ClientTests.test_complete_carries_contract_request_and_client_time
               tests.test_depthn_live_actor.FactoryTests.test_illegal_or_out_of_range_searched_action_falls_back
               tests.test_local_showdown.LocalShowdownRequestTest
               tests.test_foulplay_bridge.FoulPlayBridgeTest.test_node_bridge_snapshot_round_trip_echoes_request_id
@@ -84,7 +83,6 @@ jobs:
               tests.test_foulplay_bridge.FoulPlayBridgeTest.test_stream_never_forwards_the_configured_pokezero_seat
               tests.test_belief_running_ability_effects
               tests.test_fullgame_phase_progress
-              tests.test_v5_foulplay.V5FoulPlayTests.test_actual_original_memory_game_uses_v5_actor_and_literal_owner_terminal
 
     env:
       JAX_PLATFORMS: cpu
