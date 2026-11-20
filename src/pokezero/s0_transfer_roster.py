@@ -117,3 +117,14 @@ def actor_bindings(manifest, cell):
                            if role != "FP" else {"revision": manifest["fp_revision"], "budget_ms": manifest["fp_budget_ms"]}))
         for role in pair
     ]
+
+
+def journal_path(root, cell):
+    return root / f'{cell["environment"]}.journal' / f"{digest(cell_key(cell))}.json"
+
+
+def cell_record(manifest, cell, status, score, evidence):
+    start = manifest["starts"][str(cell["cluster"])]
+    return dict(cell, manifest_sha256=digest(manifest), start_sha256=digest(start),
+                actor_bindings=actor_bindings(manifest, cell), status=status, score=score,
+                evidence=evidence, evidence_sha256=digest(evidence))

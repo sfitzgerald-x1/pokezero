@@ -43,7 +43,7 @@ def make_roster(initialize, pool, bindings, cells, starts, archives):
 
 
 def evaluate(prepared, pool, model_config, cell_groups, starts, actors, *, run_sha,
-             lanes, max_requests, wall_seconds):
+             lanes, max_requests, wall_seconds, publish):
     labels = rollout.compile_labels(pool.metadata(), model_config.label_vocabulary)
     initialize = jax.jit(lambda state: transition.initialize_with_public(
         state, prepared.engine_tables, belief_tables=prepared.observation_tables.belief,
@@ -73,29 +73,41 @@ def evaluate(prepared, pool, model_config, cell_groups, starts, actors, *, run_s
             collector.rebind(roster)
         start_clock = time.monotonic()
 
-        def progress(_):
-            if time.monotonic() - start_clock >= wall_seconds:
-                raise TimeoutError("matched H2H engine batch wall deadline")
+        play_batch(collector, params, roster, cells, birth, publish=publish,
+                   deadline=start_clock + wall_seconds)
 
-        try:
-            records = v2_collector.game_records(collector.run(params, progress=progress))
-        except TimeoutError as error:
-            for cell, observed in zip(cells, birth, strict=True):
-                yield cell, "FAILED", None, dict(reason=str(error), birth=observed)
-            continue
-        for i, (cell, observed) in enumerate(zip(cells, birth, strict=True)):
+
+def play_batch(collector, params, roster, cells, birth, *, publish, deadline):
+    """Publish terminal lanes at chunk boundaries, then close only unfinished cells."""
+    published = set()
+
+    def observe(book):
+        records = v2_collector.terminal_records(roster, book)
+        for i in np.flatnonzero(records["status"] != v2_collector.NOT_ENDED):
+            if i in published:
+                continue
+            cell = cells[i]
             if int(records["streams"][i]) != cell["cluster"]:
                 raise ValueError("engine receipt stream differs from its cell")
             status = rollout.STATUS[int(records["status"][i])]
             winner = int(records["winner"][i])
             witness = dict(status=status, winner=winner, frames=int(records["terminal_frame"][i]),
                            hp=records["terminal_hp"][i].tolist(), max_hp=records["terminal_max_hp"][i].tolist(),
-                           birth=observed)
+                           birth=birth[i])
             score = None
             if status == "COMPLETE":
                 if winner not in (0, 1, 2):
                     raise ValueError("engine returned malformed terminal winner")
-                score = .5 if winner == 2 else float(winner == seat)
+                score = .5 if winner == 2 else float(winner == cell["seat"])
             else:
                 witness["reason"] = f"engine-{status.lower()}"
-            yield cell, status, score, witness
+            publish((cell, status, score, witness))
+            published.add(i)
+        return time.monotonic() >= deadline
+
+    collector.run(params, observe_book=observe)
+    for i, cell in enumerate(cells):
+        if i not in published:
+            if time.monotonic() < deadline:
+                raise ValueError("engine batch ended without a cell terminal")
+            publish((cell, "FAILED", None, dict(reason="engine batch wall deadline", birth=birth[i])))

@@ -638,7 +638,8 @@ class RefillCollector:
         return timings
 
     # -- host loop -----------------------------------------------------------
-    def run(self, params, *, progress=None):
+    def run(self, params, *, progress=None, observe_book=None):
+        """Run to completion, or return the current book if the observer requests a stop."""
         roster = self.roster;counts = roster.counts
         if len(params) != len(roster.actor_archives):raise ValueError('one original parameter tree per roster actor archive required')
         capacity = self.row_capacity();segments = []
@@ -664,6 +665,7 @@ class RefillCollector:
             if exhausted and queue_end is None:queue_end = dict(seconds=now - begin, ticks=sum(x['ticks'] for x in stats['levels']))
             if progress:progress(dict(level=self.levels[level].lanes, live=int(live.sum()), started=int(cursor.sum()),
                 rows=count + sum(c for _, c in segments), elapsed_seconds=now - begin))
+            if observe_book is not None and observe_book(book):break
             if exhausted and not live.any():break
             while exhausted and level + 1 < len(self.levels) and np.all(live <= np.asarray(self.levels[level + 1].layout)):
                 clock = time.perf_counter();lanes = jax.block_until_ready(self.compactor(level)(lanes))
@@ -856,6 +858,12 @@ def finalize(result, *, loss_config, discount=1.):
 
 def game_records(result):
     """Host per-game terminal record in roster order (stream, status, frame, winner)."""
-    book = jax.device_get(result.book)
-    return dict(streams=result.roster.streams, status=np.asarray(book.status), terminal_frame=np.asarray(book.terminal_frame),
-        winner=np.asarray(book.winner), terminal_hp=np.asarray(book.terminal_hp), terminal_max_hp=np.asarray(book.terminal_max_hp))
+    return terminal_records(result.roster, result.book)
+
+
+def terminal_records(roster, book):
+    status, frame, winner, hp, max_hp = jax.device_get((
+        book.status, book.terminal_frame, book.winner, book.terminal_hp, book.terminal_max_hp,
+    ))
+    return dict(streams=roster.streams, status=np.asarray(status), terminal_frame=np.asarray(frame),
+        winner=np.asarray(winner), terminal_hp=np.asarray(hp), terminal_max_hp=np.asarray(max_hp))

@@ -1,10 +1,14 @@
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from pokezero import s0_transfer_recompute as scorer
-from pokezero.s0_transfer_roster import FP, H2H, SCHEMA, actor_bindings, digest, dry_run_clusters, expected_cells, write_once
+from pokezero.s0_transfer_roster import (
+    FP, H2H, SCHEMA, actor_bindings, cell_key, digest, dry_run_clusters,
+    expected_cells, journal_path, write_once,
+)
 
 
 def scratch_rows():
@@ -92,6 +96,52 @@ def test_immutable_artifact_refuses_changed_publication(tmp_path):
     with pytest.raises(ValueError, match="immutable"):
         write_once(dest, {"status": "failed"})
     assert json.loads(dest.read_bytes()) == {"status": "finished"}
+
+
+def test_supervisor_seals_finished_showdown_and_fp_rows_after_worker_timeout(tmp_path):
+    from pokezero.s0_transfer_supervise import seal_side
+
+    manifest, rows = scratch_rows()
+    write_once(tmp_path / "manifest.json", manifest)
+    retained = [next(row for row in rows if row["environment"] == "showdown" and row["assay"] == assay)
+                for assay in (H2H, FP)]
+    for row in retained:
+        write_once(journal_path(tmp_path, row), row)
+    assert not seal_side(tmp_path, "showdown", 124, 5400)
+    terminal = json.loads((tmp_path / "showdown.terminal.json").read_bytes())
+    assert terminal["status"] == "PARTIAL" and terminal["worker_exit_code"] == 124
+    assert terminal["status_counts"] == {"COMPLETE": 2, "FAILED": 198}
+    archived = json.loads((tmp_path / "showdown.cells.json").read_bytes())
+    by_key = {cell_key(r): r for r in archived}
+    assert [by_key[cell_key(row)] for row in retained] == retained
+    scores = scorer.collect_scores(manifest, archived + [r for r in rows if r["environment"] == "engine"])
+    assert scores[cell_key(retained[0])] == scores[cell_key(retained[1])] == .5
+    assert len(scores) == 280 and sum(score is None for score in scores.values()) == 198
+
+
+def test_engine_batch_deadline_preserves_completed_book_entries():
+    pytest.importorskip("jax")
+    from gpu_engine import s0_transfer_engine, v2_collector, v5_device_rollout
+
+    class Collector:
+        def run(self, params, *, observe_book):
+            book = SimpleNamespace(
+                status=np.array([v5_device_rollout.COMPLETE, v2_collector.NOT_ENDED]),
+                winner=np.array([1, -1]), terminal_frame=np.array([4, 0]),
+                terminal_hp=np.zeros((2, 2, 6), dtype=int),
+                terminal_max_hp=np.ones((2, 2, 6), dtype=int),
+            )
+            assert observe_book(book)
+
+    cells = [dict(cluster=91, seat=1), dict(cluster=92, seat=1)]
+    finished = []
+    s0_transfer_engine.play_batch(
+        Collector(), (), SimpleNamespace(streams=[91, 92]), cells, ["birth-91", "birth-92"],
+        publish=finished.append, deadline=0,
+    )
+    assert [(cell["cluster"], status, score) for cell, status, score, _ in finished] == [
+        (91, "COMPLETE", 1.), (92, "FAILED", None),
+    ]
 
 
 def test_evaluation_draw_uses_exact_engine_key_and_masked_law():

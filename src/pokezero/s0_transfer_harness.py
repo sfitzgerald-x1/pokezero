@@ -2,7 +2,6 @@
 
 import argparse
 import asyncio
-from collections import Counter
 from dataclasses import replace
 import hashlib
 import json
@@ -13,7 +12,10 @@ import time
 from types import SimpleNamespace
 import zipfile
 
-from .s0_transfer_roster import DRY_RUN_ROOT, FP, H2H, SCHEMA, actor_bindings, digest, dry_run_clusters, expected_cells, write_once
+from .s0_transfer_roster import (
+    DRY_RUN_ROOT, FP, H2H, SCHEMA, cell_key, cell_record, digest, dry_run_clusters,
+    expected_cells, journal_path, write_once,
+)
 
 
 MAX_REQUESTS = 250
@@ -131,20 +133,13 @@ def wait_for(path, message, *, peer_terminal=None):
     while not path.is_file():
         if peer_terminal is not None and peer_terminal.is_file():
             terminal = json.loads(peer_terminal.read_bytes())
-            if terminal["status"] == "FAILED":
-                raise ValueError(f'{peer_terminal.name}: {terminal["reason"]}')
+            if terminal["status"] in ("FAILED", "PARTIAL"):
+                detail = terminal.get("reason", f'worker exit {terminal["worker_exit_code"]}')
+                raise ValueError(f"{peer_terminal.name}: {detail}")
         if time.monotonic() - start >= JOIN_SECONDS:
             raise TimeoutError(message)
         time.sleep(2)
     return json.loads(path.read_bytes())
-
-
-def row(manifest, result):
-    cell, status, score, witness = result
-    start = manifest["starts"][str(cell["cluster"])]
-    return dict(cell, manifest_sha256=digest(manifest), start_sha256=digest(start),
-                actor_bindings=actor_bindings(manifest, cell),
-                status=status, score=score, evidence=witness, evidence_sha256=digest(witness))
 
 
 def install_bridge(path, expected_sha):
@@ -169,7 +164,7 @@ def install_bridge(path, expected_sha):
                     stream.write(blob)
 
 
-def engine(inputs, config, manifest, cells, *, replica="scratch"):
+def engine(inputs, config, manifest, cells, *, publish, replica="scratch"):
     from gpu_engine.s0_transfer_engine import evaluate
     from . import v5_worker
 
@@ -180,7 +175,8 @@ def engine(inputs, config, manifest, cells, *, replica="scratch"):
     groups = [[c for c in cells if c["role"] == role and c["seat"] == seat]
               for role in ("T", "C") for seat in (0, 1)]
     return evaluate(prepared, pool, config["model"], groups, manifest["starts"], actors,
-                    run_sha=digest(manifest), lanes=20, max_requests=MAX_REQUESTS, wall_seconds=CELL_SECONDS)
+                    run_sha=digest(manifest), lanes=20, max_requests=MAX_REQUESTS, wall_seconds=CELL_SECONDS,
+                    publish=publish)
 
 
 def factories(prepared, model, actors, *, sampled):
@@ -248,7 +244,7 @@ def showdown_h2h(prepared, model, manifest, cells, *, replica="scratch"):
         yield cell, status, score, witness
 
 
-async def showdown_fp(prepared, model, manifest, cells, *, replica="scratch"):
+async def showdown_fp(prepared, model, manifest, cells, *, publish, replica="scratch"):
     from .env import BattleStartOverride
     from .foulplay_bridge import ControlledFoulPlayConfig
     from .s0_transfer_starts import showdown_birth
@@ -303,7 +299,10 @@ async def showdown_fp(prepared, model, manifest, cells, *, replica="scratch"):
             birth=birth[0], seed=raw["seed"], fp_seed=raw["fp_seed"],
         )
 
-    return await asyncio.gather(*(play(cell) for cell in cells))
+    async def publish_finished(cell):
+        publish(await play(cell))
+
+    await asyncio.gather(*(publish_finished(cell) for cell in cells))
 
 
 def main():
@@ -321,44 +320,42 @@ def main():
     parser.add_argument("--bridge-sha")
     args = parser.parse_args()
     root = args.out.resolve()
-    terminal = root / f"{args.side}.terminal.json"
-    before = time.monotonic()
-    try:
-        inputs, config = load_settings(args.runtime, args.runtime_sha, args.labels, args.labels_sha)
-        if args.side == "showdown":
-            if args.bridge is not None:
-                install_bridge(args.bridge, args.bridge_sha)
-            prepared, manifest = prepare(args, inputs, config, root)
-            joined = wait_for(root / "engine.join.json", "engine partner did not join",
-                              peer_terminal=root / "engine.terminal.json")
-            if joined != dict(manifest_sha256=digest(manifest)):
-                raise ValueError("engine joined a different scratch manifest")
-        else:
-            manifest = wait_for(root / "manifest.json", "Showdown partner did not publish a scratch manifest",
-                                peer_terminal=root / "showdown.terminal.json")
-        if (manifest["source_commit"] != source_commit()
-                or manifest["runtime_sha256"] != args.runtime_sha
-                or manifest["labels_sha256"] != args.labels_sha or manifest["bridge_sha256"] != args.bridge_sha
-                or manifest["dry_run"] is not True):
-            raise ValueError("partner source or scratch input manifest differs")
-        if args.side == "engine":
-            write_once(root / "engine.join.json", dict(manifest_sha256=digest(manifest)))
-        cells = [c for c in expected_cells(manifest["banks"], dry_run=True).values()
-                 if c["environment"] == args.side]
-        if args.side == "engine":
-            results = list(engine(inputs, config, manifest, cells))
-        else:
-            results = list(showdown_h2h(prepared, config["model"], manifest, [c for c in cells if c["assay"] == H2H]))
-            results += asyncio.run(showdown_fp(prepared, config["model"], manifest, [c for c in cells if c["assay"] == FP]))
-        records = [row(manifest, r) for r in results]
-        name = f"{args.side}.cells.json"
-        shard = write_once(root / name, records)
-        write_once(terminal, dict(dry_run=True, status="COMPLETE", cells=len(records), name=name,
-                                 status_counts=dict(Counter(r["status"] for r in records)),
-                                 sha256=shard, elapsed_seconds=time.monotonic() - before))
-    except BaseException as error:
-        write_once(terminal, dict(dry_run=True, status="FAILED", reason=f"{type(error).__name__}: {error}"))
-        raise
+    inputs, config = load_settings(args.runtime, args.runtime_sha, args.labels, args.labels_sha)
+    if args.side == "showdown":
+        if args.bridge is not None:
+            install_bridge(args.bridge, args.bridge_sha)
+        prepared, manifest = prepare(args, inputs, config, root)
+        joined = wait_for(root / "engine.join.json", "engine partner did not join",
+                          peer_terminal=root / "engine.terminal.json")
+        if joined != dict(manifest_sha256=digest(manifest)):
+            raise ValueError("engine joined a different scratch manifest")
+    else:
+        manifest = wait_for(root / "manifest.json", "Showdown partner did not publish a scratch manifest",
+                            peer_terminal=root / "showdown.terminal.json")
+    if (manifest["source_commit"] != source_commit()
+            or manifest["runtime_sha256"] != args.runtime_sha
+            or manifest["labels_sha256"] != args.labels_sha or manifest["bridge_sha256"] != args.bridge_sha
+            or manifest["dry_run"] is not True):
+        raise ValueError("partner source or scratch input manifest differs")
+    if args.side == "engine":
+        write_once(root / "engine.join.json", dict(manifest_sha256=digest(manifest)))
+    expected = {key: cell for key, cell in expected_cells(manifest["banks"], dry_run=True).items()
+                if cell["environment"] == args.side}
+    cells = list(expected.values())
+
+    def publish(result):
+        cell, status, score, evidence = result
+        if expected.get(cell_key(cell)) != cell:
+            raise ValueError("result belongs to an unexpected scratch cell")
+        write_once(journal_path(root, cell), cell_record(manifest, cell, status, score, evidence))
+
+    if args.side == "engine":
+        engine(inputs, config, manifest, cells, publish=publish)
+    else:
+        for result in showdown_h2h(prepared, config["model"], manifest, [c for c in cells if c["assay"] == H2H]):
+            publish(result)
+        asyncio.run(showdown_fp(prepared, config["model"], manifest, [c for c in cells if c["assay"] == FP],
+                               publish=publish))
 
 
 if __name__ == "__main__":

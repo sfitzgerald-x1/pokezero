@@ -10,12 +10,48 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 from .s0_transfer_harness import wait_for
-from .s0_transfer_roster import write_once
+from .s0_transfer_roster import SCHEMA, cell_record, digest, expected_cells, journal_path, write_once
 
 
 DEADLINE_SECONDS = {"engine": 5400, "showdown": 5400}
+
+
+def seal_side(root, side, exit_code, elapsed_seconds):
+    terminal_path = root / f"{side}.terminal.json"
+    manifest_path = root / "manifest.json"
+    if not manifest_path.is_file():
+        write_once(terminal_path, dict(dry_run=True, status="FAILED", worker_exit_code=exit_code,
+                                      reason="worker exited before a scratch manifest was available"))
+        return False
+    manifest = json.loads(manifest_path.read_bytes())
+    expected = expected_cells(manifest["banks"], dry_run=True)
+    if (manifest["schema"] != SCHEMA or manifest["dry_run"] is not True
+            or manifest["expected_cells_sha256"] != digest(list(expected.values()))):
+        raise ValueError("cannot seal cells from a changed scratch manifest")
+    records = []
+    missing = 0
+    for cell in expected.values():
+        if cell["environment"] != side:
+            continue
+        path = journal_path(root, cell)
+        if path.is_file():
+            records.append(json.loads(path.read_bytes()))
+        else:
+            missing += 1
+            reason = f"worker exit {exit_code} before a durable cell result"
+            records.append(cell_record(manifest, cell, "FAILED", None, {"reason": reason}))
+    name = f"{side}.cells.json"
+    shard = write_once(root / name, records)
+    complete = exit_code == 0 and missing == 0
+    write_once(terminal_path, dict(
+        dry_run=True, status="COMPLETE" if complete else "PARTIAL", name=name, sha256=shard,
+        cells=len(records), missing_journal=missing, worker_exit_code=exit_code,
+        elapsed_seconds=elapsed_seconds, status_counts=dict(Counter(r["status"] for r in records)),
+    ))
+    return complete
 
 
 def finalize(root):
@@ -24,7 +60,7 @@ def finalize(root):
     producer_counts = Counter()
     for side in ("engine", "showdown"):
         terminal = wait_for(root / f"{side}.terminal.json", f"{side} terminal receipt absent")
-        if terminal.get("status") != "COMPLETE" or terminal.get("dry_run") is not True:
+        if terminal.get("status") not in ("COMPLETE", "PARTIAL") or terminal.get("dry_run") is not True:
             raise ValueError(f"{side} failed before sealing its scratch cells")
         name = f"{side}.cells.json"
         if terminal["name"] != name:
@@ -53,6 +89,7 @@ def supervise(root, side, rest):
         env["JAX_PLATFORMS"] = "cpu"
     command = [sys.executable, "-m", "pokezero.s0_transfer_harness", side,
                "--out", str(root), *rest]
+    started = time.monotonic()
     with subprocess.Popen(command, env=env, start_new_session=True) as child:
         try:
             code = child.wait(timeout=DEADLINE_SECONDS[side])
@@ -64,9 +101,14 @@ def supervise(root, side, rest):
                 os.killpg(child.pid, signal.SIGKILL)
                 child.wait()
             code = 124 if isinstance(error, subprocess.TimeoutExpired) else 130
-    if code == 0 and side == "showdown":
-        finalize(root)
-    return code
+    complete = seal_side(root, side, code, time.monotonic() - started)
+    if side == "showdown" and (root / "manifest.json").is_file():
+        try:
+            finalize(root)
+        except (OSError, TimeoutError, ValueError, subprocess.SubprocessError) as error:
+            print(f"{type(error).__name__}: {error}", file=sys.stderr)
+            return code or 1
+    return code if complete else (code or 1)
 
 
 def main():
