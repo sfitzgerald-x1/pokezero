@@ -31,6 +31,7 @@ import uuid
 
 import numpy as np
 from pokezero.v2_lr_start import LRStart, SCALING_RULES, scaled_peak_rate
+from pokezero.v2_campaign_schedule import CampaignSchedule
 
 from gpu_engine.v2_bench_collector import log
 
@@ -223,6 +224,7 @@ def _validate_lr_start_reports(runtime, reports, plan, policy):
     if not reports or len(reports) > len(plan.iterations):
         raise ValueError('resuming LR start requires its committed fused rounds')
     start_update = start_row = start_game = 0
+    campaign = CampaignSchedule() if runtime.v2_config.campaign is not None else None
     for iteration, report in enumerate(reports):
         games = sum(len(batch.games) for batch in plan.iterations[iteration])
         end_game = start_game + games
@@ -236,11 +238,17 @@ def _validate_lr_start_reports(runtime, reports, plan, policy):
                 or type(steps) is not int or type(rows) is not int or steps <= start_update
                 or rows <= start_row or training['updates'] != steps - start_update):
             raise ValueError('LR-start report progress differs from the declaration')
+        if campaign is not None:
+            recorded = CampaignSchedule(**training['campaign_schedule'])
+            if recorded != campaign:
+                if start_game == 0 or campaign.advance_next_step(start_game) != recorded:
+                    raise ValueError('campaign history changes outside an eligible committed boundary')
+                campaign = recorded
         origin = (start_update, start_row)
         start_update, start_row, start_game = steps, rows, end_game
     if (runtime.cursor is None or not runtime.cursor['complete'] or runtime.window is None
             or asdict(runtime.window) != window or runtime.lr_start_origin != origin
-            or (runtime.steps, runtime.rows) != (start_update, start_row)):
+            or (runtime.steps, runtime.rows) != (start_update, start_row) or campaign != runtime.v2_config.campaign):
         raise ValueError('LR-start round ledger differs from the committed checkpoint')
 
 
@@ -266,6 +274,10 @@ def argument_parser():
         help='opt in to global-batch peak LR scaling and optional update warmup')
     parser.add_argument('--lr-warmup-updates', type=int,
         help='number of global optimizer updates to reach peak LR (default 0 with --lr-start)')
+    parser.add_argument('--campaign-anneal', action='store_true',
+        help='opt in to the 50M/75M LR cuts and automatic 90M–100M cooldown; requires LR-start warmup')
+    parser.add_argument('--advance-campaign-step-at', type=int,
+        help='apply an authorized advance at this exact committed game boundary on resume')
     parser.add_argument('--order', default='ordered')
     parser.add_argument('--row-order', choices=('tick', 'file'), default=None,
         help='tick: collection order; file (default for new runs): the file pipeline cache order (block, frame, row, owner). '
@@ -324,6 +336,10 @@ def main(argv=None, *, distribution=None):
         lr_start = None if args.lr_start is None else LRStart(args.lr_start, args.lr_warmup_updates or 0)
     except ValueError as error:
         parser.error(str(error))
+    if args.campaign_anneal and (lr_start is None or lr_start.warmup_updates <= 0):
+        parser.error('--campaign-anneal requires --lr-start and positive --lr-warmup-updates')
+    if args.advance_campaign_step_at is not None and (not args.campaign_anneal or args.advance_campaign_step_at <= 0):
+        parser.error('--advance-campaign-step-at requires --campaign-anneal and a positive boundary')
     if bool(args.config) == bool(args.declaration):raise SystemExit('exactly one of --config or --declaration')
     out = Path(args.out);(out / 'artifacts').mkdir(parents=True, exist_ok=True);(out / 'audit').mkdir(exist_ok=True)
     wall_start = time.perf_counter()
@@ -342,6 +358,10 @@ def main(argv=None, *, distribution=None):
     plan = select_learner_precision(context, args.learner_precision)
     plan = select_learner_lr_start(context, lr_start)
     lr_start_policy = context['declared'].get('lr_start') if lr_start is not None else None
+    base_campaign = CampaignSchedule() if args.campaign_anneal else None
+    if base_campaign is not None:
+        # Distributed resume compares this contract with the persisted JSON value.
+        context['declared'] = dict(context['declared'], campaign_anneal=json.loads(runs._json(asdict(base_campaign))))
     if distribution is not None:
         distribution.bind(context, args)
     declaration_sha256 = runs._sha(plan.manifest())
@@ -379,7 +399,7 @@ def main(argv=None, *, distribution=None):
     roots = {first.archive_sha256: Path(args.reference_run)}
     v2_config = v2t.V2Config(mode=args.mode, order=args.order, optimizer='fused', check_interval=args.check_interval,
         distributed_rows=distribution is not None, native_embedding_backward=args.native_embedding_backward,
-        fallback_random=args.fallback_random, lr_start=lr_start)
+        fallback_random=args.fallback_random, lr_start=lr_start, campaign=base_campaign)
     placement = {} if distribution is None else dict(process_group=distribution.process_group)
     def read_resume_manifest():
         try:
@@ -397,6 +417,12 @@ def main(argv=None, *, distribution=None):
                 raise ValueError('original fused run declaration binding required')
             if saved.get('lr_start') != lr_start_policy:
                 raise ValueError('resume requires the original fused LR-start declaration')
+            raw_campaign = saved.get('campaign_schedule')
+            if args.campaign_anneal != (raw_campaign is not None):
+                raise ValueError('resume requires the original fused campaign option')
+            campaign = CampaignSchedule(**raw_campaign) if args.campaign_anneal else None
+            if campaign is not None and campaign.cooldown is not None:
+                raise ValueError('diagnostic cooldown needs its separately bound child run')
             if distribution is not None:
                 distribution.check_resume(saved)
             elif 'distribution' in saved:
@@ -412,9 +438,10 @@ def main(argv=None, *, distribution=None):
             proof = None
             if not plan.self_moves and digest in receipts:
                 proof = encoding.off_from_receipt(receipts[digest])
-            return restored, receipts, recorded or args.row_order, proof
+            return restored, receipts, recorded or args.row_order, proof, campaign
 
-        snapshots, encoding_receipts, row_order, off_provenance = _validated_on_all_ranks(distribution, resume_inputs)
+        snapshots, encoding_receipts, row_order, off_provenance, campaign = _validated_on_all_ranks(distribution, resume_inputs)
+        v2_config = replace(v2_config, campaign=campaign)
         reports = saved['reports']
         for snapshot in snapshots[1:]:roots[snapshot.archive_sha256] = out
         checkpoint = out / snapshots[-1].checkpoint
@@ -425,8 +452,15 @@ def main(argv=None, *, distribution=None):
         if lr_start is not None:
             _validated_on_all_ranks(distribution, lambda: _validate_lr_start_reports(
                 runtime, reports, plan, lr_start_policy))
+        if args.advance_campaign_step_at is not None:
+            advanced = _validated_on_all_ranks(distribution, lambda: v2t.advance_campaign_step(
+                runtime, args.advance_campaign_step_at))
+            log('ADVANCE_CAMPAIGN_STEP', declared_game=args.advance_campaign_step_at,
+                step_down_games=advanced.step_down_games)
         log('RESUMED', completed_iterations=len(reports), checkpoint=str(checkpoint), steps=runtime.steps, row_order=row_order)
     else:
+        if args.advance_campaign_step_at is not None:
+            raise ValueError('campaign advance requires resuming a committed checkpoint')
         snapshots = [first];reports = [];row_order = args.row_order or 'file'
         encoding_receipts = {}
         initializer, proof = encoding.original_initializer(args.reference_run, first)
@@ -574,6 +608,8 @@ def main(argv=None, *, distribution=None):
             audit=audit_records, games_matching_reference=same, snapshot=asdict(snapshot))
         if lr_start is not None:
             report['training']['lr_start'] = train_report['lr_start']
+        if runtime.v2_config.campaign is not None:
+            report['training']['campaign_schedule'] = asdict(runtime.v2_config.campaign)
         if distribution is not None:
             report = distribution.reduce_report(report)
         reports.append(report)
@@ -586,6 +622,8 @@ def main(argv=None, *, distribution=None):
                 declaration_sha256=declaration_sha256, checkpoint_encoding_receipts=encoding_receipts)
             if lr_start is not None:
                 state['lr_start'] = lr_start_policy
+            if runtime.v2_config.campaign is not None:
+                state['campaign_schedule'] = asdict(runtime.v2_config.campaign)
             if distribution is not None:
                 state['distribution'] = distribution.contract
             write_json(state_path, state, durable=deferred)

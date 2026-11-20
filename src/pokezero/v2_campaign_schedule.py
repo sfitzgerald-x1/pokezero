@@ -5,6 +5,7 @@ from numbers import Real
 from typing import Literal, Protocol
 
 from .v5_contract import _binding
+from .v2_lr_start import LRStart as StartPolicy
 
 MILLION = 1_000_000
 BACKSTOP_STEPS = (50 * MILLION, 75 * MILLION)
@@ -28,6 +29,25 @@ class LRStart(Protocol):
     def rate_at(self, completed_updates: int) -> float:
         """Rate of the next update. Warmup update W reaches initial_lr."""
         ...
+
+
+@dataclass(frozen=True)
+class CampaignStart:
+    """Adapt the reviewed LR-start policy and its already-scaled peak."""
+
+    policy: StartPolicy
+    initial_lr: float
+
+    @property
+    def warmup_updates(self) -> int:
+        return self.policy.warmup_updates
+
+    @property
+    def scaling(self) -> str:
+        return self.policy.scaling
+
+    def rate_at(self, completed_updates: int) -> float:
+        return self.policy.rate(self.initial_lr, completed_updates)
 
 
 def _positive_rate(value):

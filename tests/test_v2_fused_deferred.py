@@ -1,6 +1,6 @@
 """Run fused round coordination with real V2 training, checkpoints and CPU/Gloo ranks."""
 from contextlib import ExitStack
-from dataclasses import asdict
+from dataclasses import asdict, make_dataclass
 from datetime import timedelta
 from itertools import count
 import json
@@ -24,7 +24,7 @@ except ImportError:
 
 
 def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, writer_failure=False,
-                publication_failure=False, stop=False, invalid_resume_rank=None):
+                publication_failure=False, stop=False, invalid_resume_rank=None, campaign=False, advance=None):
     from gpu_engine import v2_bench_trainer, v2_collector, v5_device_backend, v5_model
 
     torch.set_num_threads(1)
@@ -33,10 +33,12 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
     batches = tuple((run.Batch(tuple(run.Game(i+1, f'game-{i}', 100+i, (2*i, 2*i+1))
                               for i in range(8*j, 8*j+8)), 10+j, 20+j),) for j in range(5))
     declaration = dict(fixture='fused-boundary', evaluation=None if evaluation is None else evaluation.metadata())
-    plan = SimpleNamespace(model=model, loss=loss, train=train, evaluation=evaluation, self_moves=False,
+    plan_fields = dict(model=model, loss=loss, train=train, evaluation=evaluation, self_moves=False,
         iterations=batches, games=tuple(g for b, in batches for g in b.games), discount=1.,
         max_requests=64, historical_fraction=.5, historical_window=2,
         manifest=lambda: declaration, evaluation_milestones=lambda: {1: 16, 3: 32})
+    plan_type = make_dataclass('CampaignFixturePlan', plan_fields) if campaign else SimpleNamespace
+    plan = plan_type(**plan_fields)
     context = dict(plan=plan, declared={}, preparation_seconds=1, gender=None, pool=None,
         prepared=SimpleNamespace(engine_tables=None, observation_tables=None))
     snapshot = run.Snapshot(-1, 'initial.pt', 'a'*64, 'initial.npz', 'b'*64, run._sha(model.metadata()))
@@ -46,6 +48,10 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
             '--torch-memory-fraction', '0', '--mode', 'eager', '--lanes', '8']
     if limit is not None:
         argv += ['--max-iterations', str(limit)]
+    if campaign:
+        argv += ['--lr-start', 'sqrt', '--lr-warmup-updates', '2', '--campaign-anneal']
+    if advance is not None:
+        argv += ['--advance-campaign-step-at', str(advance)]
     phases = dict(saves=[], exports=[], state=[], collect=[], issues=[])
 
     class Rows:
@@ -213,6 +219,27 @@ def run_four(root, attempt, **options):
 
 @unittest.skipIf(torch is None, 'torch required')
 class FusedDeferredTests(unittest.TestCase):
+    def test_four_rank_campaign_advances_once_and_restores_the_sealed_schedule(self):
+        from pokezero.v2_campaign_schedule import BACKSTOP_STEPS, FINAL_COOLDOWN
+        from pokezero.v2_lr_start import scaled_peak_rate
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = run_four(root, 'campaign-prefix', campaign=True, limit=1)
+            self.assertEqual([entry['exit'] for entry in first], [0] * 4)
+            second = run_four(root, 'campaign-cut', campaign=True, advance=8, limit=2)
+            self.assertEqual([entry['exit'] for entry in second], [0] * 4)
+            third = run_four(root, 'campaign-resume', campaign=True, limit=3)
+            self.assertEqual([entry['exit'] for entry in third], [0] * 4)
+            state = json.loads((root/'run/state.json').read_bytes())
+            self.assertEqual(state['distribution']['declared']['campaign_anneal']['final_cooldown'], list(FINAL_COOLDOWN))
+            reports = state['reports']
+            self.assertEqual([report['training']['campaign_schedule']['step_down_games'] for report in reports],
+                             [list(BACKSTOP_STEPS), [8, BACKSTOP_STEPS[1]], [8, BACKSTOP_STEPS[1]]])
+            peak = scaled_peak_rate(8, 'sqrt')
+            rates = [report['training']['iteration_mean']['learning_rate'] for report in reports]
+            self.assertEqual(rates, [.75 * peak, .3 * peak, .3 * peak])
+
     def test_rank_zero_writer_failure_reaches_every_rank_promptly(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
