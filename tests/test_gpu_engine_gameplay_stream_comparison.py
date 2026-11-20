@@ -256,6 +256,20 @@ class GameplayReferenceTests(unittest.TestCase):
             self.assertEqual(control.end(),[{'kind':'UNRESOLVED','role':'NO_NEW_HOOK'}]);self.assertFalse(control.control.exists())
             self.assertIn('fidelity_bridge.mjs',Path(control.config.bridge_path).read_text())
 
+    def test_chance_control_preserves_historical_effect_width(self):
+        fixture = json.loads((Path(__file__).parent/'fixtures/state_schemas/pre_shed_skin_6caf071b.json').read_text())
+        raw = {k:v.tolist() for k,v in chance()._asdict().items() if v is not None and k != 'shed_skin'}
+        raw['effect'] = [[[0, 0, 0, 1], [15, 0, 3, 0]]]
+        captured = dict(stream_id=101, request=1, before={'state':fixture['packet']}, chance=raw)
+        with tempfile.TemporaryDirectory() as tmp:
+            control = comparison.ChanceControl(Path(tmp)/'native', comparison.original.LocalShowdownConfig())
+            tape = control.begin(captured, fixture['layout'])
+            self.assertEqual(tape['schema'], 'pokezero.gpu_chance_tape.v3')
+            self.assertEqual(tape['effect'], raw['effect'][0])
+            raw['effect'][0][0][3] = 2
+            with self.assertRaisesRegex(ValueError, 'actual original finite chance operands required'):
+                control.begin(captured, fixture['layout'])
+
     def test_incremental_original_backend_ingests_each_owner_delta_once_and_rejects_peer(self):
         calls=[]
         class Backend:

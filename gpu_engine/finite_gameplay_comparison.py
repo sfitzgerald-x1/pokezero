@@ -75,17 +75,18 @@ class ChanceControl:
         value=dict(schema='pokezero.gpu_chance_tape.v1',nonce=f"{captured['stream_id']}:{captured['request']}",
             draws=draws.tolist(),secondary=secondary.tolist(),sleep_talk=sleep.tolist())
         if 'effect' in raw:
-            # Tape v2 (fidelity R): the appended effect stream, from the saved block on a suspended turn.
+            # Replay the saved block on a suspended turn and retain the original wire width otherwise.
             effect=state.effect_draws[0] if pending else arrays['effect'][0]
-            if (effect.shape!=(2,5) or effect.dtype.kind not in 'iu' or np.any(effect<0)
-                    or np.any(effect>=np.array([16,16,4,2,2]))):
+            if (effect.shape not in ((2,4), (2,5)) or effect.dtype.kind not in 'iu' or np.any(effect<0)
+                    or np.any(effect>=np.array(fidelity.EFFECT_BOUNDS[:effect.shape[1]]))):
                 raise ValueError('actual original finite chance operands required')
             # Tape v3 (fidelity tier D): phazing, the contact abilities' and the drag's auxiliary roll (the saved block on a
             # suspended turn), so Static / Poison Point / Flame Body / Effect Spore rolls resolve as the engine read them.
             phazing=state.phazing_draws[0] if pending else arrays['phazing'][0]
             if phazing.shape!=(2,) or phazing.dtype.kind not in 'iu' or np.any(phazing<0) or np.any(phazing>=60):
                 raise ValueError('actual original finite chance operands required')
-            value.update(schema='pokezero.gpu_chance_tape.v5',effect=effect.tolist(),phazing=phazing.tolist())
+            version = 'v3' if effect.shape[1] == 4 else 'v5'
+            value.update(schema=f'pokezero.gpu_chance_tape.{version}',effect=effect.tolist(),phazing=phazing.tolist())
         if 'shed_skin' in raw:
             cure=state.shed_skin_draws[0] if pending else arrays['shed_skin'][0]
             if cure.shape!=(2,) or cure.dtype.kind not in 'iu' or np.any(cure<0) or np.any(cure>=100):

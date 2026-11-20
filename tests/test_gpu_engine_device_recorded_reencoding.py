@@ -72,11 +72,14 @@ def dataset(folder,*,reference_value=0,routing_mismatch=False,legacy_suspended=F
         value=packet(state(root_id,step))
         if legacy:
             value['state']={name:value['state'][name] for name in legacy['packet']}
+            value['state']['effect_draws']=[[[0, 0, 0, 0]] * 2]
             value['state']['pending_residual']=[root_id==0 and step==1]
         return value
     def saved_chance():
         value=chance()
-        if legacy:value.pop('shed_skin')
+        if legacy:
+            value.pop('shed_skin')
+            value['effect']=[[[0, 0, 0, 1], [15, 0, 3, 0]]]
         return value
     cells=[dict(stream_id=10+n,root_id=20+n,native_seed=30+n,team_indices=[2*n,2*n+1])for n in range(2)]
     refdoc=dict(path='/not-loaded',sha256='a'*64)
@@ -161,7 +164,14 @@ class DeviceRecordedReencodingTests(unittest.TestCase):
             newrows=[x for x,_ in r._records(Path(folder)/'new'/'decisions.jsonl')]
             self.assertEqual(len(newrows),8)
             self.assertEqual([x['original_metadata'] for x in newrows],oldrows)
-            self.assertEqual(len([x for x in runtime.calls if x[0]=='advance']),2)
+            advances = [call for call in runtime.calls if call[0] == 'advance']
+            self.assertEqual([call[1] for call in advances], [101, 100])
+            for call in advances:
+                np.testing.assert_array_equal(call[2].effect, [[[0, 0, 0, 1], [15, 0, 3, 0]]])
+            invalid = chance()
+            invalid['effect'] = [[[0, 0, 0, 2], [0, 0, 0, 0]]]
+            with self.assertRaisesRegex(ValueError, 'saved chance shape/range differs: effect'):
+                r.decode_chance(invalid)
 
     def test_numeric_mismatch_stops_root_refuses_but_keeps_original_agreement(self):
         with tempfile.TemporaryDirectory()as folder:
