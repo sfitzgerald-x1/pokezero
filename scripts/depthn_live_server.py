@@ -273,6 +273,26 @@ class Recorder:
 def _print(row):print(json.dumps(row,sort_keys=True,default=repr),flush=True)
 
 
+R3PA_MODES=('off','gated','replace_gate')   # gpu_engine.depthn_r3pa.MODES, spelled out so the flag-off server never imports it
+
+
+class _R3paLabels:
+    """DepthNLiveSearch's r3pa_labels callable over the engine's lane-label module L (gpu_engine.depthn_r3pa_labels):
+    L.LaneLabels(executor, vocabulary).views(worlds, owner) of a root's worlds, refused (depthn_r3pa.LaneUnlabelled) when
+    L.peer_legal_mismatch(flat, views) finds a world whose kept lanes are not its peer-legal lanes, else
+    L.lane_labels_live(views, names): nine labels per world, block order. warm(worlds) is the labels' own warmup."""
+    def __init__(self,module,executor,vocabulary):self.L=module;self.lanes=module.LaneLabels(executor,vocabulary)
+
+    def __call__(self,worlds,owner,flat):
+        views=self.lanes.views(worlds,owner);mismatch=self.L.peer_legal_mismatch(flat,views)
+        if mismatch:
+            from gpu_engine.depthn_r3pa import LaneUnlabelled
+            raise LaneUnlabelled(f'kept lanes other than the peer-legal lanes: {mismatch}')
+        return self.L.lane_labels_live(views,self.lanes.names)
+
+    def warm(self,worlds):return self.lanes.warm(worlds)
+
+
 PRECISION_ENVIRONMENT='JAX_DEFAULT_MATMUL_PRECISION'
 
 
@@ -426,6 +446,9 @@ def parser():
         'ARGMAX_MEAN_COMPLETED_Q (default: averaging plays, or br_fp under --reply-archive) or NOISE_GATED_K2 (that choice only past '
         'a 2-standard-error per-world gap over the root logits\' argmax; screen-r4a variant B with --reply-archive)')
     p.add_argument('--reply-checkpoint-sha256',help='the reply export\'s checkpoint sha256 (required with --reply-archive)')
+    p.add_argument('--r3pa',choices=R3PA_MODES,default='off',help='R3pa: each world\'s root reply prior replaced by the label-mapped '
+        'cross-world average (gpu_engine.depthn_r3pa) before the decision; gated keeps NOISE_GATED_K2 on it (needs --root-operator '
+        'NOISE_GATED_K2), replace_gate plays its averaging choice ungated; default off; the header records r3pa when on')
     p.add_argument('--reply-views',choices=('eager','jit','check'),default='eager',help='how --reply-archive builds the peer inputs: eager '
         '(default; bit-exact with the RR re-pricer), jit (one vmapped program per root), or check (eager plays; jit reported beside)')
     p.add_argument('--matmul-precision',choices=('highest','high','default'),default='highest',
@@ -465,6 +488,7 @@ def options(argv=None):
     except ValueError as error:p.error(str(error))
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     check_reply_arguments(p,args)
+    if getattr(args,'r3pa','off')=='gated'and args.root_operator!=live.NOISE_GATED_K2:p.error(f'--r3pa gated needs --root-operator {live.NOISE_GATED_K2}')
     if getattr(args,'eager_peer_fold',False)and not(args.redact_private_reveals or args.peer_view_b):
         p.error('--eager-peer-fold folds the peer wire for the redaction: it needs --redact-private-reveals or --peer-view-b')
     if args.prepare_workers<0:p.error('--prepare-workers must be >= 0')
@@ -555,12 +579,16 @@ def build(args):
         refuse_search_serving(meta=getattr(model,'meta',None),context='depthn live server reply model')
         reply=ReplyPrior(executor,model,mode=args.reply_views,identity=dict(archive_sha256=args.reply_archive_sha256,
             checkpoint_sha256=args.reply_checkpoint_sha256,view=reply_view(getattr(model,'meta',None))))
+    r3pa=getattr(args,'r3pa','off');extra={}
+    if r3pa!='off':   # the engine's lane labels on the pricers' shared executor; flag off never imports them
+        from gpu_engine import depthn_r3pa_labels
+        extra=dict(r3pa=r3pa,r3pa_labels=_R3paLabels(depthn_r3pa_labels,executor,constructor.metadata['vocabulary']))
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),
         recipe=v5_gumbel.Recipe(args.recipe_seed),tree_commit=args.tree_commit or tree_commit(),min_price_seconds=args.min_price_seconds,
         max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes,
         redact_private_reveals=bool(getattr(args,'redact_private_reveals',False)),reply=reply,
         root_operator=getattr(args,'root_operator',live.ROOT_OPERATOR),
-        **({'peer_view_b':True}if getattr(args,'peer_view_b',False)else{}),**({'ability_guard':True}if getattr(args,'ability_guard',False)else{}))
+        **({'peer_view_b':True}if getattr(args,'peer_view_b',False)else{}),**({'ability_guard':True}if getattr(args,'ability_guard',False)else{}),**extra)
 
 
 def build_constructor(args):
@@ -645,7 +673,8 @@ def header(args,search):
             prepare_timeout_seconds=args.prepare_timeout_seconds,batch_window_seconds=args.batch_window_seconds,
             flush_guard_seconds=args.flush_guard_seconds,reply_forward=args.reply_forward,local_battles=args.local_battles,
             **({}if not args.split_worlds else dict(split_worlds=args.split_worlds,split_min_worlds=args.split_min_worlds)))),
-        **({}if not getattr(args,'prepare_warm_in_sha256',None)else dict(prepare_warm_in_sha256=args.prepare_warm_in_sha256)))
+        **({}if not getattr(args,'prepare_warm_in_sha256',None)else dict(prepare_warm_in_sha256=args.prepare_warm_in_sha256)),
+        **({}if getattr(search,'r3pa','off')=='off'else dict(r3pa=search.r3pa)))
 
 
 def main(argv=None):

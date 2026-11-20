@@ -15,6 +15,7 @@ import numpy as np
 from pokezero import v5_gumbel as original
 from pokezero.phase_d_search_server import SCHEMA,encode
 from gpu_engine import constructor_worlds as cw,depthn_backups as backups,depthn_live_search as live,search_hedge as hedge
+from gpu_engine import depthn_r3pa as r3pa
 from gpu_engine import phase_d_protocol_constructor as pc
 from gpu_engine.phase_d_live_worlds import Refusal
 from tests import test_gpu_engine_constructor_worlds as CW
@@ -920,6 +921,140 @@ class NoiseGatedTests(unittest.TestCase):
         with patch.object(live.hedge, 'per_world_q', return_value=[{0: 0., 1: float('nan')}, {0: 0., 1: .3}]):
             bad = live.noise_gate(live.decide([(world, world)], logits, legal), [(world, world)], logits, legal)
         self.assertEqual((bad['status'], bad['action_index']), ('REFUSED', None));self.assertTrue(bad['refusal'].startswith('NOISE_GATE_ERROR'))
+
+
+def scrub(rows):
+    """Responses without their clock readings (timings, decision_seconds): what two runs of the same inputs must share byte for byte."""
+    return [dict(r, timings=None, decision_seconds=None) for r in rows]
+
+
+class R3paTests(unittest.TestCase):
+    """--r3pa (gpu_engine.depthn_r3pa): each priced root decided on its blocks with R3pa's substituted root priors (after the reply
+    model's logits under one), today's decision reported beside it; flag off answers exactly as before. LiveSearchTests' harness
+    with a fake lane-labels callable."""
+    setUpClass = classmethod(LiveSearchTests.setUpClass.__func__);make_pricers = classmethod(LiveSearchTests.make_pricers.__func__)
+    setUp, search, outcome, run_batch = LiveSearchTests.setUp, LiveSearchTests.search, LiveSearchTests.outcome, LiveSearchTests.run_batch
+
+    def outcomes(self, n):return {(f'r{i}', 0):self.outcome(i) for i in range(n)}
+
+    @staticmethod
+    def labels(worlds, owner, flat):
+        """Every requested world's kept lane b: move:<b> on 0-3, an unseen switch on 4-8; None elsewhere."""
+        return [[(f'move:{b}' if b < 4 else r3pa.UNSEEN) if w.opponent_requested and w.opponent_legal[b] else None for b in range(9)] for w in flat]
+
+    def recorded(self, search, reqs):
+        """(rows, every decide call's (blocks, root_logits, root_legal), every effect guard call's reply_logits)."""
+        calls, guards, real, real_guard = [], [], live.decide, live.DepthNLiveSearch._effect_guard
+        def recording(blocks, root_logits, root_legal):calls.append((blocks, list(root_logits), tuple(root_legal)));return real(blocks, root_logits, root_legal)
+        def guard(s, frame, root, made, request, children, notes, choice, labels, reply_logits=None):
+            guards.append(reply_logits);return real_guard(s, frame, root, made, request, children, notes, choice, labels, reply_logits=reply_logits)
+        with patch.object(live, 'decide', recording), patch.object(live.DepthNLiveSearch, '_effect_guard', guard):
+            rows, _ = self.run_batch(search, reqs, self.outcomes(len(reqs)))
+        return rows, calls, guards
+
+    def test_flag_off_answers_byte_for_byte_as_before(self):
+        reqs = [request(f'r{i}', 0, stream=90 + i) for i in range(4)]
+        def never(*a):raise AssertionError('flag off never labels')
+        for operator in live.ROOT_OPERATORS:
+            with self.subTest(operator=operator):
+                before, calls, guards = self.recorded(self.search(root_operator=operator), reqs)
+                after, again, guarded = self.recorded(self.search(root_operator=operator, r3pa='off', r3pa_labels=never), reqs)
+                self.assertTrue(any(r['status'] == 'COMPLETE' for r in after));self.assertEqual(len(again), len(calls))   # no extra decide
+                self.assertEqual(json.dumps(scrub(after), sort_keys=True), json.dumps(scrub(before), sort_keys=True))
+                self.assertEqual(guarded, guards);self.assertTrue(all('r3pa' not in r for r in after))
+
+    def test_gated_and_replace_gate_play_choose_and_the_guard_reads_the_pre_r3pa_logits(self):
+        from collections import namedtuple
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        Out = namedtuple('Out', 'policy_logits');champion = self.evaluator
+        class Negated:
+            identity = ('champion', 'cd' * 32, 'bfloat16')
+            def __call__(self, params, inputs):return Out(-champion(params, inputs).policy_logits)
+        reqs = [request(f'r{i}', 0, stream=100 + i) for i in range(4)];seen = [];moved = differs = 0
+        def labels(worlds, owner, flat):seen.append((len(worlds), owner, len(flat)));return self.labels(worlds, owner, flat)
+        for mode in ('gated', 'replace_gate'):
+            for reply in (None, ReplyPrior(self.executor, Negated(), PARAMS[0])):
+                with self.subTest(mode=mode, reply=reply is not None):
+                    rows, calls, guards = self.recorded(self.search(root_operator=live.NOISE_GATED_K2, r3pa=mode, r3pa_labels=labels, reply=reply), reqs)
+                    complete = [r for r in rows if r['status'] == 'COMPLETE'];self.assertTrue(complete)
+                    per = 2 if reply is None else 3   # per priced root: (the champion's reported averaging,) today's decision, R3pa's
+                    self.assertEqual((len(calls), len(guards)), (per * len(complete), len(complete)))
+                    for k, (row, guard) in enumerate(zip(complete, guards)):
+                        (blocks, logits, legal), (sub, _, _) = calls[per * k + per - 2], calls[per * k + per - 1]
+                        flat = [w for pair in blocks for w in pair];labs = self.labels(None, None, flat)
+                        want = r3pa.choose(flat, legal, logits, labs, mode);today = r3pa.choose(flat, legal, logits, None, 'off')
+                        self.assertEqual(sub, r3pa.substitute_blocks(blocks, r3pa.root_priors(flat, labs)))
+                        self.assertEqual((row['action_index'], row['q_values']), (want.action, list(want.q)))
+                        self.assertEqual(row['r3pa'], dict(mode=mode, unsubstituted_action=today.action, substituted_action=want.action,
+                                                           gate_passed=None if want.gate is None else want.gate.passed, error=None))
+                        if mode == 'replace_gate':self.assertIsNone(row['noise_gate'])
+                        else:self.assertEqual((row['noise_gate']['candidate'], row['noise_gate']['passed']), (want.candidate, want.gate.passed))
+                        pre = [None if not w.opponent_requested else w.opponent_logits for w in flat]
+                        self.assertEqual(guard, None if reply is None else pre)   # br_fp's union guard: the reply model's logits, never R3pa's
+                        differs += reply is not None and pre != [None if not w.opponent_requested else w.opponent_logits for pair in sub for w in pair]
+                        moved += row['q_values'] != list(today.q)
+                        encode(row);self.assertEqual(set(row), KEYS | {'noise_gate', 'r3pa'} | ({'reply_prior'} if reply is not None else set()))
+        self.assertGreater(moved, 0, 'R3pa should move some root\'s q');self.assertGreater(differs, 0)
+        self.assertTrue(seen);self.assertTrue(all(owner in (0, 1) and worlds == flat for worlds, owner, flat in seen), seen)
+
+    def test_a_labelling_failure_plays_the_unsubstituted_decision(self):
+        reqs = [request(f'r{i}', 0, stream=110 + i) for i in range(3)]
+        plain, _, _ = self.recorded(self.search(root_operator=live.NOISE_GATED_K2), reqs)
+        def broken(worlds, owner, flat):raise ValueError('no labels')
+        def unlabelled(worlds, owner, flat):return [[None] * 9 for _ in flat]
+        def short(worlds, owner, flat):return self.labels(worlds, owner, flat)[1:]
+        for mode in ('gated', 'replace_gate'):
+            for fn, error in ((broken, 'ValueError: no labels'), (unlabelled, 'LaneUnlabelled: lane_unlabelled'), (short, 'ValueError: one label list')):
+                with self.subTest(mode=mode, error=error):
+                    rows, _, _ = self.recorded(self.search(root_operator=live.NOISE_GATED_K2, r3pa=mode, r3pa_labels=fn), reqs)
+                    self.assertTrue(any(r['status'] == 'COMPLETE' for r in rows))
+                    for a, b in zip(plain, rows):
+                        self.assertEqual([b[k] for k in ('status', 'action_index', 'q_values', 'noise_gate', 'effect_guard')],
+                                         [a[k] for k in ('status', 'action_index', 'q_values', 'noise_gate', 'effect_guard')])
+                        if b['status'] != 'COMPLETE':self.assertIsNone(b['r3pa']);continue
+                        r = b['r3pa'];self.assertTrue(r['error'].startswith(error), r['error'])
+                        self.assertEqual((r['mode'], r['unsubstituted_action'], r['substituted_action'], r['gate_passed']),
+                                         (mode, a['action_index'], None, a['noise_gate']['passed']))
+
+    def test_configuration_and_the_ungated_operator(self):
+        for bad in (dict(r3pa='bogus', r3pa_labels=self.labels), dict(r3pa=None, r3pa_labels=self.labels), dict(r3pa='gated'),
+                    dict(r3pa='replace_gate', r3pa_labels='labels'), dict(r3pa='gated', r3pa_labels=self.labels)):   # the last: the default operator
+            with self.subTest(bad=bad), self.assertRaises(ValueError):self.search(**bad)
+        off = self.search();self.assertEqual((off.r3pa, off.r3pa_labels), ('off', None))
+        s = self.search(r3pa='replace_gate', r3pa_labels=self.labels)   # R3pa under ARGMAX_MEAN_COMPLETED_Q: its averaging plays, no gate
+        rows, calls, _ = self.recorded(s, [request('r0', 0, stream=120)])
+        row = rows[0];self.assertEqual(row['status'], 'COMPLETE');self.assertNotIn('noise_gate', row);self.assertEqual(set(row), KEYS | {'r3pa'})
+        blocks, logits, legal = calls[0];flat = [w for pair in blocks for w in pair]
+        want = r3pa.choose(flat, legal, logits, self.labels(None, None, flat), 'replace_gate');today = hedge.averaging(flat, legal)
+        self.assertEqual((row['action_index'], row['q_values']), (want.action, list(want.q)))
+        self.assertEqual(row['r3pa'], dict(mode='replace_gate', unsubstituted_action=hedge.top_action(today.strategy), substituted_action=want.action,
+                                           gate_passed=None, error=None))
+
+    def test_warmup_warms_the_lane_labels_only_when_on(self):
+        outcomes = {('w0', 0):self.outcome(0), ('w1', 0):self.outcome(1)}
+        class Labels:
+            def __init__(self, fail=False):self.warmed = [];self.fail = fail
+            def __call__(self, worlds, owner, flat):return R3paTests.labels(worlds, owner, flat)
+            def warm(self, worlds):
+                if self.fail:raise RuntimeError('no views')
+                self.warmed.append(len(worlds))
+        on, off = Labels(), Labels()
+        with Codex(outcomes):warm = self.search(root_operator=live.NOISE_GATED_K2, r3pa='gated', r3pa_labels=on).warmup([request('w0', 0), request('w1', 0)])
+        with Codex(outcomes):cold = self.search(r3pa_labels=off).warmup([request('w0', 0), request('w1', 0)])
+        self.assertEqual((on.warmed, off.warmed), ([8], []))
+        self.assertEqual((warm['r3pa']['mode'], warm['r3pa']['labels_seats_seconds']), ('gated', None));self.assertGreater(warm['r3pa']['substituted_roots'], 0)
+        self.assertNotIn('r3pa', cold)
+        with Codex(outcomes), self.assertRaisesRegex(RuntimeError, 'R3pa lane labels did not warm'):
+            self.search(r3pa='replace_gate', r3pa_labels=Labels(fail=True)).warmup([request('w0', 0), request('w1', 0)])
+
+    def test_warmup_refuses_ready_when_r3pa_never_substitutes(self):
+        outcomes = {('w0', 0):self.outcome(0), ('w1', 0):self.outcome(1)}
+        class Broken:
+            def __call__(self, worlds, owner, flat):raise ValueError('vocabulary index out of range')
+            def warm(self, worlds):return {0:0., 1:0.}
+        for mode in ('gated', 'replace_gate'):
+            with self.subTest(mode=mode), Codex(outcomes), self.assertRaisesRegex(RuntimeError, 'R3pa substituted no warmup root'):
+                self.search(root_operator=live.NOISE_GATED_K2, r3pa=mode, r3pa_labels=Broken()).warmup([request('w0', 0), request('w1', 0)])
 
 
 class AveragingEquivalenceTests(unittest.TestCase):
