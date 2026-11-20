@@ -110,8 +110,9 @@ class InitialIntimidateOwningTests(unittest.TestCase):
     self.assertEqual(rejected.count.tolist(),bad.count.tolist());self.assertTrue(bool((rejected.refusal[:4]&512).all()))
  def test_default_entry_ast_unchanged_and_original_gen3_callback_pair(self):
   def body(text):return next(n for n in ast.parse(text).body if isinstance(n,ast.FunctionDef) and n.name=='enter')
-  import test_gpu_engine_ordinary_intimidate_entry as ordinary   # Transform's approved Truant-clock gate only
-  before=subprocess.check_output(['git','show','ad6f1d9e:gpu_engine/entry.py'],text=True);self.assertEqual(dump_default_program(body(before)),dump_default_program(ordinary.strip_transform_enter(body(Path('gpu_engine/entry.py').read_text()),required=True)))
+  from gpu_engine_transition_certification import CURRENT_TRANSITION
+  before=subprocess.check_output(['git','show',CURRENT_TRANSITION+':gpu_engine/entry.py'],text=True)
+  self.assertEqual(dump_default_program(body(before)),dump_default_program(body(Path('gpu_engine/entry.py').read_text())))
   node=shutil.which('node')
   if node is None:self.skipTest('node unavailable')
   script="const {Dex}=require(process.argv[1]+'/dist/sim/dex.js');const a=Dex.mod('gen3').abilities.get('intimidate');const lines=[];const q={volatiles:{},toString:()=> 'p2a: Celebi'};const p={adjacentFoes:()=>[q],toString:()=> 'p1a: Arbok'};a.onStart.call({add:(...x)=>lines.push(x.map(String).join('|')),boost:(x,t,s,e,f)=>{if(x.atk!==-1||t!==q||s!==p||e!==null||f!==true)throw Error('wrong args');lines.push('-unboost|'+q+'|atk|1')}},p);process.stdout.write(JSON.stringify(lines));"

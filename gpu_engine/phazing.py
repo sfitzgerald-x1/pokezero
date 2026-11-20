@@ -64,7 +64,7 @@ def drag(state,side,move,roll,table,entry_table,*,eligible,_public_trace=None,_w
         else:
             state,knocked_out=entry.enter(state,side,entry_table,eligible=changed)
     else:
-        state=entry.restore_sleep(state,side,eligible=changed)
+        state=entry.switch_in_status(state,side,eligible=changed)
     if _public_trace is not None:
         _public_trace=callbacks.finish(_public_trace,_whirlwind_record,state)
         return state,changed,knocked_out,_public_trace

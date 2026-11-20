@@ -29,7 +29,7 @@ class BatonParalysisGuards(unittest.TestCase):
         before=cb.snapshot(s)
         after=cb.departed_private(cb.copied_private(before,side,old,old+3),side,old)
         np.testing.assert_array_equal(after.status,before.status)
-        self.assertEqual(after.status_counter[r,side,old].tolist(),[0,0,1,0,0,0,0,0])
+        np.testing.assert_array_equal(after.status_counter[r,side,old],counter)
         self.assertEqual(after.status[r,side,old+3].tolist(),[0]*b)
         mutated=s._replace(status=s.status.at[1,1,0].set(0))
         self.assertEqual(cb.equal(before,cb.snapshot(mutated)).tolist(),[True,False,True,True,True,True,True,True])

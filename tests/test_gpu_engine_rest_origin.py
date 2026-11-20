@@ -124,7 +124,7 @@ class RestOriginTests(unittest.TestCase):
         for side in range(2):
             for origin,expected in ((True,3),(False,5)):
                 s=self.sleeper(side,counter=2,bank=3,origin=origin)
-                out=entry.restore_sleep(s,side,eligible=self.j.array([True]))
+                out=entry.switch_in_status(s,side,eligible=self.j.array([True]))
                 self.assert_sleep(out,side,5,expected,0,origin)
                 out=sleep_talk.before_move(s,side,self.j.array([5]),eligible=self.j.array([True]),sleep_usable=self.j.array([True]))
                 self.assertEqual(int(out.sleep_skipped[0,side,0]),3 if origin else 4)
