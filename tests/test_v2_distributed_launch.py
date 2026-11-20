@@ -86,14 +86,15 @@ class DistributedLaunchTests(unittest.TestCase):
                 rc = v2_distributed.main(['--ranks', '4', '--nodes', '2', '--node-index', '1', '--master', 'node0.example:29500',
                                           '--timeout-seconds', '10', '--out', str(out)])
             record = json.loads((out / 'rank-exit-node-1.json').read_text())
+            logs = [(out / f'rank-{r}.log').exists() for r in range(4, 8)]
         self.assertEqual(rc, 0)
+        self.assertEqual(logs, [True] * 4)
         commands = [call.args[0] for call in spawn.call_args_list]
         self.assertEqual([c[c.index('--rank') + 1] for c in commands], ['0', '1', '2', '3'])
         self.assertTrue(all(c[c.index('--node-index') + 1] == '1' and c[c.index('--master') + 1] == 'node0.example:29500'
                             and c[c.index('--nodes') + 1] == '2' for c in commands))
         self.assertEqual(sorted(int(k) for k in record['codes']), [4, 5, 6, 7])
         self.assertEqual((record['world_size'], record['nodes'], record['node_index']), (8, 2, 1))
-        self.assertTrue(all((out / f'rank-{r}.log').exists() for r in range(4, 8)))
 
     def test_multi_node_requires_master_and_valid_index(self):
         for argv in (['--ranks', '4', '--nodes', '2', '--timeout-seconds', '10', '--out', 'x'],
