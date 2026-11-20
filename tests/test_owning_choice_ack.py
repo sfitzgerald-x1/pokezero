@@ -1,5 +1,6 @@
 """Authored wire/controller controls; no model, simulator, native or FoulPlay."""
 import asyncio
+from dataclasses import replace
 import json
 from pathlib import Path
 import shutil
@@ -22,6 +23,84 @@ class OwningChoiceAckTests(unittest.TestCase):
     def run_wire(self,f,config,events):
         memory=fixtures.MemoryBridge(events,auto_ack=False)
         return asyncio.run(f.game(config,events,memory=memory))
+    def test_maybe_trapped_witness_masks_and_wire_fallback(self):
+        from pokezero.live_protocol_actor import RawPolicy
+        from pokezero.policy import PolicyDecision
+
+        class GuardBridge(fixtures.MemoryBridge):
+            async def send(self, value):
+                await super().send(value)
+                if value['type'] == 'attempt_maybe_trapped_switch':
+                    reply = dict(value, type='choice_rejected' if reject else 'choice_ack')
+                    followup = [reply]
+                    if reject:
+                        reply['reason'] = 'trapped'
+                        corrected = json.loads(json.dumps(request))
+                        corrected['active'][0].pop('maybeTrapped')
+                        corrected['active'][0]['trapped'] = True
+                        followup.append(dict(type='stream', battleId=value['battleId'], stream=owner, lines=[
+                            "|error|[Unavailable choice] Can't switch: The active Pokémon is trapped",
+                            '|request|' + json.dumps(corrected),
+                        ]))
+                    self.events[:0] = followup
+
+        # Replay the legal inputs of 50495 and 51312. The latter has a
+        # fainted teammate at team index 3, which must remain unselectable.
+        for case, owner, unavailable in ((50495, 'p2', None), (51312, 'p1', 3)):
+            for mode in ('default', 'accept', 'reject', 'confirmed'):
+                with self.subTest(case=case, mode=mode):
+                    opt_in = mode != 'default'
+                    reject = mode == 'reject'
+                    f, config = self.fixture(owner=owner, kind='jax-owning',
+                                             owning_allow_maybe_trapped_switches=opt_in)
+                    request = json.loads(fixtures.request(owner).removeprefix('|request|'))
+                    request['side']['pokemon'] = [
+                        dict(ident=f'{owner}: Mon{i}', active=i == 0,
+                             condition='0 fnt' if i == unavailable else '240/240')
+                        for i in range(6)
+                    ]
+                    request['active'] = [dict(moves=[dict(id=n) for n in
+                        (('endure', 'shadowball', 'destinybond', 'hiddenpower') if case == 50495
+                         else ('protect', 'surf', 'icebeam', 'toxic'))], maybeTrapped=True)]
+                    if mode == 'confirmed':
+                        request['active'][0]['trapped'] = True
+                    observations = []
+
+                    def policy(contract, **_):
+                        def choose(observation, *, rng):
+                            mask = observation.legal_action_mask
+                            observations.append(mask)
+                            return PolicyDecision(4 if mask[4] else 1, 'authored-raw')
+                        return RawPolicy(contract, choose, lambda: None)
+
+                    def backend(contract, **identity):
+                        instance = fixtures.FixtureJaxBackend(contract, **identity)
+                        f.backends.append(instance)
+                        return instance
+
+                    factory = replace(f.factory(kind='jax-owning', backend_factory=backend),
+                                      policy_factory=policy, allow_maybe_trapped_switches=opt_in)
+                    events = f.events(config, owner_lines=['|request|' + json.dumps(request)])
+                    memory = GuardBridge(events)
+                    result, _, _ = asyncio.run(f.game(config, events, factory=factory, memory=memory))
+                    moves = (True,) * 4 + (False,) * 5
+                    offered = opt_in and mode != 'confirmed'
+                    self.assertEqual(observations[0], ((True,) * 6 + (unavailable is None,) + (True,) * 2)
+                                     if offered else moves)
+                    self.assertEqual(observations[1:], [moves] if reject else [])
+                    attempts = [c for c in memory.sent if c['type'] == 'attempt_maybe_trapped_switch']
+                    submissions = [c['choices'] for c in memory.sent if c['type'] == 'choices']
+                    self.assertEqual(len(attempts), int(offered))
+                    peer = config.foulplay_player
+                    self.assertEqual(submissions, [{peer: 'move 1'} if mode == 'accept'
+                                                   else {owner: 'move 2', peer: 'move 1'}])
+                    step, = f.trajectories[-1].steps
+                    self.assertEqual(step.action_index, 4 if mode == 'accept' else 1)
+                    self.assertEqual(result.encoder_provenance['choice_acknowledgements']['acknowledged'], 2)
+                    self.assertFalse(any(line.startswith('|error|') for line in f.backends[-1].lines))
+                    if reject:
+                        self.assertIn('"trapped": true', f.backends[-1].lines[1])
+
     def test_terminal_before_late_acks_and_stream_interleaving_never_enter_actor(self):
         for owner in ('p1','p2'):
             f,config=self.fixture(owner=owner);events=f.events(config);acks=self.acks(events[0]['battleId'])
@@ -135,3 +214,49 @@ console.log('AUTHORED_NODE_ACK_PASS');
         result=subprocess.run([node,'--input-type=module','-e',script],capture_output=True,text=True,timeout=10)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(result.stdout.strip(),'AUTHORED_NODE_ACK_PASS')
+
+    def test_guarded_switch_uses_native_showdown_acceptance(self):
+        from _showdown_root import has_showdown, showdown_root
+        if not has_showdown():
+            self.skipTest('requires pinned Showdown')
+        source = (Path(__file__).resolve().parents[1] / 'scripts/battle_bridge.mjs').read_text()
+        functions = source[source.index('function choiceSubmissionId('):source.index('async function endBattle(')]
+        script = """
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';
+const require=createRequire(import.meta.url);
+const {Battle}=require(process.argv[1]+'/dist/sim/battle.js');
+const events=[];
+const emit=event=>events.push(event);
+const invalidateBoundaryRequests=()=>{};
+let battle;
+const requireBattle=()=>battle;
+""" + functions + """
+for (const strictChoices of [false,true]) for (const trapped of [false,true]) {
+  events.length=0;
+  const native=new Battle({formatid:'gen3customgame',seed:[1,2,3,4],strictChoices});
+  const mon=(species)=>({species,moves:['splash','protect'],level:80});
+  native.setPlayer('p1',{name:'owner',team:[mon('Ditto'),mon('Murkrow')]});
+  native.setPlayer('p2',{name:'peer',team:[mon('Nosepass'),mon('Abra')]});
+  const side=native.sides[0];
+  side.active[0].maybeTrapped=true;
+  side.active[0].trapped=trapped;
+  side.activeRequest.active[0].maybeTrapped=true;
+  battle={battleId:'witness',battleStream:{battle:native},boundaryRequests:{p1:side.activeRequest}};
+  attemptMaybeTrappedSwitch({player:'p1',choice:'switch 2',submissionId:0});
+  assert.equal(events.length,1);
+  assert.equal(events[0].type,trapped?'choice_rejected':'choice_ack');
+  assert.equal(native.sides[1].choice.actions.length,0);
+  if (trapped) {
+    assert.equal(events[0].reason,'trapped');
+    assert.equal(side.activeRequest.active[0].trapped,true);
+    assert.equal(native.choose('p1','move 1'),true);
+  } else {
+    assert.equal(side.choice.actions[0].choice,'switch');
+  }
+  assert.equal(native.choose('p2','move 1'),true);
+}
+"""
+        node = shutil.which('node')
+        self.assertIsNotNone(node)
+        subprocess.run([node, '--input-type=module', '-e', script, str(showdown_root())], timeout=10, check=True)
