@@ -965,6 +965,7 @@ class ControlledFoulPlayConfig:
     # Explicit prospective owning-policy controls; legacy axes stay unchanged.
     owning_decision_timeout_seconds: float | None = None
     owning_public_single_line: bool = False
+    owning_allow_maybe_trapped_switches: bool = False
     # Explicit continuation-only CPU placement; None preserves historical commands.
     foulplay_cpu_affinity: int | None = None
 
@@ -8607,6 +8608,25 @@ async def _handle_owning_decision_boundary(
     state.previous_requested_players = requested_players
     choices = {}
     owner = config.pokezero_player
+    tentative = False
+    accepted_switch = None
+
+    def record_decision(decision, observation, elapsed, *, retried=False):
+        decision = replace(decision, metadata={**dict(decision.metadata),
+            "policy_elapsed_seconds": elapsed,
+            "policy_elapsed_scope": "owning-snapshot-encode-selection-and-choice",
+            "owning_decision_timeout_seconds": config.owning_decision_timeout_seconds,
+            "encoder_kind": config.encoder_kind,
+            "owner_prefix_sha256": snapshot.prefix_sha256,
+            "actor_namespace": snapshot.namespace,
+            **({"trapped_switch_retry": True} if retried else {})})
+        state.trajectory.append(TrajectoryStep(player_id=owner,turn_index=decision_round,
+            observation=observation,legal_action_mask=observation.legal_action_mask,
+            action_index=decision.action_index,
+            metadata={"policy_id":decision.policy_id,**dict(decision.metadata)}))
+        state.decisions.append(decision)
+        state.pokezero_decision_players.append(owner)
+
     if owner in requested_players:
         if phase_progress is not None:
             phase_progress.emit("candidate_policy", "started", seed=state.seed,
@@ -8638,19 +8658,10 @@ async def _handle_owning_decision_boundary(
         if phase_progress is not None:
             phase_progress.emit("candidate_policy", "returned", seed=state.seed,
                                 seat=owner, decision_round=decision_round)
-        decision = replace(decision, metadata={**dict(decision.metadata),
-            "policy_elapsed_seconds": elapsed,
-            "policy_elapsed_scope": "owning-snapshot-encode-selection-and-choice",
-            "owning_decision_timeout_seconds": config.owning_decision_timeout_seconds,
-            "encoder_kind": config.encoder_kind,
-            "owner_prefix_sha256": snapshot.prefix_sha256,
-            "actor_namespace": snapshot.namespace})
-        state.trajectory.append(TrajectoryStep(player_id=owner,turn_index=decision_round,
-            observation=observation,legal_action_mask=observation.legal_action_mask,
-            action_index=decision.action_index,
-            metadata={"policy_id":decision.policy_id,**dict(decision.metadata)}))
-        state.decisions.append(decision)
-        state.pokezero_decision_players.append(owner)
+        tentative = (config.owning_allow_maybe_trapped_switches
+                     and session.actor.tentative_switch(snapshot))
+        if not tentative:
+            record_decision(decision, observation, elapsed)
     else:
         session.boundary(requested_players=requested_players,
             decision_round=decision_round, requests=state.request_lines)
@@ -8664,10 +8675,41 @@ async def _handle_owning_decision_boundary(
             foulplay_process=foulplay_process,foulplay_logs=foulplay_logs,
             phase_progress=phase_progress)
         choices[config.foulplay_player] = choice
+    if tentative:
+        expected = dict(battleId=state.battle_id, player=owner,
+                        choice=choices[owner], submissionId=decision_round)
+        await bridge.send(dict(type="attempt_maybe_trapped_switch", **expected))
+        event = await asyncio.wait_for(bridge.next_event(), timeout=session.wait_timeout())
+        if type(event.get("submissionId")) is not int:
+            session.reject_event("invalid guarded switch submission", event)
+        if event == dict(type="choice_ack", **expected):
+            accepted_switch = event
+            record_decision(decision, observation, elapsed)
+        elif event == dict(type="choice_rejected", reason="trapped", **expected):
+            limit = config.owning_decision_timeout_seconds
+            remaining = None if limit is None else limit - elapsed
+            if remaining is not None and remaining <= 0:
+                raise TimeoutError("owning trapped fallback deadline expired")
+            started = time.perf_counter()
+            retry = asyncio.to_thread(session.actor.retry_trapped_switch, snapshot,
+                                       rng=random.Random(f"{state.seed}:{owner}:{decision_round}"))
+            decision = await asyncio.wait_for(retry, timeout=remaining)
+            elapsed += time.perf_counter() - started
+            if limit is not None and elapsed >= limit:
+                raise TimeoutError("owning trapped fallback deadline expired")
+            choices[owner] = session.actor.choice(snapshot)
+            record_decision(decision, session.actor.decision_observation(snapshot), elapsed, retried=True)
+        else:
+            session.reject_event("unexpected guarded switch result", event)
     if phase_progress is not None:
         phase_progress.emit("submission", "started", seed=state.seed, decision_round=decision_round)
     submission_id=session.prepare_submission(choices,requested_players=requested_players,decision_round=decision_round)
-    await bridge.send({"type":"choices","battleId":state.battle_id,"choices":choices,"submissionId":submission_id})
+    submitted = choices
+    if accepted_switch is not None:
+        session.acknowledge(accepted_switch)
+        submitted = {player: choice for player, choice in choices.items() if player != owner}
+    if submitted:
+        await bridge.send({"type":"choices","battleId":state.battle_id,"choices":submitted,"submissionId":submission_id})
     if phase_progress is not None:
         phase_progress.emit("submission", "returned", seed=state.seed, decision_round=decision_round)
     if owner in choices:

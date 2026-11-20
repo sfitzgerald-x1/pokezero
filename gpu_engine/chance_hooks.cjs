@@ -46,7 +46,8 @@ function validTape(c){
     &&(hasPhazing(c)?row(c.phazing,[60,60]):c.phazing===undefined)
     &&(hasEntryTies(c)?(row(c.entry_ties,[2,2])&&typeof c.resuming==='boolean'):
       c.entry_ties===undefined&&c.resuming===undefined)
-    &&(c.shed_skin===undefined||row(c.shed_skin,[100,100]));
+    &&(c.shed_skin===undefined||row(c.shed_skin,[100,100]))
+    &&(c.protect_stall_order===undefined||c.protect_stall_order===0||c.protect_stall_order===1);
 }
 function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',options={}) {
   const strictNoRng=options.strictNoRng===true;
@@ -453,6 +454,22 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
         if(row&&group.every(h=>category(h)?.[0]===row[0]&&h.order===10&&h.subOrder===row[3]&&originalCallback(h,'Residual'))){
           const [role,side,column]=row,first=take(c,role,side,c.draws[side][column]);
           group.sort((a,b)=>a.effectHolder.side.n===first?-1:1);items.splice(start,2,...group);return;
+        }
+      }
+      // The panel replays both orders from the same request and checks the
+      // next boundary. Only the witnessed expiry group is eligible.
+      if(c.protect_stall_order!==undefined&&singles(battle)&&fieldEventId==='Residual'
+        &&group.length===3&&group.map(h=>h.effect?.id).sort().join(',')==='focuspunch,protect,stall'){
+        const protect=group.find(h=>h.effect.id==='protect'),stall=group.find(h=>h.effect.id==='stall');
+        const focus=group.find(h=>h.effect.id==='focuspunch');
+        if(protect.effectHolder===stall.effectHolder&&focus.effectHolder!==protect.effectHolder
+          &&group.every(h=>active(battle,h.effectHolder)&&!h.effectHolder.fainted&&!h.callback
+            &&h.end===h.effectHolder.removeVolatile&&h.effect===gen3Dex?.conditions.get(h.effect.id)
+            &&!h.effect.onEnd&&h.state===h.effectHolder.volatiles[h.effect.id]
+            &&Number.isInteger(h.state.duration)&&h.state.duration>0)){
+          if(c.protect_stall_order===1){group.reverse();items.splice(start,end-start,...group);}
+          audit({kind:'PROTECT_STALL_ORDER',nonce:c.nonce,order:c.protect_stall_order,
+            effects:group.map(h=>h.effect.id)});return;
         }
       }
       // Same-holder residual countdowns (no callback, no onEnd: stall+protect, ...) commute;
