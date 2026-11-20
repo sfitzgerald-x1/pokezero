@@ -58,6 +58,43 @@ class NativeFullBoundaryTest(unittest.TestCase):
                 compare_pre(root, gate, Expected(), row=9, source=source)
             self.assertEqual(len(expected_calls), 1)
 
+    def test_sealed_toxic_counter_differences_are_literal_on_bench_and_active(self):
+        source = dict(engine_commit='1'*40, producer_commit='2'*40, entry_sha256='3'*64, runtime_sha256='4'*64)
+        values = {name: np.zeros((1, *spec['shape'][1:]), dtype=spec['dtype']) for name, spec in _layout().items()}
+        # Sealed root 6 / POST 2: original p1/2 is alive, benched and Toxic.
+        values['hp'][0, 0, 2] = 160
+        values['status'][0, 0, 2] = 4
+        values['status_counter'][0, 0, 2] = 2
+        values['hp'][0, 1, 0] = 160
+        values['status'][0, 1, 0] = 4
+        values['status_counter'][0, 1, 0] = 1
+        saved = {name: data[0].copy() for name, data in values.items()}
+        saved['status_counter'][0, 2] = 0
+
+        class Expected:
+            def read(self, gate, *, row):
+                return saved
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            bind = dict(recording_sha256='5'*64, registry='6'*64, source=source)
+            pre = freeze_pre(root, 3, 3, (values,), **bind)
+            post = freeze_linked_role(root, BoundaryAddress(stream=3, step=2, role='POST'),
+                pre_root=root, pre_reference=pre.receipt['reference'], pre_source=source, **bind)
+            differences = compare_boundary(root, post, Expected(), row=0, source=source, describe_difference=True)
+            self.assertEqual(set(differences), {'status_counter'})
+            self.assertEqual(differences['status_counter']['coordinate'], [0, 2])
+            self.assertEqual(differences['status_counter']['native_bits'], '02000000')
+            self.assertEqual(differences['status_counter']['expected_bits'], '00000000')
+            saved['status_counter'][0, 2] = 2
+            self.assertEqual(compare_boundary(root, post, Expected(), row=0, source=source), {})
+            saved['status_counter'][1, 0] = 0
+            differences = compare_boundary(root, post, Expected(), row=0, source=source, describe_difference=True)
+            self.assertEqual(set(differences), {'status_counter'})
+            self.assertEqual(differences['status_counter']['coordinate'], [1, 0])
+            self.assertEqual(differences['status_counter']['native_bits'], '01000000')
+            self.assertEqual(differences['status_counter']['expected_bits'], '00000000')
+
 
 class NativeLinkedRoleTest(unittest.TestCase):
     def test_post_uses_the_next_pre_and_has_its_own_seal(self):
