@@ -399,7 +399,7 @@ def _retired_fainted_arena_trap(cause, boundary, observed, side, original):
                        and row['sequence'] == witness['faint_end'] for row in history['retained_status'])):
         return False
     fainted = member(observed, (side, original))
-    return (fainted['hp'] == 0 and fainted.get('fainted') is True and fainted.get('faintQueued') is False
+    return (fainted['hp'] == 0 and fainted.get('fainted') is True and fainted.get('faintQueued') is True
             and fainted['trapped'] == 'hidden' and fainted.get('maybeTrapped') is True)
 
 

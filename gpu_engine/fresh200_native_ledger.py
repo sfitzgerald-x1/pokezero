@@ -576,8 +576,9 @@ class NativeHistory:
         if (any(member(cache, victim)['hp'] != 0 for cache in flush)
                 or member(flush[0], victim).get('fainted') is not False
                 or member(flush[-1], victim).get('fainted') is not True
-                or member(flush[-1], victim).get('faintQueued') is not False):
+                or member(flush[-1], victim).get('faintQueued') is not True):
             return None
+        # Showdown drains the queue and sets fainted without clearing faintQueued.
         return dict(epoch=self.phase_epoch, faint_call_id=faint.call, faint_enter=faint.sequence,
             faint_end=faint.end, clear_call_id=clear.call, clear_enter=clear.sequence, clear_end=clear.end,
             flush_call_id=frame.call, flush_start=frame.sequence, flush_end=frame.end)

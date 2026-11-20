@@ -65,7 +65,7 @@ def root199_boundary(*, writer=True, same_move=True, preserve_cache=True,
     if not preserve_cache:
         cleared['sides'][0]['pokemon'][0]['fields']['trapped'] = False
     fainted = copy.deepcopy(queued)
-    fainted['sides'][0]['pokemon'][0]['fields'].update(fainted=True, faintQueued=False)
+    fainted['sides'][0]['pokemon'][0]['fields']['fainted'] = True
     trace.enter('Battle.faintMessages', before=queued)
     trace.enter('Pokemon.clearVolatile', victim, (False,), before=queued)
     trace.leave(after=cleared)
