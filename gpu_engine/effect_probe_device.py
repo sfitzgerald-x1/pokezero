@@ -597,23 +597,11 @@ def b2_view(b2, lane, catalog):
             'field': b2_field(b2, 2 * lane, catalog)}
 
 
-FLOAT_FIELDS = ('last_damage_taken', 'last_damage_dealt', 'damage_exact_taken', 'damage_exact_dealt', 'hazard_shown',
-                'hazard_exact')
-# Only these underlying cumulative damage/hazard sums receive the lead's
-# one-ULP exception; every other probe field remains exact.
-FLOAT_ULP_TOLERANCE = 1
-NUMERIC_NOTE = 'Cumulative damage/hazard sums: at most 1 float32 ULP; all other fields exact'
-
-
-def _within_tolerance(a, b):
-    if not isinstance(a, float) or not isinstance(b, float):return False
-    from .encoder_parity_policy import float32_ulp_distance
-    return bool(float32_ulp_distance(a, b) <= FLOAT_ULP_TOLERANCE)
+NUMERIC_NOTE = 'Python-rounded lookup fractions and compensated sums with zero tolerance'
 
 
 def compare_views(device, b2, numeric=None):
-    """Field-by-field differences, keyed side:slot:field (mon), side:active:field, side:field and field. A FLOAT_FIELDS
-    pair at most FLOAT_ULP_TOLERANCE apart goes to `numeric` (a list), see NUMERIC_NOTE."""
+    """Report exact field differences. The optional numeric list supports legacy probe reports."""
     diffs = []
     for s in range(2):
         for part in ('active', 'side'):
@@ -625,10 +613,8 @@ def compare_views(device, b2, numeric=None):
     if set(device['field']) != set(b2['field']):
         raise ValueError(f'device and B2 field views differ in keys: {sorted(set(device["field"]) ^ set(b2["field"]))}')
     def check(key, want, got):
-        if want == got:return
-        if numeric is not None and key.rsplit(':', 1)[-1] in FLOAT_FIELDS and _within_tolerance(want, got):
-            numeric.append(dict(field=key, b2=want, device=got));return
-        diffs.append(dict(field=key, b2=want, device=got))
+        if want != got:
+            diffs.append(dict(field=key, b2=want, device=got))
     for s in range(2):
         d, b = device[s], b2[s]
         for k in range(6):
