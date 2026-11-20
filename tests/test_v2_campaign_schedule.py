@@ -3,7 +3,10 @@ from dataclasses import asdict, dataclass, field, replace
 import json
 import unittest
 
-from pokezero.v2_campaign_schedule import CampaignSchedule, CheckpointAnchor
+import numpy as np
+
+from pokezero.v2_campaign_plateau import churn_without_progress, score_look, supports_advance
+from pokezero.v2_campaign_schedule import CampaignSchedule, CheckpointAnchor, MILLION
 from pokezero.v5_training import DeclaredGameWindow, TrainConfig, train_config_metadata
 
 
@@ -20,6 +23,30 @@ class StubLRStart:
 
 
 class CampaignScheduleTests(unittest.TestCase):
+    def test_default_backstops_and_automatic_final_cooldown(self):
+        schedule = CampaignSchedule()
+        start = StubLRStart()
+        for games, factor in ((49, 1), (50, .3), (74, .3), (75, .09), (89, .09),
+                              (90, .09), (95, .09 * .55), (99, .09 * .19)):
+            window = DeclaredGameWindow(games * MILLION, (games + 1) * MILLION, 120 * MILLION)
+            schedule.validate_next_window(start, window, 20)
+            self.assertAlmostEqual(schedule.window_rate(start, window, completed_updates=20, offset=0,
+                                                       window_updates=1), start.initial_lr * factor)
+        with self.assertRaisesRegex(ValueError, 'finite extent'):
+            schedule.validate_next_window(start, DeclaredGameWindow(100 * MILLION, 101 * MILLION, 120 * MILLION), 20)
+        self.assertEqual(start.calls, [])
+
+    def test_recorded_early_steps_replace_only_future_knots(self):
+        schedule = CampaignSchedule()
+        first = schedule.advance_next_step(25 * MILLION)
+        self.assertEqual(first.step_down_games, (25 * MILLION, 75 * MILLION))
+        self.assertEqual(first.advance_next_step(25 * MILLION), first)
+        second = first.advance_next_step(60 * MILLION)
+        self.assertEqual(second.step_down_games, (25 * MILLION, 60 * MILLION))
+        self.assertEqual(second.advance_next_step(80 * MILLION), second)
+        self.assertEqual(second.final_cooldown, schedule.final_cooldown)
+        self.assertEqual(schedule.step_down_games, (50 * MILLION, 75 * MILLION))
+
     def test_start_delegates_exact_counters_and_never_scales_peak_again(self):
         window = DeclaredGameWindow(0, 20, 20)
         schedule = CampaignSchedule()
@@ -104,3 +131,42 @@ class CampaignScheduleTests(unittest.TestCase):
         self.assertNotIn('campaign', metadata)
         self.assertNotIn('learning_rate_schedule', metadata)
         self.assertEqual(TrainConfig(**metadata), config)
+
+
+class PlateauTests(unittest.TestCase):
+    def test_alert_requires_churn_and_no_progress(self):
+        kl = [.025, .027, .03, .04, .05, .065]
+        self.assertTrue(churn_without_progress(kl, 0.))
+        self.assertFalse(churn_without_progress(kl, .01))
+        self.assertFalse(churn_without_progress(kl[:-1] + [.06], -1.))
+        with self.assertRaises(ValueError):
+            churn_without_progress(kl[1:], 0.)
+
+    def score(self, last, rows=None, *, wins=2000, anchor_games=4000, regime_game=0):
+        if rows is None:
+            rows = np.repeat((np.arange(1000) < 500)[:, None], 10, axis=1)
+        return score_look(tuple(i * MILLION for i in range(last - 9, last + 1)), rows, rows,
+                          regime_game=regime_game, anchor_wins=wins, anchor_games=anchor_games,
+                          bootstrap_seed=52, bootstrap_replicates=2048)
+
+    def test_flat_two_consecutive_looks_and_self_anchor(self):
+        first = self.score(10)
+        self.assertEqual(first, self.score(10))
+        self.assertAlmostEqual(first.pooled_slope_pp, 0.)
+        self.assertTrue(supports_advance(first, self.score(15)))
+        self.assertFalse(supports_advance(first, first))
+        self.assertFalse(supports_advance(first, self.score(20)))
+        self.assertFalse(supports_advance(first, self.score(15, wins=2120)))
+        self.assertFalse(supports_advance(first, self.score(15, regime_game=MILLION)))
+
+    def test_clear_improvement_and_missing_receipts_do_not_qualify(self):
+        improving = np.arange(1000)[:, None] < (450 + 4 * np.arange(10))
+        look = self.score(15, improving)
+        self.assertAlmostEqual(look.pooled_slope_pp, 4.)
+        self.assertFalse(look.qualifies)
+        with self.assertRaisesRegex(ValueError, '4,000-game'):
+            self.score(10, anchor_games=3999)
+        with self.assertRaisesRegex(ValueError, '1,000-block'):
+            self.score(10, improving[:-1])
+        with self.assertRaisesRegex(ValueError, 'one regime'):
+            self.score(10, regime_game=2 * MILLION)

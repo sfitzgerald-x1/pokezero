@@ -90,10 +90,11 @@ def load_actor(plan, snapshot, root):
     return params
 
 
-def history_window(plan, past):
-    """The planner's eligible history (v5_run.assignment): last `historical_window`, none for A."""
+def history_window(plan, current, past):
+    """The same finite eligible bank used by the declared assignment."""
+    from pokezero.v5_run import opponent_history
     if plan.model.arm == 'A' or plan.historical_fraction == 0:return ()
-    return tuple(past[-plan.historical_window:])
+    return opponent_history(plan,current,past)
 
 
 def construct(context, backend, iteration, current, past, ordinal, *, shard=None):
@@ -102,6 +103,7 @@ def construct(context, backend, iteration, current, past, ordinal, *, shard=None
     from pokezero import v5_run as runs
     from gpu_engine import v5_device_rollout as rollout, v2_collector as v2
     plan = context['plan'];prepared = context['prepared'];blocks = [];kinds = dict(SELFPLAY=0, HISTORICAL=0)
+    window = history_window(plan, current, past)
     offset = 0
     for batch in plan.iterations[iteration]:
         begin, end = (0, len(batch.games)) if shard is None else (
@@ -109,7 +111,7 @@ def construct(context, backend, iteration, current, past, ordinal, *, shard=None
         offset += len(batch.games)
         if end <= begin:
             continue
-        assignments = tuple(runs.assignment(plan, g, ordinal[g.stream_id], current, past) for g in batch.games)
+        assignments = tuple(runs.assignment(plan, g, ordinal[g.stream_id], current, past, history=window) for g in batch.games)
         recorded = json.loads(runs._json(assignments[begin:end]))
         for a in recorded:kinds[a['opponent_kind']] += 1
         required = tuple(dict.fromkeys([current.archive_sha256, *(a['opponent']['archive_sha256'] for a in recorded)]))
@@ -122,7 +124,6 @@ def construct(context, backend, iteration, current, past, ordinal, *, shard=None
         if begin or end != len(batch.games):
             carry = jax.tree.map(lambda value: value[begin:end], carry)
         blocks.append((carry, bank, batch.sampling_seed))
-    window = history_window(plan, past)
     archives, groups = v2.canonical_groups(current.archive_sha256, [s.archive_sha256 for s in window],
         slots=v2.history_slots(len(window)))
     roster = v2.roster_from_blocks(blocks, archives=archives, groups=groups);jax.block_until_ready(roster.device)
@@ -534,7 +535,10 @@ def main(argv=None, *, distribution=None):
 
         _rank_zero(distribution, 'round commit, outbox and retention', commit_round)
         del rows, result, roster, tree;gc.collect()
-        keep = {s.archive_sha256 for s in snapshots[-1 - plan.historical_window:]}
+        if getattr(plan, 'historical_anchor_slots', 0):
+            keep = {s.archive_sha256 for s in (*history_window(plan, snapshot, snapshots[:-1]), snapshot)}
+        else:
+            keep = {s.archive_sha256 for s in snapshots[-1 - plan.historical_window:]}
         for digest in list(params):
             if digest not in keep:del params[digest]
     if deferred and route_stop is None:
