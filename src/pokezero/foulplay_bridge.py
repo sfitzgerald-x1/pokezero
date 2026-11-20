@@ -5909,12 +5909,18 @@ async def run_controlled_foulplay_benchmark(
     trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
     phase_progress: FullgamePhaseProgress | None = None,
     owning_actor_factory: OwningActorFactory | None = None,
+    packed_start: BattleStartOverride | None = None,
+    packed_birth_callback: Callable[[Mapping[str, Any]], None] | None = None,
     live_continuation_oracle_successor_capture_callback: Callable[[Mapping[str, Any]], None]
     | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run PokeZero vs foul-play with a known BattleStream seed and context-aware policy."""
 
     actor_factory = require_actor_factory(config, owning_actor_factory)
+    if packed_start is not None and (actor_factory is None or config.games != 1 or config.policy_mode != "raw"):
+        raise ValueError("one owning raw champion game required for a packed start")
+    if packed_birth_callback is not None and packed_start is None:
+        raise ValueError("packed birth callback requires a packed start")
     _validate_external_paths(config)
     if (
         live_continuation_oracle_successor_capture_callback is not None
@@ -6080,6 +6086,8 @@ async def run_controlled_foulplay_benchmark(
             live_continuation_probe=live_continuation_probe,
             live_continuation_oracle_controller=live_continuation_oracle_controller,
             phase_progress=phase_progress,
+            **({"packed_starts": {0: packed_start}, "packed_birth_callback": packed_birth_callback}
+               if packed_start is not None else {}),
             **({"owning_actor_factory": actor_factory, "actor_runtime": (model, result, env_config)}
                if actor_factory is not None else {}),
         )
@@ -6159,12 +6167,13 @@ async def _run_controlled_foulplay_games(
         raise ValueError('ordered explicit v5 finite game offsets required')
     offsets=range(config.games) if game_offsets is None else game_offsets
     if packed_starts is not None and (
-        actor_version != "v5" or config.format_id != "gen3randombattle"
+        actor_factory is None or actor_version not in ("v5", "champion-v4")
+        or config.format_id != "gen3randombattle"
         or set(packed_starts) != set(offsets)
         or any(type(start) is not BattleStartOverride
                or start.observation_format_id != config.format_id for start in packed_starts.values())
     ):
-        raise ValueError("explicit v5 packed teams required for every original offset")
+        raise ValueError("explicit owning packed teams required for every original offset")
     foulplay_random_seed_schedule = (_per_seed_foulplay_random_seed_schedule(config,count=config.games)
         if game_offsets is None else _per_seed_foulplay_random_seed_schedule_for_offsets(config,offsets=offsets))
 

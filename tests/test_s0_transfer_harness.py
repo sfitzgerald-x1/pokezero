@@ -6,8 +6,7 @@ import pytest
 
 from pokezero import s0_transfer_recompute as scorer
 from pokezero.s0_transfer_roster import (
-    FP, H2H, SCHEMA, actor_bindings, cell_key, cell_record, digest, dry_run_clusters,
-    expected_cells, journal_path, write_once,
+    FP, H2H, SCHEMA, canonical, cell_key, dry_run_clusters, expected_cells, read_terminals,
 )
 
 
@@ -15,26 +14,13 @@ def scratch_rows():
     banks = {"scratch": dry_run_clusters()}
     cells = expected_cells(banks, dry_run=True)
     starts = {str(c["cluster"]): {"engine_birth": [], "showdown_birth": []} for c in cells.values()}
-    manifest = dict(schema=SCHEMA, dry_run=True, banks=banks, starts=starts, bootstrap_seed=917,
-                    actors={"scratch": {role: dict(checkpoint_sha256="a"*64, archive_sha256="b"*64,
-                                                   model_sha256="c"*64, self_moves=False) for role in ("T", "B", "C")}},
-                    fp_revision="b"*40, fp_budget_ms=1000,
-                    expected_cells_sha256=digest(list(cells.values())))
+    manifest = dict(schema=SCHEMA, dry_run=True, banks=banks, starts=starts, bootstrap_seed=917)
     results = []
     for cell in cells.values():
-        # T wins only in the engine; all other primitive games end in a tie.
         winner = cell["seat"] if cell["environment"] == "engine" and cell["role"] == "T" else 2
         witness = dict(status="COMPLETE", winner=winner, players=["p0", "p1"], marker="|tie",
                        birth=[], seed=cell["chance"], fp_seed=cell["action"])
-        if cell["assay"] == FP:
-            witness["source"] = {"terminal_witness": dict(
-                status="PUBLIC_TIE", capped=False, public_terminal_line="|tie",
-                players={"p1": "p0", "p2": "p1"}, winner_player=None,
-            )}
-        score = .5 if winner == 2 else 1.0
-        results.append(dict(cell, manifest_sha256=digest(manifest), start_sha256=digest(starts[str(cell["cluster"])]),
-                            actor_bindings=actor_bindings(manifest, cell), status="COMPLETE", evidence=witness,
-                            evidence_sha256=digest(witness), score=score))
+        results.append(dict(cell, status="COMPLETE", evidence=witness))
     return manifest, results
 
 
@@ -78,26 +64,36 @@ def test_recompute_retains_unknown_cells_and_does_not_issue_dry_verdict():
     assert report["verdict"] is None and report["status"] == "UNSCORED"
     assert report["contrasts"]["G"]["identification_bounds_pp"] == [50.0, 50.0]
     assert report["contrasts"]["J"]["identification_bounds_pp"] == [50.0, 50.0]
+    assert report["contrasts"]["G"]["gap_pp"] == 50.0
+    assert report["contrasts"]["G"]["paired_ci90_pp"] == [50.0, 50.0]
+    assert report["contrasts"]["G"]["threshold_pp"] == 3
+    assert not report["contrasts"]["G"]["bounded_ci90_within_threshold"]
     missing = next(r for r in rows if r["role"] == "T" and r["environment"] == "engine")
-    missing.update(status="CAPPED", evidence={"reason": "request cap"}, score=None)
-    missing["evidence_sha256"] = digest(missing["evidence"])
+    missing.update(status="CAPPED", evidence={"reason": "request cap"})
     report = scorer.recompute(manifest, rows)
     assert report["contrasts"]["G"]["identification_bounds_pp"] == [47.5, 50.0]
     assert report["contrasts"]["G"]["by_replica"]["scratch"]["known_clusters"] == 19
     assert report["contrasts"]["Q_H2H"]["by_replica"]["scratch"]["known_clusters"] == 20
-    with pytest.raises(ValueError, match="missing expected cell"):
-        scorer.recompute(manifest, rows[:-1])
+    bounded = report["contrasts"]["G"]["missingness_bounded_ci90_pp"]
+    assert bounded[0] < 50.0 == bounded[1]
+    assert scorer.recompute(manifest, rows[:-1])["missing_cells"] == 2
     with pytest.raises(ValueError, match="duplicate"):
         scorer.recompute(manifest, rows + [rows[-1]])
 
 
-def test_recompute_rejects_reattributed_score_and_changed_seal():
+def test_recompute_uses_literal_winner_and_rejects_wrong_seat_or_roster():
     manifest, rows = scratch_rows()
-    rows[0]["score"] = .25
-    with pytest.raises(ValueError, match="producer score"):
+    cell = next(r for r in rows if r["environment"] == "showdown" and r["assay"] == H2H and r["seat"] == 1)
+    cell["evidence"]["marker"] = "|win|p1"
+    assert scorer.collect_scores(manifest, rows)[cell_key(cell)] == 1.
+    cell["evidence"]["marker"] = "|win|unrecognized"
+    with pytest.raises(ValueError, match="literal Showdown terminal"):
         scorer.collect_scores(manifest, rows)
-    rows[0]["evidence"]["winner"] = 0
-    with pytest.raises(ValueError, match="terminal evidence changed"):
+    cell["evidence"].update(marker="|tie", birth=["changed"])
+    with pytest.raises(ValueError, match="declared physical start"):
+        scorer.collect_scores(manifest, rows)
+    cell["chance"] += 1
+    with pytest.raises(ValueError, match="changed roster cell"):
         scorer.collect_scores(manifest, rows)
 
 
@@ -108,64 +104,18 @@ def test_rejection_boundaries_are_strict_and_directional():
     assert scorer.rejection("D", np.array([[20., 20.], [20., 20.]])) == (False, False)
 
 
-def test_immutable_artifact_refuses_changed_publication(tmp_path):
-    dest = tmp_path / "receipt.json"
-    assert write_once(dest, {"status": "finished"}) == write_once(dest, {"status": "finished"})
-    with pytest.raises(ValueError, match="immutable"):
-        write_once(dest, {"status": "failed"})
-    assert json.loads(dest.read_bytes()) == {"status": "finished"}
-
-
-def test_supervisor_seals_finished_showdown_and_fp_rows_after_worker_timeout(tmp_path):
-    from pokezero.s0_transfer_supervise import seal_side
-
+def test_interrupted_worker_retains_raw_terminals(tmp_path):
     manifest, rows = scratch_rows()
-    write_once(tmp_path / "manifest.json", manifest)
-    retained = [next(row for row in rows if row["environment"] == "showdown" and row["assay"] == assay)
-                for assay in (H2H, FP)]
-    for row in retained:
-        write_once(journal_path(tmp_path, row), row)
-    assert not seal_side(tmp_path, "showdown", 124, 5400)
-    terminal = json.loads((tmp_path / "showdown.terminal.json").read_bytes())
-    assert terminal["status"] == "PARTIAL" and terminal["worker_exit_code"] == 124
-    assert terminal["status_counts"] == {"COMPLETE": 2, "FAILED": 198}
-    archived = json.loads((tmp_path / "showdown.cells.json").read_bytes())
-    by_key = {cell_key(r): r for r in archived}
-    assert [by_key[cell_key(row)] for row in retained] == retained
-    scores = scorer.collect_scores(manifest, archived + [r for r in rows if r["environment"] == "engine"])
-    assert scores[cell_key(retained[0])] == scores[cell_key(retained[1])] == .5
-    assert len(scores) == 280 and sum(score is None for score in scores.values()) == 198
+    raw = tmp_path / "showdown.jsonl"
+    completed = [r for r in rows if r["environment"] == "showdown"][:4]
+    raw.write_bytes(b"".join(canonical(row) + b"\n" for row in completed) + b'{"incomplete":')
+    assert list(read_terminals(raw)) == completed
+    score = scorer.recompute(manifest, read_terminals(raw))
+    assert score["dispositions"] == {"COMPLETE": 4, "NOT_ATTEMPTED": 276}
+    assert score["missing_cells"] == 276
 
 
-def test_resume_preserves_existing_cells_and_reopens_only_deadline_placeholders(tmp_path):
-    from pokezero.s0_transfer_harness import resume_scratch
-
-    manifest, rows = scratch_rows()
-    prior, target = tmp_path / "r2", tmp_path / "r3"
-    engine = [row for row in rows if row["environment"] == "engine"]
-    showdown = [row for row in rows if row["environment"] == "showdown"]
-    expected = expected_cells(manifest["banks"], dry_run=True)
-    dropped, actual_failure = (expected[cell_key(row)] for row in showdown[:2])
-    showdown[0] = cell_record(manifest, dropped, "FAILED", None,
-                             {"reason": "worker exit 124 before a durable cell result"})
-    showdown[1] = cell_record(manifest, actual_failure, "FAILED", None, {"reason": "actual worker exception"})
-    manifest_sha = write_once(prior / "manifest.json", manifest)
-    engine_sha = write_once(prior / "engine.cells.json", engine)
-    showdown_sha = write_once(prior / "showdown.cells.json", showdown)
-
-    with pytest.raises(ValueError, match="previous scratch artifact changed"):
-        resume_scratch(target, prior, manifest_sha=manifest_sha, engine_sha=engine_sha, showdown_sha="0"*64)
-    assert not target.exists()
-    resume_scratch(target, prior, manifest_sha=manifest_sha, engine_sha=engine_sha, showdown_sha=showdown_sha)
-    assert (target / "engine.cells.json").read_bytes() == (prior / "engine.cells.json").read_bytes()
-    assert not journal_path(target, dropped).exists()
-    assert json.loads(journal_path(target, actual_failure).read_bytes()) == showdown[1]
-    assert json.loads(journal_path(target, showdown[2]).read_bytes()) == showdown[2]
-    receipt = json.loads((target / "showdown.resume.json").read_bytes())
-    assert receipt["retained_showdown_cells"] == 199 and receipt["pending_showdown_cells"] == 1
-
-
-def test_engine_batch_deadline_preserves_completed_book_entries():
+def test_engine_publishes_terminal_lanes_incrementally():
     pytest.importorskip("jax")
     from gpu_engine import s0_transfer_engine, v2_collector, v5_device_rollout
 
@@ -177,17 +127,18 @@ def test_engine_batch_deadline_preserves_completed_book_entries():
                 terminal_hp=np.zeros((2, 2, 6), dtype=int),
                 terminal_max_hp=np.ones((2, 2, 6), dtype=int),
             )
-            assert observe_book(book)
+            observe_book(book)
+            assert len(finished) == 1
+            book.status[1] = v5_device_rollout.CAPPED
+            observe_book(book)
 
     cells = [dict(cluster=91, seat=1), dict(cluster=92, seat=1)]
     finished = []
     s0_transfer_engine.play_batch(
         Collector(), (), SimpleNamespace(streams=[91, 92]), cells, ["birth-91", "birth-92"],
-        publish=finished.append, deadline=0,
+        publish=finished.append,
     )
-    assert [(cell["cluster"], status, score) for cell, status, score, _ in finished] == [
-        (91, "COMPLETE", 1.), (92, "FAILED", None),
-    ]
+    assert [(cell["cluster"], status) for cell, status, _ in finished] == [(91, "COMPLETE"), (92, "CAPPED")]
 
 
 def test_evaluation_draw_uses_exact_engine_key_and_masked_law():
@@ -212,7 +163,7 @@ def test_evaluation_draw_uses_exact_engine_key_and_masked_law():
         EvaluationDraw(1, 2, 3, 0).choose(logits.at[1].set(jnp.nan), legal)
 
 
-def test_control_lifecycle_verifies_separate_reload_and_detects_changed_receipt(tmp_path):
+def test_control_reloads_final_actor_with_the_same_policy(tmp_path):
     pytest.importorskip("jax")
     pytest.importorskip("torch")
     from pokezero import v5_training
@@ -226,12 +177,86 @@ def test_control_lifecycle_verifies_separate_reload_and_detects_changed_receipt(
                           expert_width=8, value_hidden=(8, 8), value_bins=5)
     initial = v5_training.create(model, V5LossConfig(), v5_training.TrainConfig(71), enable_v5=True)
     baseline = write_actor(tmp_path / "B", initial)
-    control, receipt = shadow(tmp_path / "C", baseline, [], dry_run=True, fixture=fixed_fixture)
+    control = shadow(tmp_path / "C", baseline, 2, fixture=fixed_fixture)
     assert baseline["tensor_sha256"] == control["tensor_sha256"]
     assert baseline["archive"] != control["archive"]
-    manifest = dict(dry_run=True, banks={"scratch": {}}, actors={"scratch": {"B": baseline, "C": control}},
-                    control={"scratch": receipt})
-    scorer.verify_control(manifest)
-    (tmp_path / "C" / "001" / "cycle.json").write_text("{}")
-    with pytest.raises(ValueError, match="receipt changed"):
-        scorer.verify_control(manifest)
+    assert set(path.name for path in (tmp_path / "C").iterdir()) == {"checkpoint.pt", "actor.npz", "checkpoint.pt.encoding.json"}
+
+
+def test_sampled_showdown_keeps_playing_until_its_terminal(monkeypatch):
+    from gpu_engine import v5_live_protocol
+    from pokezero import s0_transfer_showdown
+
+    class Actor:
+        generation = 0
+        prefix_sha256 = "initial"
+
+        def begin_game(self, *, owner, **_):
+            self.owner = owner
+
+        def accept_owner_stream(self, **_):
+            pass
+
+        def snapshot_boundary(self):
+            return None
+
+        def decide(self, boundary, *, rng):
+            return SimpleNamespace(action_index=0)
+
+        def choice(self, boundary):
+            return "move 1"
+
+        def close_game(self):
+            return {"status": "COMPLETE"}
+
+    class Factory:
+        deterministic = False
+        compute_dtype = "bfloat16"
+        config = "same v5 config"
+
+        def create_actor(self):
+            return Actor()
+
+    class Env:
+        def __init__(self, config):
+            self.owner_lines = {
+                seat: ["|player|p1|alice", "|player|p2|bob"] for seat in ("p1", "p2")
+            }
+            self.frames = 0
+
+        def reset_with_start_override(self, **_):
+            pass
+
+        def snapshot(self):
+            return SimpleNamespace(bridge_snapshot="physical start")
+
+        def terminal(self):
+            return SimpleNamespace(capped=False) if self.frames == 210 else None
+
+        def requested_players(self):
+            return ("p1", "p2")
+
+        def _choices_for_actions(self, actions):
+            return {seat: "move 1" for seat in actions}
+
+        def step(self, actions):
+            self.frames += 1
+            if self.terminal():
+                for lines in self.owner_lines.values():
+                    lines.append("|win|bob")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(v5_live_protocol, "check_factory", lambda _: None)
+    monkeypatch.setattr(s0_transfer_showdown, "OwningEnv", Env)
+    monkeypatch.setattr(s0_transfer_showdown, "_terminal_winner", lambda *_: 1)
+
+    cell = dict(role="T", cluster=10, chance=11, action=12, seat=1)
+    status, terminal = s0_transfer_showdown.evaluate_game(
+        None, cell, factories=(Factory(), Factory()), packed_start=None,
+        check_start=lambda start: start, max_requests=250,
+    )
+    assert status == "COMPLETE"
+    assert terminal["frames"] == 210
+    assert scorer.terminal_score(dict(cell, environment="showdown", status=status, evidence=terminal)) == 1.

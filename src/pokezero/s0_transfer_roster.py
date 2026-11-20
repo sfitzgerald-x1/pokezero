@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 
 
-SCHEMA = "pokezero.s0-transfer-cells.r2"
+SCHEMA = "pokezero.s0-transfer.r2-simple"
 DRY_RUN_ROOT = 2_080_000_000
 DRY_RUN_PAIRS = 20
 H2H = "matched_h2h_sampled"
@@ -27,24 +27,17 @@ def digest(value):
     return hashlib.sha256(canonical(value)).hexdigest()
 
 
-def write_once(path, value):
-    """Publish an immutable artifact atomically, even with competing producers."""
+def write_json(path, value):
+    """Publish a whole JSON file for another process to read."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = canonical(value) + b"\n"
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as temp:
         try:
-            temp.write(content)
-            temp.flush()
-            os.fsync(temp.fileno())
-            try:
-                os.link(temp.name, path)
-            except FileExistsError:
-                if path.read_bytes() != content:
-                    raise ValueError(f"immutable artifact changed: {path}") from None
+            temp.write(canonical(value) + b"\n")
+            temp.close()
+            os.replace(temp.name, path)
         finally:
-            os.unlink(temp.name)
-    return hashlib.sha256(content).hexdigest()
+            Path(temp.name).unlink(missing_ok=True)
 
 
 def address(environment, assay, kind, cluster):
@@ -73,6 +66,8 @@ def expected_cells(banks, *, dry_run):
         for assay, clusters in sorted(bank.items()):
             if not clusters or any(type(c) is not int or not 0 < c < 2**31 for c in clusters):
                 raise ValueError("nonempty positive int32 cluster bank required")
+            if not dry_run and any(DRY_RUN_ROOT <= c < DRY_RUN_ROOT + 10_000 for c in clusters):
+                raise ValueError("scored banks must be disjoint from scratch and warmup")
             if len(set(clusters)) != len(clusters) or seen.intersection(clusters):
                 raise ValueError("cluster banks overlap")
             seen.update(clusters)
@@ -107,24 +102,13 @@ def cell_key(cell):
     return tuple(cell[key] for key in CELL_KEYS)
 
 
-def actor_bindings(manifest, cell):
-    pair = cell["role"], cell["opponent"]
-    if cell["seat"] == 1:
-        pair = pair[::-1]
-    return [
-        dict(role=role, **({name: manifest["actors"][cell["replica"]][role][name]
-                           for name in ("checkpoint_sha256", "archive_sha256", "model_sha256", "self_moves")}
-                           if role != "FP" else {"revision": manifest["fp_revision"], "budget_ms": manifest["fp_budget_ms"]}))
-        for role in pair
-    ]
-
-
-def journal_path(root, cell):
-    return root / f'{cell["environment"]}.journal' / f"{digest(cell_key(cell))}.json"
-
-
-def cell_record(manifest, cell, status, score, evidence):
-    start = manifest["starts"][str(cell["cluster"])]
-    return dict(cell, manifest_sha256=digest(manifest), start_sha256=digest(start),
-                actor_bindings=actor_bindings(manifest, cell), status=status, score=score,
-                evidence=evidence, evidence_sha256=digest(evidence))
+def read_terminals(path):
+    """Read complete JSONL records, retaining outcomes from an interrupted worker."""
+    if not path.is_file():
+        return
+    with path.open("rb") as stream:
+        for line in stream:
+            if not line.endswith(b"\n"):
+                # Process termination can leave the last record partially written.
+                break
+            yield json.loads(line)

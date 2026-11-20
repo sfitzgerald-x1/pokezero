@@ -1,8 +1,7 @@
-"""Run the finite, unscored scratch transfer harness. No training or S0 dispatch."""
+"""Play one side of a matched S0 transfer panel and write raw terminal rows."""
 
 import argparse
 import asyncio
-from collections import Counter
 from dataclasses import replace
 import hashlib
 import json
@@ -14,15 +13,14 @@ from types import SimpleNamespace
 import zipfile
 
 from .s0_transfer_roster import (
-    DRY_RUN_ROOT, FP, H2H, SCHEMA, cell_key, cell_record, digest, dry_run_clusters,
-    expected_cells, journal_path, write_once,
+    DRY_RUN_ROOT, FP, H2H, SCHEMA, canonical, cell_key, digest, dry_run_clusters,
+    expected_cells, write_json,
 )
 
 
 MAX_REQUESTS = 250
 JOIN_SECONDS = 900
-CELL_SECONDS = 150
-WARMUP_ROOT = DRY_RUN_ROOT + 5000
+WARMUP_OFFSET = 5000
 
 
 def scratch_label_vocabulary(source, expected_source_hash):
@@ -36,7 +34,7 @@ def scratch_label_vocabulary(source, expected_source_hash):
                                              expected_source_hash=expected_source_hash)
 
 
-def load_settings(runtime_path, expected_sha):
+def load_settings(runtime_path, expected_sha, *, dry_run, self_moves):
     import jax
     from . import v5_worker
     from .live_protocol_actor import ActorContract
@@ -45,10 +43,12 @@ def load_settings(runtime_path, expected_sha):
     runtime = v5_worker._record(dict(path=str(runtime_path), sha256=expected_sha))
     pool_sha = runtime["constructor_pool"]["sha256"]
     profile, vocabulary, gender, category = v5_worker._runtime_metadata(runtime, expected_pool_sha256=pool_sha)
-    source = load_gen3_randbat_source_cached(runtime["showdown"]["root"])
-    labels = scratch_label_vocabulary(source, ActorContract.champion().belief_set_source_hash)
-    config = profile.configurations(labels, category_vocabulary=category, arm="B", replicate=0)
-    plan = SimpleNamespace(pool_sha256=pool_sha, self_moves=False)
+    config = None
+    if dry_run:
+        source = load_gen3_randbat_source_cached(runtime["showdown"]["root"])
+        labels = scratch_label_vocabulary(source, ActorContract.champion().belief_set_source_hash)
+        config = profile.configurations(labels, category_vocabulary=category, arm="B", replicate=0)
+    plan = SimpleNamespace(pool_sha256=pool_sha, self_moves=self_moves)
     inputs = v5_worker.Inputs(plan, profile, json.dumps(runtime), json.dumps(vocabulary), json.dumps(gender), "")
     jax.config.update("jax_enable_x64", False)
     jax.config.update("jax_default_matmul_precision", "highest")
@@ -99,86 +99,125 @@ def fixed_fixture(actor, config):
                        probabilities=probabilities, choice=choice, mask=mask))
 
 
-def prepare(args, inputs, config, root):
-    from . import v5_python_backend, v5_training
+def scratch_actors(root, config):
+    from . import v5_training
     from .s0_transfer_control import shadow, write_actor
-    from .s0_transfer_starts import prepare_starts
 
-    prepared = v5_python_backend.prepare(inputs)
-    banks = {"scratch": dry_run_clusters()}
-    cells = expected_cells(banks, dry_run=True)
-    clusters = sorted({cell["cluster"] for cell in cells.values()} | {WARMUP_ROOT})
-    starts = prepare_starts(prepared, clusters, gender_seed=DRY_RUN_ROOT + 2000, gender_domain=17)
     actors = {}
     for offset, role in enumerate(("B", "T")):
         train = v5_training.TrainConfig(seed=DRY_RUN_ROOT + 2001 + offset)
         runtime = v5_training.create(config["model"], config["loss"], train, enable_v5=True)
         actors[role] = write_actor(root / role, runtime)
-    actors["C"], control = shadow(root / "C", actors["B"], [], dry_run=True, fixture=fixed_fixture)
+        actors[role]["model"] = config["model"].metadata()
     if actors["B"]["tensor_sha256"] == actors["T"]["tensor_sha256"]:
         raise ValueError("scratch T and B must exercise distinct weights")
+    control = shadow(root / "C", actors["B"], 2, fixture=fixed_fixture)
+    actors["C"] = dict(control, model=actors["B"]["model"])
+    return {"scratch": actors}
+
+
+def production_actors(root, spec):
+    from . import checkpoint_self_moves, v5_training
+    from .live_protocol_actor import ActorContract
+    from .s0_transfer_control import shadow, tensor_digest
+    from .v5_model import V5ModelConfig
+    from .v5_run import Snapshot
+
+    cycles = spec["cadence_iterations"]
+    if cycles not in (50, 100):
+        raise ValueError("expected a declared 1M or 2M milestone")
+    anchor = spec["champion"]
+    if anchor["checkpoint_sha256"] != ActorContract.champion().checkpoint_sha256:
+        raise ValueError("the Foul Play anchor must be the untouched champion")
+
+    result = {}
+    for replica, entry in spec["replicas"].items():
+        base, declaration, events = checkpoint_self_moves.verified_run(entry["run"])
+        progress = {event["payload"]["iteration"] for event in events if event["kind"] == "ITERATION_COMPLETE"}
+        plan = declaration["iterations"]
+        if (len(plan) < cycles or any(sum(len(batch["games"]) for batch in it) != 20_000
+                                     for it in plan[:cycles])
+                or not set(range(cycles)).issubset(progress)
+                or declaration.get("self_moves", False) != spec["self_moves"]):
+            raise ValueError("run milestone is uncommitted or encoder configuration differs")
+        actors = {}
+        for role, iteration in (("B", -1), ("T", cycles - 1)):
+            snap = Snapshot(**entry[role])
+            if snap.iteration != iteration:
+                raise ValueError("expected the game-zero and committed milestone checkpoints")
+            checked, self_moves, proof = checkpoint_self_moves.run_checkpoint(
+                base, snap.checkpoint, snap.checkpoint_sha256, iteration=iteration,
+                expected_snapshot=snap, require_snapshot=True,
+            )
+            checkpoint = (base / snap.checkpoint).resolve()
+            archive = (base / snap.archive).resolve()
+            if not archive.is_relative_to(base):
+                raise ValueError("actor archive must belong to the training run")
+            model = checked.metadata["model"]
+            if digest(model) != snap.model_sha256:
+                raise ValueError("checkpoint model differs from its published snapshot")
+            actor = dict(
+                checkpoint=str(checkpoint), checkpoint_sha256=snap.checkpoint_sha256,
+                archive=str(archive), archive_sha256=snap.archive_sha256,
+                self_moves=self_moves, model=model, model_sha256=snap.model_sha256,
+            )
+            load_actor(actor, V5ModelConfig.from_metadata(model))
+            if role == "B":
+                baseline = v5_training.load_checkpoint(
+                    checkpoint, enable_v5=True, expected_checkpoint_sha256=snap.checkpoint_sha256,
+                    expected_self_moves=self_moves, off_provenance=proof,
+                )
+                actor["tensor_sha256"] = tensor_digest(baseline)
+            actors[role] = actor
+        if actors["B"]["model"] != actors["T"]["model"]:
+            raise ValueError("T and B must have the same model configuration within each replica")
+        control = shadow(root / replica / "C", actors["B"], cycles, fixture=fixed_fixture,
+                         baseline_runtime=baseline)
+        actors["C"] = dict(control, model=actors["B"]["model"])
+        actors["H"] = anchor
+        result[replica] = actors
+    return result
+
+
+def prepare(args, inputs, config, root, spec):
+    from . import v5_python_backend
+    from .s0_transfer_starts import prepare_starts
+
+    dry_run = spec is None
+    banks = {"scratch": dry_run_clusters()} if dry_run else spec["banks"]
+    roster_seed = DRY_RUN_ROOT + 2000 if dry_run else spec["roster_seed"]
+    if type(roster_seed) is not int or not 0 <= roster_seed < 2**32:
+        raise ValueError("uint32 roster seed required")
+    if not dry_run and (len(banks) != 2 or banks.keys() != spec["replicas"].keys()
+                        or any(len(bank) != 5000 for b in banks.values() for bank in b.values())):
+        raise ValueError("declared panel needs two replicas and 5,000 clusters per assay")
+    cells = expected_cells(banks, dry_run=dry_run)
+    warmup = DRY_RUN_ROOT + WARMUP_OFFSET
+    clusters = sorted({cell["cluster"] for cell in cells.values()} | {warmup})
+    prepared = v5_python_backend.prepare(inputs)
+    starts = prepare_starts(prepared, clusters, gender_seed=roster_seed, gender_domain=17)
+    actors = scratch_actors(root, config) if dry_run else production_actors(root, spec)
+    for roles in actors.values():
+        for actor in roles.values():
+            actor.pop("encoding_receipt", None)
+            actor.pop("tensor_sha256", None)
     manifest = dict(
-        schema=SCHEMA, dry_run=True, banks=banks, expected_cells_sha256=digest(list(cells.values())),
-        runtime_sha256=args.runtime_sha, label_vocabulary_sha256=config["model"].label_vocabulary.sha256,
-        max_requests=MAX_REQUESTS,
-        starts=starts, actors={"scratch": actors}, control={"scratch": control}, bootstrap_seed=DRY_RUN_ROOT + 2003,
-        source_commit=source_commit(), static_runtime_source_commit=inputs.runtime["source_commit"],
-        bridge_sha256=args.bridge_sha, fp_root=str(args.foulplay_root), fp_python=str(args.foulplay_python),
-        fp_revision=args.foulplay_revision, fp_budget_ms=1000,
-        policy=dict(sampled_forward="bf16", logits="float32", greedy_forward="float32",
-                    law="threefry2x32/fold-cluster-frame-physical-seat/categorical-low",
-                    legacy_actor_greedy_tie="lowest_legal_index", jax=inputs.runtime["versions"]["jax"]),
+        schema=SCHEMA, dry_run=dry_run, banks=banks, roster_seed=roster_seed,
+        source_commit=source_commit(), starts=starts, actors=actors,
+        bootstrap_seed=DRY_RUN_ROOT + 2003 if dry_run else spec["bootstrap_seed"],
+        config=dict(
+            self_moves=inputs.plan.self_moves, warmup=warmup, max_requests=MAX_REQUESTS,
+            control_cycles=2 if dry_run else spec["cadence_iterations"],
+            runtime_sha256=args.runtime_sha, bridge_sha256=args.bridge_sha,
+            fp_root=str(args.foulplay_root), fp_python=str(args.foulplay_python),
+            fp_revision=args.foulplay_revision, fp_budget_ms=1000,
+            sampled_forward="bf16", logits="float32", greedy_forward="float32",
+            law="threefry2x32/fold-cluster-frame-physical-seat/categorical-low",
+            jax=inputs.runtime["versions"]["jax"],
+        ),
     )
-    write_once(root / "manifest.json", manifest)
+    write_json(root / "manifest.json", manifest)
     return prepared, manifest
-
-
-def resume_scratch(root, prior, *, manifest_sha, engine_sha, showdown_sha):
-    """Reopen only deadline placeholders from one sealed unscored packet."""
-    from .s0_transfer_recompute import collect_scores
-
-    def checked(name, sha):
-        blob = (prior / name).read_bytes()
-        if hashlib.sha256(blob).hexdigest() != sha:
-            raise ValueError(f"previous scratch artifact changed: {name}")
-        return json.loads(blob)
-
-    if root.resolve() == prior.resolve():
-        raise ValueError("scratch continuation needs a separate output directory")
-    manifest = checked("manifest.json", manifest_sha)
-    if manifest["dry_run"] is not True:
-        raise ValueError("only unscored scratch packets can resume")
-    engine_rows = checked("engine.cells.json", engine_sha)
-    showdown_rows = checked("showdown.cells.json", showdown_sha)
-    if (any(row["environment"] != "engine" for row in engine_rows)
-            or any(row["environment"] != "showdown" for row in showdown_rows)):
-        raise ValueError("previous scratch shards are mixed")
-    collect_scores(manifest, engine_rows + showdown_rows)
-
-    def deadline_placeholder(row):
-        return (row["status"] == "FAILED"
-                and row["evidence"] == {"reason": "worker exit 124 before a durable cell result"})
-
-    retained = [row for row in showdown_rows if not deadline_placeholder(row)]
-    if len(retained) == len(showdown_rows) or any(deadline_placeholder(row) for row in engine_rows):
-        raise ValueError("scratch continuation requires a completed engine and missing Showdown cells")
-    if write_once(root / "manifest.json", manifest) != manifest_sha:
-        raise ValueError("scratch manifest is not canonical")
-    if write_once(root / "engine.cells.json", engine_rows) != engine_sha:
-        raise ValueError("previous engine shard is not canonical")
-    write_once(root / "engine.terminal.json", dict(
-        status="COMPLETE", dry_run=True, name="engine.cells.json", sha256=engine_sha,
-        cells=len(engine_rows), status_counts=dict(Counter(row["status"] for row in engine_rows)),
-    ))
-    for row in retained:
-        write_once(journal_path(root, row), row)
-    write_once(root / "showdown.resume.json", dict(
-        dry_run=True, previous_packet=str(prior), manifest_sha256=manifest_sha,
-        previous_engine_sha256=engine_sha, previous_showdown_sha256=showdown_sha,
-        continuation_source_commit=source_commit(), retained_showdown_cells=len(retained),
-        pending_showdown_cells=len(showdown_rows) - len(retained),
-    ))
-    return manifest
 
 
 def source_commit():
@@ -191,9 +230,7 @@ def wait_for(path, message, *, peer_terminal=None):
     while not path.is_file():
         if peer_terminal is not None and peer_terminal.is_file():
             terminal = json.loads(peer_terminal.read_bytes())
-            if terminal["status"] in ("FAILED", "PARTIAL"):
-                detail = terminal.get("reason", f'worker exit {terminal["worker_exit_code"]}')
-                raise ValueError(f"{peer_terminal.name}: {detail}")
+            raise ValueError(f'peer exited {terminal["exit_code"]} before publishing {path.name}')
         if time.monotonic() - start >= JOIN_SECONDS:
             raise TimeoutError(message)
         time.sleep(2)
@@ -222,19 +259,20 @@ def install_bridge(path, expected_sha):
                     stream.write(blob)
 
 
-def engine(inputs, config, manifest, cells, *, publish, replica="scratch"):
+def engine(inputs, model, manifest, cells, *, publish, replica):
     from gpu_engine.s0_transfer_engine import evaluate
     from . import v5_worker
 
     runtime = dict(inputs.runtime, source_commit=manifest["source_commit"])
     prepared, pool, _, _ = v5_worker.prepare_device_runtime(replace(inputs, runtime_json=json.dumps(runtime)))
-    actors = {role: (actor["archive_sha256"], load_actor(actor, config["model"]))
+    actors = {role: (actor["archive_sha256"], load_actor(actor, model))
               for role, actor in manifest["actors"][replica].items() if role != "H"}
     groups = [[c for c in cells if c["role"] == role and c["seat"] == seat]
               for role in ("T", "C") for seat in (0, 1)]
-    return evaluate(prepared, pool, config["model"], groups, manifest["starts"], actors,
-                    run_sha=digest(manifest), lanes=20, max_requests=MAX_REQUESTS, wall_seconds=CELL_SECONDS,
-                    publish=publish)
+    batches = (group[i:i + 20] for group in groups for i in range(0, len(group), 20))
+    evaluate(prepared, pool, model, batches, manifest["starts"], actors,
+             run_sha=digest([manifest["source_commit"], manifest["roster_seed"], replica]),
+             lanes=20, max_requests=manifest["config"]["max_requests"], publish=publish)
 
 
 def factories(prepared, model, actors, *, sampled):
@@ -259,7 +297,7 @@ def factories(prepared, model, actors, *, sampled):
     return result
 
 
-def prime_factories(public_config, packed):
+def prime_factories(public_config, packed, seed):
     """Capture one separate real owning opening for independent factory warmups."""
     from .env import BattleStartOverride
     from .v5_python_collection import OwningEnv
@@ -267,7 +305,7 @@ def prime_factories(public_config, packed):
     env = OwningEnv(public_config)
     try:
         env.reset_with_start_override(
-            seed=WARMUP_ROOT, start_override=BattleStartOverride(packed, observation_format_id="gen3randombattle"),
+            seed=seed, start_override=BattleStartOverride(packed, observation_format_id="gen3randombattle"),
         )
         return {seat: tuple(lines) for seat, lines in env.owner_lines.items()}
     finally:
@@ -277,12 +315,13 @@ def prime_factories(public_config, packed):
 def prime_actors(actors, manifest, public_config):
     from gpu_engine.v5_live_protocol import prime_evaluation
 
-    lines = prime_factories(public_config, manifest["starts"][str(WARMUP_ROOT)]["packed"])
+    seed = manifest["config"]["warmup"]
+    lines = prime_factories(public_config, manifest["starts"][str(seed)]["packed"], seed)
     for role, factory in actors.items():
-        prime_evaluation(factory, battle_id=f"warmup-{role}", seed=WARMUP_ROOT, owner_lines=lines)
+        prime_evaluation(factory, battle_id=f"warmup-{role}", seed=seed, owner_lines=lines)
 
 
-def showdown_h2h(prepared, model, manifest, cells, *, replica="scratch"):
+def showdown_h2h(prepared, model, manifest, cells, *, replica):
     from .env import BattleStartOverride
     from .s0_transfer_showdown import evaluate_game
     from .s0_transfer_starts import showdown_birth
@@ -293,30 +332,31 @@ def showdown_h2h(prepared, model, manifest, cells, *, replica="scratch"):
     for cell in cells:
         roles = (cell["role"], "B") if cell["seat"] == 0 else ("B", cell["role"])
         start = manifest["starts"][str(cell["cluster"])]
-        status, score, witness = evaluate_game(
+        status, witness = evaluate_game(
             prepared.public_config, cell, factories=tuple(actors[role] for role in roles),
             packed_start=BattleStartOverride(start["packed"], observation_format_id="gen3randombattle"),
             check_start=lambda snapshot: showdown_birth(snapshot, start["showdown_birth"]),
-            max_requests=MAX_REQUESTS, wall_seconds=CELL_SECONDS,
+            max_requests=manifest["config"]["max_requests"],
         )
-        yield cell, status, score, witness
+        yield cell, status, witness
 
 
-async def showdown_fp(prepared, model, manifest, cells, *, publish, replica="scratch"):
+async def showdown_fp(prepared, model, manifest, cells, *, publish, replica):
     from .env import BattleStartOverride
-    from .foulplay_bridge import ControlledFoulPlayConfig
+    from .foulplay_bridge import ControlledFoulPlayConfig, run_controlled_foulplay_benchmark
+    from .live_protocol_runtime import champion_actor_factory
     from .s0_transfer_starts import showdown_birth
     from .v5_foulplay import run_panel
 
-    fw = manifest["fp_root"]
+    run_config = manifest["config"]
+    fw = run_config["fp_root"]
     revision = subprocess.check_output(["git", "-C", fw, "rev-parse", "HEAD"], text=True).strip()
-    if revision != manifest["fp_revision"]:
+    if revision != run_config["fp_revision"]:
         raise ValueError("actual Foul Play revision differs")
     roster_actors = manifest["actors"][replica]
     actors = factories(prepared, model, {role: actor for role, actor in roster_actors.items() if role != "H"},
                        sampled=False)
     prime_actors(actors, manifest, prepared.public_config)
-    limiter = asyncio.Semaphore(4)
 
     async def play(cell):
         role, seat = cell["role"], cell["seat"]
@@ -326,46 +366,62 @@ async def showdown_fp(prepared, model, manifest, cells, *, publish, replica="scr
             checkpoint=Path(roster_actors[role]["checkpoint"]),
             showdown_root=Path(prepared.public_config.showdown_root),
             node_binary=prepared.public_config.node_binary, foulplay_root=Path(fw),
-            foulplay_python=Path(manifest["fp_python"]), games=1, seed_start=cell["chance"],
-            foulplay_random_seed=cell["action"], search_time_ms=manifest["fp_budget_ms"],
-            max_decision_rounds=MAX_REQUESTS, policy_mode="raw", encoder_kind="jax-owning",
+            foulplay_python=Path(run_config["fp_python"]), games=1, seed_start=cell["chance"],
+            foulplay_random_seed=cell["action"], search_time_ms=run_config["fp_budget_ms"],
+            max_decision_rounds=run_config["max_requests"], policy_mode="raw", encoder_kind="jax-owning",
             device="cpu", belief_set_source=True, owning_decision_timeout_seconds=60.,
             opponent_crash_retries=0, allow_search_fallback=False, pokezero_player=f"p{seat + 1}",
             record_refusals=False,
         )
-        async with limiter:
-            panel = await run_panel(
-                config, actors[role], enable_v5=True, packed_starts={
-                    0: BattleStartOverride(start["packed"], observation_format_id="gen3randombattle"),
-                },
-                packed_birth_callback=lambda snapshot: birth.append(showdown_birth(snapshot, start["showdown_birth"])),
-            )
-        raw = panel["rows"][0]
-        if raw["status"] != "COMPLETE":
-            status = raw["status"]
-            if status == "FAILED" and raw["reason"] == "RuntimeError: owning game round cap without actual owner terminal":
-                status = "CAPPED"
-            return cell, status, None, dict(reason=raw["reason"], source=raw["source_game"],
-                                            birth=birth[0] if len(birth) == 1 else None)
+        packed = BattleStartOverride(start["packed"], observation_format_id="gen3randombattle")
+
+        def verify_birth(snapshot):
+            birth.append(showdown_birth(snapshot, start["showdown_birth"]))
+
+        if role == "H":
+            try:
+                panel = await run_controlled_foulplay_benchmark(
+                    config, owning_actor_factory=champion_actor_factory(config),
+                    packed_start=packed, packed_birth_callback=verify_birth,
+                )
+            except PermissionError:
+                raise
+            except (RuntimeError, TimeoutError, OSError) as error:
+                return cell, "FAILED", dict(reason=f"{type(error).__name__}: {error}")
+            game, = panel.games
+            fp_seed, = panel.foulplay_random_seed_schedule
+            raw = dict(seed=game.seed, fp_seed=fp_seed, source_game=game.to_dict())
+        else:
+            panel = await run_panel(config, actors[role], enable_v5=True, packed_starts={0: packed},
+                                    packed_birth_callback=verify_birth)
+            raw = panel["rows"][0]
+            if raw["status"] != "COMPLETE":
+                status = raw["status"]
+                if raw["reason"] == "RuntimeError: owning game round cap without actual owner terminal":
+                    status = "CAPPED"
+                return cell, status, dict(reason=raw["reason"])
         witness = raw["source_game"]["terminal_witness"]
         if len(birth) != 1:
             raise ValueError("completed Foul Play cell lacks one verified native birth")
-        player = witness["winner_player"]
-        return cell, "COMPLETE", raw["score"], dict(
+        return cell, "COMPLETE", dict(
             marker=witness["public_terminal_line"], players=[witness["players"][p] for p in ("p1", "p2")],
-            winner=2 if player is None else int(player[1]) - 1, source=raw["source_game"],
             birth=birth[0], seed=raw["seed"], fp_seed=raw["fp_seed"],
         )
 
-    async def publish_finished(cell):
-        publish(await play(cell))
+    pending = iter(cells)
 
-    await asyncio.gather(*(publish_finished(cell) for cell in cells))
+    async def play_next():
+        for cell in pending:
+            publish(await play(cell))
+
+    await asyncio.gather(*(play_next() for _ in range(4)))
 
 
 def main():
+    from .v5_model import V5ModelConfig
+
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("side", choices=("engine", "showdown"))
+    parser.add_argument("side", choices=("prepare", "engine", "showdown"))
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--runtime-sha", required=True)
@@ -374,68 +430,63 @@ def main():
     parser.add_argument("--foulplay-revision", required=True)
     parser.add_argument("--bridge", type=Path)
     parser.add_argument("--bridge-sha")
-    parser.add_argument("--resume-from", type=Path)
-    parser.add_argument("--resume-manifest-sha")
-    parser.add_argument("--resume-engine-sha")
-    parser.add_argument("--resume-showdown-sha")
+    parser.add_argument("--spec", type=Path, help="registered production inputs; omit for the unscored scratch roster")
     args = parser.parse_args()
     root = args.out.resolve()
-    inputs, config = load_settings(args.runtime, args.runtime_sha)
-    if args.resume_from is not None:
-        from . import v5_python_backend
-
-        if args.side != "showdown" or not all((args.resume_manifest_sha, args.resume_engine_sha,
-                                               args.resume_showdown_sha)):
-            raise ValueError("scratch continuation needs Showdown and all previous artifact digests")
-        manifest = resume_scratch(root, args.resume_from, manifest_sha=args.resume_manifest_sha,
-                                  engine_sha=args.resume_engine_sha, showdown_sha=args.resume_showdown_sha)
-        if args.bridge is not None:
-            install_bridge(args.bridge, args.bridge_sha)
-        prepared = v5_python_backend.prepare(inputs)
-    elif args.side == "showdown":
-        if args.bridge is not None:
-            install_bridge(args.bridge, args.bridge_sha)
-        prepared, manifest = prepare(args, inputs, config, root)
-        joined = wait_for(root / "engine.join.json", "engine partner did not join",
-                          peer_terminal=root / "engine.terminal.json")
-        if joined != dict(manifest_sha256=digest(manifest)):
-            raise ValueError("engine joined a different scratch manifest")
+    root.mkdir(parents=True, exist_ok=True)
+    manifest_path = root / "manifest.json"
+    if args.spec is not None and args.side != "prepare":
+        parser.error("prepare the registered run on CPU before submitting either worker")
+    if args.side != "engine" and args.bridge is not None:
+        install_bridge(args.bridge, args.bridge_sha)
+    if args.side == "prepare" or (args.side == "showdown" and not manifest_path.is_file()):
+        if manifest_path.exists():
+            raise ValueError("use a fresh output directory for a new panel")
+        spec = json.loads(args.spec.read_bytes()) if args.spec is not None else None
+        self_moves = False if spec is None else spec["self_moves"]
+        if type(self_moves) is not bool:
+            raise ValueError("explicit self-move encoder setting required")
+        inputs, config = load_settings(args.runtime, args.runtime_sha, dry_run=spec is None, self_moves=self_moves)
+        prepared, manifest = prepare(args, inputs, config, root, spec)
+        if args.side == "prepare":
+            return
     else:
-        manifest = wait_for(root / "manifest.json", "Showdown partner did not publish a scratch manifest",
-                            peer_terminal=root / "showdown.terminal.json")
-    if ((args.resume_from is None and manifest["source_commit"] != source_commit())
-            or manifest["runtime_sha256"] != args.runtime_sha
-            or manifest["label_vocabulary_sha256"] != config["model"].label_vocabulary.sha256
-            or manifest["bridge_sha256"] != args.bridge_sha
-            or manifest["fp_root"] != str(args.foulplay_root)
-            or manifest["fp_python"] != str(args.foulplay_python)
-            or manifest["fp_revision"] != args.foulplay_revision
-            or manifest["dry_run"] is not True):
-        raise ValueError("partner source or scratch input manifest differs")
-    if args.side == "engine":
-        write_once(root / "engine.join.json", dict(manifest_sha256=digest(manifest)))
-    expected = {key: cell for key, cell in expected_cells(manifest["banks"], dry_run=True).items()
+        manifest = wait_for(manifest_path, "Showdown did not prepare a run manifest",
+                            peer_terminal=root / "showdown.done.json" if args.side == "engine" else None)
+        if (manifest["schema"] != SCHEMA or manifest["source_commit"] != source_commit()
+                or manifest["config"]["runtime_sha256"] != args.runtime_sha):
+            raise ValueError("worker source or runtime differs from the run manifest")
+        inputs, _ = load_settings(args.runtime, args.runtime_sha, dry_run=False,
+                                  self_moves=manifest["config"]["self_moves"])
+        if args.side == "showdown":
+            from . import v5_python_backend
+
+            if manifest["config"]["bridge_sha256"] != args.bridge_sha:
+                raise ValueError("Showdown bridge differs from the prepared run")
+            prepared = v5_python_backend.prepare(inputs)
+
+    expected = {key: cell for key, cell in expected_cells(manifest["banks"], dry_run=manifest["dry_run"]).items()
                 if cell["environment"] == args.side}
-    cells = [c for c in expected.values() if args.resume_from is None or not journal_path(root, c).is_file()]
+    with (root / f"{args.side}.jsonl").open("xb") as output:
+        def publish(result):
+            cell, status, witness = result
+            if expected.get(cell_key(cell)) != cell:
+                raise ValueError("terminal belongs to an unexpected cell")
+            output.write(canonical(dict(cell, status=status, evidence=witness)) + b"\n")
+            output.flush()
 
-    def publish(result):
-        cell, status, score, evidence = result
-        if expected.get(cell_key(cell)) != cell:
-            raise ValueError("result belongs to an unexpected scratch cell")
-        write_once(journal_path(root, cell), cell_record(manifest, cell, status, score, evidence))
-
-    if args.side == "engine":
-        engine(inputs, config, manifest, cells, publish=publish)
-    else:
-        h2h_cells = [c for c in cells if c["assay"] == H2H]
-        fp_cells = [c for c in cells if c["assay"] == FP]
-        if args.resume_from is not None and fp_cells:
-            asyncio.run(showdown_fp(prepared, config["model"], manifest, fp_cells, publish=publish))
-        if h2h_cells:
-            for result in showdown_h2h(prepared, config["model"], manifest, h2h_cells):
-                publish(result)
-        if args.resume_from is None and fp_cells:
-            asyncio.run(showdown_fp(prepared, config["model"], manifest, fp_cells, publish=publish))
+        for replica, actors in manifest["actors"].items():
+            model = V5ModelConfig.from_metadata(actors["B"]["model"])
+            cells = [cell for cell in expected.values() if cell["replica"] == replica]
+            if args.side == "engine":
+                engine(inputs, model, manifest, cells, publish=publish, replica=replica)
+            else:
+                for result in showdown_h2h(prepared, model, manifest,
+                                           [cell for cell in cells if cell["assay"] == H2H], replica=replica):
+                    publish(result)
+                asyncio.run(showdown_fp(prepared, model, manifest,
+                                        [cell for cell in cells if cell["assay"] == FP],
+                                        publish=publish, replica=replica))
 
 
 if __name__ == "__main__":

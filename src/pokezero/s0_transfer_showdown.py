@@ -1,12 +1,9 @@
 """Sampled owning Showdown H2H for the finite transfer assay."""
 
-import hashlib
-import time
-
 from .v5_python_collection import Game, OwningEnv, _terminal_winner
 
 
-def evaluate_game(config, cell, *, factories, packed_start, check_start, max_requests, wall_seconds):
+def evaluate_game(config, cell, *, factories, packed_start, check_start, max_requests):
     from gpu_engine.v5_evaluation_sampling import EvaluationDraw
     from gpu_engine.v5_live_protocol import check_factory
 
@@ -21,7 +18,6 @@ def evaluate_game(config, cell, *, factories, packed_start, check_start, max_req
     game = Game(cell["cluster"], f'{cell["role"]}-{cell["cluster"]}-{cell["seat"]}',
                 cell["chance"], cell["action"])
     actors = []
-    clock = time.monotonic()
     frames = 0
     try:
         env = OwningEnv(config)
@@ -35,8 +31,6 @@ def evaluate_game(config, cell, *, factories, packed_start, check_start, max_req
                 actors.append(actor)
             offsets = [0, 0]
             while frames < max_requests and env.terminal() is None:
-                if time.monotonic() - clock >= wall_seconds:
-                    raise TimeoutError("matched H2H cell wall deadline")
                 for side, actor in enumerate(actors):
                     lines = env.owner_lines[actor.owner]
                     if len(lines) != offsets[side]:
@@ -59,28 +53,22 @@ def evaluate_game(config, cell, *, factories, packed_start, check_start, max_req
                 env.step(actions)
                 frames += 1
             terminal = env.terminal()
-            if time.monotonic() - clock >= wall_seconds:
-                raise TimeoutError("matched H2H cell wall deadline")
             if terminal is None or terminal.capped:
-                return "CAPPED", None, dict(frames=frames, reason="request-cap", birth=birth_receipt)
+                return "CAPPED", dict(frames=frames, reason="request-cap", birth=birth_receipt)
             lines = [tuple(line for line in env.owner_lines[seat]
                            if line.startswith(("|win|", "|tie|")) or line == "|tie")
                      for seat in ("p1", "p2")]
             if len(lines[0]) != 1 or lines[0] != lines[1]:
                 raise ValueError("owning terminal witnesses disagree")
             marker = lines[0][0]
-            winner = _terminal_winner(env.owner_lines, marker, terminal)
+            _terminal_winner(env.owner_lines, marker, terminal)
             players = [next(line.split("|")[3] for line in env.owner_lines["p1"]
                             if line.startswith(f"|player|p{i}|")) for i in (1, 2)]
             for actor in actors:
                 if actor.close_game()["status"] == "FAILED_CLOSED":
                     raise ValueError("owning actor failed to close cleanly")
             actors.clear()
-            return "COMPLETE", (.5 if winner == 2 else float(winner == cell["seat"])), dict(
-                marker=marker, winner=winner, players=players, frames=frames, birth=birth_receipt,
-                stream_sha256={seat: hashlib.sha256("\n".join(v).encode()).hexdigest()
-                               for seat, v in env.owner_lines.items()},
-            )
+            return "COMPLETE", dict(marker=marker, players=players, frames=frames, birth=birth_receipt)
         finally:
             try:
                 for actor in actors:
@@ -91,4 +79,4 @@ def evaluate_game(config, cell, *, factories, packed_start, check_start, max_req
         raise
     except (ValueError, RuntimeError, TimeoutError, OSError) as error:
         status = "REFUSED" if isinstance(error, ValueError) else "FAILED"
-        return status, None, dict(frames=frames, reason=f"{type(error).__name__}: {error}")
+        return status, dict(frames=frames, reason=f"{type(error).__name__}: {error}")

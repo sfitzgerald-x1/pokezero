@@ -1,6 +1,5 @@
 """Evaluate finite transfer pairs on the existing engine refill collector."""
 
-import time
 
 import jax
 import jax.numpy as jnp
@@ -43,7 +42,7 @@ def make_roster(initialize, pool, bindings, cells, starts, archives):
 
 
 def evaluate(prepared, pool, model_config, cell_groups, starts, actors, *, run_sha,
-             lanes, max_requests, wall_seconds, publish):
+             lanes, max_requests, publish):
     labels = rollout.compile_labels(pool.metadata(), model_config.label_vocabulary)
     initialize = jax.jit(lambda state: transition.initialize_with_public(
         state, prepared.engine_tables, belief_tables=prepared.observation_tables.belief,
@@ -71,14 +70,11 @@ def evaluate(prepared, pool, model_config, cell_groups, starts, actors, *, run_s
             collector.compile(params, threads=2)
         else:
             collector.rebind(roster)
-        start_clock = time.monotonic()
-
-        play_batch(collector, params, roster, cells, birth, publish=publish,
-                   deadline=start_clock + wall_seconds)
+        play_batch(collector, params, roster, cells, birth, publish=publish)
 
 
-def play_batch(collector, params, roster, cells, birth, *, publish, deadline):
-    """Publish terminal lanes at chunk boundaries, then close only unfinished cells."""
+def play_batch(collector, params, roster, cells, birth, *, publish):
+    """Publish terminal lanes as they exit so a job timeout preserves completed games."""
     published = set()
 
     def observe(book):
@@ -94,20 +90,14 @@ def play_batch(collector, params, roster, cells, birth, *, publish, deadline):
             witness = dict(status=status, winner=winner, frames=int(records["terminal_frame"][i]),
                            hp=records["terminal_hp"][i].tolist(), max_hp=records["terminal_max_hp"][i].tolist(),
                            birth=birth[i])
-            score = None
             if status == "COMPLETE":
                 if winner not in (0, 1, 2):
                     raise ValueError("engine returned malformed terminal winner")
-                score = .5 if winner == 2 else float(winner == cell["seat"])
             else:
                 witness["reason"] = f"engine-{status.lower()}"
-            publish((cell, status, score, witness))
+            publish((cell, status, witness))
             published.add(i)
-        return time.monotonic() >= deadline
 
     collector.run(params, observe_book=observe)
-    for i, cell in enumerate(cells):
-        if i not in published:
-            if time.monotonic() < deadline:
-                raise ValueError("engine batch ended without a cell terminal")
-            publish((cell, "FAILED", None, dict(reason="engine batch wall deadline", birth=birth[i])))
+    if len(published) != len(cells):
+        raise ValueError("engine batch ended without a cell terminal")

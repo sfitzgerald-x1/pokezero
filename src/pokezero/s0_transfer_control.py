@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 from . import checkpoint_self_moves, v5_training
-from .s0_transfer_roster import digest, write_once
+from .s0_transfer_roster import digest
 
 
 def tensor_digest(runtime):
@@ -48,38 +48,28 @@ def reload_actor(actor):
     return restored
 
 
-def shadow(directory, baseline, iterations, *, dry_run, fixture):
-    """Save, export, reload and verify one control state per completed iteration."""
+def shadow(directory, baseline, cycles, *, fixture, baseline_runtime=None):
+    """Run the no-update save/export/reload path without a receipt chain."""
+    if cycles not in (2, 50, 100):
+        raise ValueError("expected 2 scratch, 50 cadence-1 or 100 cadence-2 cycles")
+    from tempfile import TemporaryDirectory
+
     root = Path(directory)
-    root.mkdir(parents=True, exist_ok=False)
-    if dry_run:
-        if iterations != []:
-            raise ValueError("scratch fixtures carry no training progress")
-        cycles = [None, None]
-    else:
-        cycles = iterations
-        if len(cycles) not in (50, 100):
-            raise ValueError("control cadence requires 50 or 100 completed iteration receipts")
-        before = 0
-        for i, entry in enumerate(cycles, 1):
-            if (entry["iteration"] != i or type(entry["completed_games"]) is not int
-                    or entry["completed_games"] <= before):
-                raise ValueError("completed iteration order/progress changed")
-            before = entry["completed_games"]
-    runtime = reload_actor(baseline)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    runtime = reload_actor(baseline) if baseline_runtime is None else baseline_runtime
+    if runtime.steps or runtime.rows or runtime.optimizer.state:
+        raise ValueError("control must begin with the untouched baseline")
     expected_fixture = fixture(baseline, runtime.model_config)
-    receipts = []
-    for i, iteration in enumerate(cycles, start=1):
-        # No collection and no optimizer application in this path.
-        current = write_actor(root / f"{i:03d}", runtime)
-        runtime = reload_actor(current)
-        actual_fixture = fixture(current, runtime.model_config)
-        if current["tensor_sha256"] != baseline["tensor_sha256"] or actual_fixture != expected_fixture:
-            raise ValueError("control artifact or fixture changed during the no-update lifecycle")
-        receipt = dict(schema="pokezero.s0-control-cycle.r2", dry_run=dry_run, control=current,
-                       baseline=baseline, fixture_sha256=actual_fixture, cycle=i,
-                       training_games=0, completed_iteration=iteration)
-        receipts.append(write_once(root / f"{i:03d}" / "cycle.json", receipt))
-    return current, dict(dry_run=dry_run, training_games=0, shadow_cycles=len(cycles),
-                         completed_iterations_sha256=digest(iterations), cycle_sha256=receipts,
-                         last_fixture_sha256=expected_fixture)
+    # Reuse a small temporary footprint. Only the served final control remains.
+    for cycle in range(1, cycles):
+        with TemporaryDirectory(dir=root.parent) as scratch:
+            current = write_actor(Path(scratch) / "control", runtime)
+            runtime = reload_actor(current)
+            if current["tensor_sha256"] != baseline["tensor_sha256"]:
+                raise ValueError(f"control weights changed at cycle {cycle}")
+    control = write_actor(root, runtime)
+    restored = reload_actor(control)
+    if (control["tensor_sha256"] != baseline["tensor_sha256"]
+            or fixture(control, restored.model_config) != expected_fixture):
+        raise ValueError("final control differs from untouched baseline")
+    return control

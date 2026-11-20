@@ -1,13 +1,13 @@
-"""Offline transfer scoring from primitive terminal witnesses and a sealed roster."""
+"""Offline transfer scoring from raw terminal witnesses and the run manifest."""
 
 import argparse
-import hashlib
+from collections import Counter
 import json
 from pathlib import Path
 
 import numpy as np
 
-from .s0_transfer_roster import FP, H2H, SCHEMA, actor_bindings, cell_key, digest, expected_cells, write_once
+from .s0_transfer_roster import FP, H2H, SCHEMA, cell_key, expected_cells, read_terminals, write_json
 
 
 CONTRASTS = {
@@ -23,121 +23,51 @@ UNKNOWN = {"NOT_ATTEMPTED", "CAPPED", "REFUSED", "FAILED"}
 
 
 def terminal_score(row):
-    """Decode the actual producer witness without using its score or aggregate."""
+    """Attribute the simulator terminal to the evaluated actor's physical seat."""
     evidence = row["evidence"]
     if row["status"] in UNKNOWN:
-        if row["score"] is not None or not evidence.get("reason"):
-            raise ValueError("unknown cell requires a reason and no score")
+        if not evidence.get("reason"):
+            raise ValueError("unknown cell requires a reason")
         return None
     if row["status"] != "COMPLETE":
         raise ValueError("unsupported disposition")
     if row["environment"] == "engine":
-        if evidence["status"] != "COMPLETE" or type(evidence["winner"]) is not int:
-            raise ValueError("engine terminal status and winner required")
         winner = evidence["winner"]
-        if winner not in (0, 1, 2):
-            raise ValueError("unexpected engine winner")
+        if evidence["status"] != "COMPLETE" or type(winner) is not int or winner not in (0, 1, 2):
+            raise ValueError("invalid engine terminal")
         return .5 if winner == 2 else float(winner == row["seat"])
-    if row["assay"] == FP:
-        original = evidence["source"]["terminal_witness"]
-        if (original["capped"] or evidence["marker"] != original["public_terminal_line"]
-                or evidence["players"] != [original["players"][p] for p in ("p1", "p2")]):
-            raise ValueError("normalized external terminal differs from its source")
-        winner = original["winner_player"]
-        if original["status"] != ("PUBLIC_TIE" if winner is None else "PUBLIC_WIN"):
-            raise ValueError("external witness lacks a valid terminal status")
-        if winner not in (None, "p1", "p2") or evidence["winner"] != (2 if winner is None else int(winner[1]) - 1):
-            raise ValueError("external terminal winner differs from its source")
-    marker = evidence["marker"]
-    names = evidence["players"]
-    if not isinstance(names, list) or len(names) != 2 or len(set(names)) != 2:
+    marker, names = evidence["marker"], evidence["players"]
+    if (not isinstance(names, list) or len(names) != 2
+            or any(not isinstance(name, str) or not name for name in names) or names[0] == names[1]):
         raise ValueError("two distinct simulator player identities required")
-    if marker in ("|tie", "|tie|") and evidence["winner"] == 2:
+    if marker in ("|tie", "|tie|"):
         return .5
     if marker.startswith("|win|") and marker[5:] in names:
-        winner = names.index(marker[5:])
-        if type(evidence["winner"]) is int and evidence["winner"] == winner:
-            return float(winner == row["seat"])
-    raise ValueError("literal Showdown terminal and winner disagree")
+        return float(names.index(marker[5:]) == row["seat"])
+    raise ValueError("invalid literal Showdown terminal")
 
 
 def collect_scores(manifest, rows):
     if manifest["schema"] != SCHEMA or type(manifest["dry_run"]) is not bool:
-        raise ValueError("explicit r2 cell schema and run class required")
+        raise ValueError("explicit transfer schema and run class required")
     expected = expected_cells(manifest["banks"], dry_run=manifest["dry_run"])
-    if manifest["expected_cells_sha256"] != digest(list(expected.values())):
-        raise ValueError("frozen roster cell identities changed")
     scores = {}
-    manifest_sha = digest(manifest)
     for row in rows:
         key = cell_key(row)
         spec = expected.get(key)
         if key in scores or spec is None or any(row[k] != v for k, v in spec.items()):
             raise ValueError("duplicate, extra or changed roster cell")
-        if row["manifest_sha256"] != manifest_sha:
-            raise ValueError("cell belongs to another manifest")
-        start = manifest["starts"][str(row["cluster"])]
-        if row["start_sha256"] != digest(start):
-            raise ValueError("cell roster binding changed")
-        if row["actor_bindings"] != actor_bindings(manifest, row):
-            raise ValueError("physical actor-role bindings differ")
-        if row["evidence_sha256"] != digest(row["evidence"]):
-            raise ValueError("terminal evidence changed")
         if row["status"] == "COMPLETE":
-            birth_field = "engine_birth" if row["environment"] == "engine" else "showdown_birth"
-            if row["evidence"].get("birth") != start[birth_field]:
-                raise ValueError("completed cell lacks the actual declared start")
-            if row["assay"] == FP and (row["evidence"]["seed"], row["evidence"]["fp_seed"]) != (row["chance"], row["action"]):
-                raise ValueError("external opponent seed receipt differs")
-        if row["score"] != (score := terminal_score(row)):
-            raise ValueError("producer score does not match terminal evidence")
-        scores[key] = score
-    if scores.keys() != expected.keys():
-        raise ValueError("missing expected cell or unknown placeholder")
-    return scores
-
-
-def verify_control(manifest):
-    if manifest["banks"].keys() != manifest["actors"].keys() or manifest["banks"].keys() != manifest["control"].keys():
-        raise ValueError("each registered replica requires its own control lifecycle")
-    for replica, actors in manifest["actors"].items():
-        baseline, control = actors["B"], actors["C"]
-        declared = manifest["control"][replica]
-        cycles = declared["shadow_cycles"]
-        if (declared["dry_run"] != manifest["dry_run"] or declared["training_games"] != 0
-                or baseline["checkpoint"] == control["checkpoint"] or baseline["archive"] == control["archive"]
-                or baseline["tensor_sha256"] != control["tensor_sha256"]
-                or baseline["model_sha256"] != control["model_sha256"]
-                or baseline["self_moves"] != control["self_moves"]
-                or cycles not in ((2,) if manifest["dry_run"] else (50, 100))
-                or len(declared["cycle_sha256"]) != cycles):
-            raise ValueError("C must retain B policy tensors on an independent no-update lifecycle")
-        root = Path(control["checkpoint"]).parent.parent
-        iterations = []
-        prior = 0
-        for i, seal in enumerate(declared["cycle_sha256"], 1):
-            cycle = (root / f"{i:03d}" / "cycle.json").read_bytes()
-            if hashlib.sha256(cycle).hexdigest() != seal:
-                raise ValueError("control lifecycle receipt changed")
-            value = json.loads(cycle)
-            if (value["schema"] != "pokezero.s0-control-cycle.r2" or value["dry_run"] != manifest["dry_run"]
-                    or value["training_games"] != 0 or value["cycle"] != i or value["baseline"] != baseline
-                    or value["fixture_sha256"] != declared["last_fixture_sha256"]
-                    or value["control"]["tensor_sha256"] != baseline["tensor_sha256"]
-                    or value["control"]["model_sha256"] != baseline["model_sha256"]
-                    or value["control"]["self_moves"] != baseline["self_moves"]):
-                raise ValueError("control fixture, weights or lifecycle changed")
-            if manifest["dry_run"]:
-                if value["completed_iteration"] is not None:
-                    raise ValueError("scratch lifecycle carries training progress")
-            else:
-                receipt = value["completed_iteration"]
-                if receipt["iteration"] != i or receipt["completed_games"] <= prior:
-                    raise ValueError("completed iteration receipt differs")
-                prior = receipt["completed_games"]
-                iterations.append(receipt)
-        if digest(iterations) != declared["completed_iterations_sha256"] or value["control"] != control:
-            raise ValueError("served control differs from the terminal lifecycle receipt")
+            start = manifest["starts"][str(row["cluster"])]
+            field = "engine_birth" if row["environment"] == "engine" else "showdown_birth"
+            if row["evidence"].get("birth") != start[field]:
+                raise ValueError("completed cell lacks the declared physical start")
+            if row["assay"] == FP:
+                seeds = row["evidence"]["seed"], row["evidence"]["fp_seed"]
+                if seeds != (row["chance"], row["action"]):
+                    raise ValueError("Foul Play ran with different seeds")
+        scores[key] = terminal_score(row)
+    return {key: scores.get(key) for key in expected}
 
 
 def contrast_replica(scores, replica, bank, terms):
@@ -161,7 +91,7 @@ def contrast_replica(scores, replica, bank, terms):
         complete_only_pp=100 * float(lo[complete].mean()) if complete.any() else None,
         complete_cluster_variance_pp2=10_000 * float(lo[complete].var(ddof=1)) if complete.sum() > 1 else None,
     )
-    return lo, hi, result
+    return lo, hi, lo[complete], result
 
 
 def bootstrap(cluster_bounds, *, draws, seed, quantile):
@@ -187,14 +117,21 @@ def rejection(name, endpoints):
     return bool(robust), bool(possible)
 
 
-def recompute(manifest, rows, *, control_verified=False):
+def recompute(manifest, rows):
+    rows = list(rows)
     scores = collect_scores(manifest, rows)
+    dispositions = Counter(row["status"] for row in rows)
+    if missing := len(scores) - len(rows):
+        dispositions["NOT_ATTEMPTED"] += missing
+    matches = {}
+    for (_, assay, _, environment, role, _), score in scores.items():
+        counts = matches.setdefault(f"{assay}/{environment}/{role}", dict(wins=0, ties=0, losses=0, unknown=0))
+        outcome = {1.: "wins", .5: "ties", 0.: "losses", None: "unknown"}[score]
+        counts[outcome] += 1
     banks = manifest["banks"]
     dry_run = manifest["dry_run"]
     draws = 2048 if dry_run else 1_000_000
     q = .05 / (2 * 90)
-    if not dry_run and not control_verified:
-        raise ValueError("independently verified control lifecycle is required")
     if not dry_run and (len(banks) != 2 or any(len(bank) != 5000 for b in banks.values() for bank in b.values())):
         raise ValueError("registered route requires two replicas and 5,000 clusters per bank")
     definitions = CONTRASTS if dry_run else {**CONTRASTS, "T_H": ANCHOR}
@@ -202,13 +139,13 @@ def recompute(manifest, rows, *, control_verified=False):
     complete_floor = True
     for name, (assay, terms) in definitions.items():
         values = [contrast_replica(scores, r, (assay, bank[assay]), terms) for r, bank in sorted(banks.items())]
-        by_replica = dict(zip(sorted(banks), (report for _, _, report in values)))
+        by_replica = dict(zip(sorted(banks), (report for _, _, _, report in values)))
         complete_floor &= all(
             report["known_seat_tuples"] * 10 >= report["seat_tuples"] * 9
             and report["known_clusters"] * 10 >= report["clusters"] * 9
             for report in by_replica.values()
         )
-        intervals = bootstrap([(lo, hi) for lo, hi, _ in values], draws=draws,
+        intervals = bootstrap([(lo, hi) for lo, hi, _, _ in values], draws=draws,
                               seed=manifest["bootstrap_seed"], quantile=q)
         results[name] = dict(
             by_replica=by_replica,
@@ -217,6 +154,23 @@ def recompute(manifest, rows, *, control_verified=False):
             confidence_envelope_pp=[float(intervals[0, 0]), float(intervals[1, 1])],
             endpoint_bounds_pp=intervals.tolist(),
         )
+        if name == "G":
+            completed = [known for _, _, known, _ in values]
+            report_draws = 2048 if dry_run else 20_000
+            envelope = bootstrap([(lo, hi) for lo, hi, _, _ in values], draws=report_draws,
+                                 seed=manifest["bootstrap_seed"], quantile=.05)
+            known_interval = known_estimate = None
+            if all(len(known) for known in completed):
+                known_ci = bootstrap([(known, known) for known in completed], draws=report_draws,
+                                     seed=manifest["bootstrap_seed"], quantile=.05)
+                known_interval = known_ci[:, 0].tolist()
+                known_estimate = 100 * float(np.mean([known.mean() for known in completed]))
+            worst_case_ci = [float(envelope[0, 0]), float(envelope[1, 1])]
+            results[name].update(
+                gap_pp=known_estimate, paired_ci90_pp=known_interval,
+                missingness_bounded_ci90_pp=worst_case_ci, threshold_pp=3,
+                bounded_ci90_within_threshold=-3 <= worst_case_ci[0] <= worst_case_ci[1] <= 3,
+            )
         if name != "T_H" and not dry_run:
             robust, possible = rejection(name, intervals)
             results[name].update(robust_rejection=robust, possible_rejection=possible)
@@ -231,10 +185,11 @@ def recompute(manifest, rows, *, control_verified=False):
         else:
             verdict = "NOT-FAILED"
     return dict(
-        schema="pokezero.s0-transfer-offline-recompute.r2", dry_run=dry_run,
+        schema="pokezero.s0-transfer-scores.r2-simple", dry_run=dry_run,
         status="UNSCORED" if dry_run else "OFFLINE_RECOMPUTE",
         verdict=verdict, primitive_cells=len(scores), complete_cells=sum(v is not None for v in scores.values()),
-        manifest_sha256=digest(manifest), known_floor=complete_floor, contrasts=results,
+        missing_cells=sum(v is None for v in scores.values()), dispositions=dict(dispositions),
+        matches=matches, known_floor=complete_floor, contrasts=results,
         resampler=dict(algorithm="numpy.PCG64/SeedSequence/integers-int64", numpy=np.__version__,
                        seed=manifest["bootstrap_seed"], draws=draws, quantile=q, interpolation="linear"),
     )
@@ -242,24 +197,13 @@ def recompute(manifest, rows, *, control_verified=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("manifest", type=Path)
-    parser.add_argument("seals", type=Path)
-    parser.add_argument("out", type=Path)
+    parser.add_argument("directory", type=Path)
     args = parser.parse_args()
-    seals = json.loads(args.seals.read_bytes())
-    manifest = json.loads(args.manifest.read_bytes())
-    if seals["manifest_sha256"] != hashlib.sha256(args.manifest.read_bytes()).hexdigest():
-        raise ValueError("sealed roster changed")
-    rows = []
-    for name, expected_hash in sorted(seals["shards"].items()):
-        if Path(name).name != name:
-            raise ValueError("expected local shard filename")
-        raw = (args.seals.parent / name).read_bytes()
-        if hashlib.sha256(raw).hexdigest() != expected_hash:
-            raise ValueError("sealed shard changed")
-        rows.extend(json.loads(raw))
-    verify_control(manifest)
-    write_once(args.out, recompute(manifest, rows, control_verified=True))
+    root = args.directory
+    manifest = json.loads((root / "manifest.json").read_bytes())
+    rows = [row for side in ("engine", "showdown")
+            for row in read_terminals(root / f"{side}.jsonl")]
+    write_json(root / "scores.json", recompute(manifest, rows))
 
 
 if __name__ == "__main__":
