@@ -2,7 +2,7 @@
 import unittest
 from dataclasses import asdict, dataclass
 
-from gpu_engine.v2_fused import argument_parser, select_learner_precision
+from gpu_engine.v2_fused import argument_parser, parse_args, select_learner_precision
 from pokezero import v5_run, v5_training
 
 
@@ -28,6 +28,19 @@ class LearnerOptionsTests(unittest.TestCase):
                 args = self.parse('--fallback-random', *(['--native-embedding-backward'] if native else []))
                 self.assertEqual(args.native_embedding_backward, native)
                 self.assertTrue(args.fallback_random)
+
+
+class FreezeOptionsTests(unittest.TestCase):
+    def parse(self, *options):
+        return parse_args(['--reference-run', 'reference', '--out', 'output', *options])
+
+    def test_freeze_defaults_to_production_profile_only(self):
+        self.assertFalse(self.parse().freeze_gc_after_warmup)
+        self.assertTrue(self.parse('--profile', 'v2-production').freeze_gc_after_warmup)
+
+    def test_explicit_gc_options_override_profile_default(self):
+        self.assertTrue(self.parse('--freeze-gc-after-warmup').freeze_gc_after_warmup)
+        self.assertFalse(self.parse('--profile', 'v2-production', '--no-freeze-gc-after-warmup').freeze_gc_after_warmup)
 
 
 @dataclass(frozen=True)

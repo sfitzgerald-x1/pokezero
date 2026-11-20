@@ -227,12 +227,23 @@ def argument_parser():
     parser.add_argument('--check-interval', type=int, default=64)
     parser.add_argument('--recipe', choices=('R5', 'R2', 'R1'), default=None,
         help='explicit batch/epochs/LR package from the validated R5 reference; records the effective plan hash')
+    parser.add_argument('--profile', choices=('v2-production',),
+        help='select the V2 production defaults (freeze the Python heap after warmup)')
+    parser.add_argument('--freeze-gc-after-warmup', action=argparse.BooleanOptionalAction, default=None,
+        help='override the profile default for one heap freeze after the first completed round in this process')
     parser.add_argument('--compile-threads', type=int, default=16)
     parser.add_argument('--audit-every', type=int, default=50)
     parser.add_argument('--torch-memory-fraction', type=float, default=0.45,
         help='Torch per-process GPU memory cap after the runtime probe (V2 also holds the row store in Torch); '
              '0 keeps the runtime declaration\'s torch_fraction. JAX keeps its own fraction')
     return parser
+
+
+def parse_args(argv=None):
+    args = argument_parser().parse_args(argv)
+    if args.freeze_gc_after_warmup is None:
+        args.freeze_gc_after_warmup = args.profile == 'v2-production'
+    return args
 
 
 def _rank_zero(distribution, phase, action):
@@ -270,7 +281,7 @@ def _validated_on_all_ranks(distribution, action):
     return result
 
 def main(argv=None, *, distribution=None):
-    args = argument_parser().parse_args(argv)
+    args = parse_args(argv)
     if bool(args.config) == bool(args.declaration):raise SystemExit('exactly one of --config or --declaration')
     out = Path(args.out);(out / 'artifacts').mkdir(parents=True, exist_ok=True);(out / 'audit').mkdir(exist_ok=True)
     wall_start = time.perf_counter()
@@ -408,7 +419,8 @@ def main(argv=None, *, distribution=None):
 
         _rank_zero(distribution, 'evaluation recovery and retention', recover_evaluations)
     route_stop = None
-    for iteration in range(len(reports), last):
+    first = len(reports)
+    for iteration in range(first, last):
         if deferred:
             route_stop = _rank_zero(distribution, 'evaluation stop', lambda: dispatch.stop_at_boundary(iteration))
             if route_stop is not None:
@@ -537,6 +549,12 @@ def main(argv=None, *, distribution=None):
         keep = {s.archive_sha256 for s in snapshots[-1 - plan.historical_window:]}
         for digest in list(params):
             if digest not in keep:del params[digest]
+        if args.freeze_gc_after_warmup and iteration == first:
+            freeze_start = time.perf_counter()
+            collected = gc.collect()
+            gc.freeze()
+            log('GC_FREEZE', iteration=iteration, collected=collected, frozen_objects=gc.get_freeze_count(),
+                seconds=time.perf_counter() - freeze_start)
     if deferred and route_stop is None:
         route_stop = _rank_zero(distribution, 'evaluation stop', lambda: dispatch.stop_at_boundary(len(reports)))
     total = time.perf_counter() - wall_start
