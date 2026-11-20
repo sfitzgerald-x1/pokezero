@@ -1,0 +1,2260 @@
+{
+  "schema": "pokezero.fresh200.trusted_storage.v1",
+  "source_commit": "f9b0c48ef0d14c15f017c3e4b97dddc6695c5b3d",
+  "source_files": {
+    "gpu_engine/state.py": "7f524b07b1897c9d0367619fd78c074fccb105cdec3668098b0ab38eb0ee0acb",
+    "gpu_engine/transition.py": "e35d75e17d3ce47bf3bd9f450de55d137a05a7ff62e80c0ccf8b178e05a840f7",
+    "gpu_engine/engine_device_public_hooks.py": "e0a78bf362d77b057dabfd5779e17e48990ea963ac72b8072a1cce898c863f2e",
+    "gpu_engine/engine_device_trackers.py": "70f791e65ca28c8334bcc3d82dc5498775209caa1e50879157584867d61e7e48",
+    "gpu_engine/engine_device_damage_history.py": "4b2391bc25e5fcd9c5d3428995de22a7c7f2fbfefbc3a5651177e8eeaabde1ec",
+    "gpu_engine/engine_device_negative_items.py": "c9e36d713dfb92be5cbe17c137c6b983fd6bb24d24b3ebf3ed416ca268dd8c39",
+    "gpu_engine/engine_device_visible_belief.py": "3c21e59eae841e2418e3b4dd384134692ad86ed7ea4987d4e7eeb52bb6ff5481",
+    "gpu_engine/engine_device_public_port.py": "e4c1180880ee0639b0ec7f474163d9dd91de5b4a23eb9a876e5fcb796776f820",
+    "gpu_engine/public_active.py": "39ecad286de9381ead750a96adeba672b9bcb5e9213fe1daf4c0cb9cad871cef",
+    "src/pokezero/showdown.py": "97b86a1ea75267a727374964f8b572cdc9988ad891160d6aa6d59d38084963ec",
+    "gpu_engine/engine_device_belief.py": "6515963c86898c2993bee8cb7b89d63aa816e4664c80481dcf9c620a687b2c43"
+  },
+  "records": {
+    "gpu_engine.state.BattleState": [
+      {
+        "name": "species",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "level",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "hidden_power_type",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "hidden_power_power",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "happiness",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "gender",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "types",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "base_types",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "stats",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "hp",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "max_hp",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "status",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "status_counter",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "sleep_skipped",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "rest_origin",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "moves",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            4
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "pp",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            4
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "disabled",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            4
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "choice_move",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "last_move",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "last_action_kind",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "last_action_index",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "encore_move",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "encore_counter",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "charge_move",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "charge_counter",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "item",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "ability",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "base_ability",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "boosts",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            7
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "volatile",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "uint32"
+        }
+      },
+      {
+        "name": "confusion_counter",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "protect_counter",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "substitute_hp",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "active",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "entry_pending",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "active_turns",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "trapped",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "trap_source",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "forced_switch",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "baton_pass",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "queued_actor",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "queued_actions",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "queued_stall",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "pending_residual",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "residual_draws",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            12
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "phazing_draws",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "secondary_draws",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "sleep_talk_draws",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "replacement_count",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "spikes",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "wish_counter",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "wish_amount",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "weather",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "weather_counter",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "turn",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "keys",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "uint32"
+        }
+      },
+      {
+        "name": "done",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "winner",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "truant_loaf",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "item_knocked",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "effect_draws",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            5
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "recharge_counter",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "perish_counter",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "yawn_counter",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "partial_trap_counter",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "partial_trap_source",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "transformed",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "transform_species",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "transform_stats",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            5
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "transform_moves",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            4
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "transform_pp",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            4
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "transform_hidden_power",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            2
+          ],
+          "dtype": "int32"
+        }
+      }
+    ],
+    "gpu_engine.transition.ChanceInputs": [
+      {
+        "name": "draws",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            12
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "phazing",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "secondary",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "sleep_talk",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "entry_ties",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "initial_tie",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "effect",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            5
+          ],
+          "dtype": "int32"
+        }
+      }
+    ],
+    "gpu_engine.engine_device_public_hooks.Initialized": [
+      {
+        "name": "state",
+        "spec": {
+          "kind": "record",
+          "type": "gpu_engine.state.BattleState"
+        }
+      },
+      {
+        "name": "trackers",
+        "spec": {
+          "kind": "record",
+          "type": "gpu_engine.engine_device_trackers.Trackers"
+        }
+      }
+    ],
+    "gpu_engine.engine_device_trackers.Trackers": [
+      {
+        "name": "physical_to_public",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "active_physical",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "active_slot",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "next_slot",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "own_order",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "species",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "level",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "gender",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "hp_percent",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "status",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "boosts",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            7
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "present",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "fainted",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "turn",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "weather",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "spikes",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "error",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "observed_moves",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            4
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "pp_used",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            4
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "last_moves",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "tendencies",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "belief_mask",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            2
+          ],
+          "dtype": "uint32"
+        }
+      },
+      {
+        "name": "shown_ability",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "shown_item",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "shown_types",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "borrowed_ability",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "mon_features",
+        "spec": {
+          "kind": "dict",
+          "entries": [
+            {
+              "name": "choice_locked",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "choice_public",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "confusion_turns",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "encore_turns",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "item_mutated",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "item_original",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "item_swapped",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "last_damage_dealt",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "float32"
+              }
+            },
+            {
+              "name": "last_damage_taken",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "float32"
+              }
+            },
+            {
+              "name": "meanlook_trap",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "moves_shown",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "rest_sleep",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "sleep_cant_pending",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "sleep_skipped_turns",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "sleep_turns",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "sleep_usable_pending",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "stall_counter",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "stayed_and_attacked",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "sub_present",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "switched_before_attack",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "switches",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "toxic_stage",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "turns_active",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "turns_active_total",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "wrap_trap_turns",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2,
+                  6
+                ],
+                "dtype": "int32"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "field_features",
+        "spec": {
+          "kind": "dict",
+          "entries": [
+            {
+              "name": "items_removed_credit",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "weather_permanent",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B"
+                ],
+                "dtype": "bool"
+              }
+            },
+            {
+              "name": "weather_upkeeps",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B"
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "wish_pending",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2
+                ],
+                "dtype": "bool"
+              }
+            },
+            {
+              "name": "wish_set_turn",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2
+                ],
+                "dtype": "int32"
+              }
+            },
+            {
+              "name": "wish_turns",
+              "spec": {
+                "kind": "array",
+                "shape": [
+                  "B",
+                  2
+                ],
+                "dtype": "int32"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "original_ability",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "damage_exact_dealt",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "float32"
+        }
+      },
+      {
+        "name": "damage_exact_taken",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "float32"
+        }
+      },
+      {
+        "name": "public_volatiles",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            "V"
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "item_removed",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "tendency",
+        "spec": {
+          "kind": "record",
+          "type": "gpu_engine.engine_device_trackers.Tendency"
+        }
+      },
+      {
+        "name": "damage_history",
+        "spec": {
+          "kind": "record",
+          "type": "gpu_engine.engine_device_damage_history.History"
+        }
+      },
+      {
+        "name": "negative_items",
+        "spec": {
+          "kind": "record",
+          "type": "gpu_engine.engine_device_negative_items.State"
+        }
+      },
+      {
+        "name": "visible_belief",
+        "spec": {
+          "kind": "record",
+          "type": "gpu_engine.engine_device_visible_belief.State"
+        }
+      },
+      {
+        "name": "public_port",
+        "spec": {
+          "kind": "record",
+          "type": "gpu_engine.engine_device_public_port.State"
+        }
+      },
+      {
+        "name": "public_order",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "transformed",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "transform_species",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "copied_pp_used",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            4
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "transform_own_view",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "transform_borrowed",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "bool"
+        }
+      }
+    ],
+    "gpu_engine.engine_device_trackers.Tendency": [
+      {
+        "name": "moved",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "opportunity_turn",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "switches",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "opportunities",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "matchup",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            6,
+            2
+          ],
+          "dtype": "int32"
+        }
+      }
+    ],
+    "gpu_engine.engine_device_damage_history.History": [
+      {
+        "name": "hp",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "maximum",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "taken",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32"
+        }
+      },
+      {
+        "name": "dealt",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32"
+        }
+      }
+    ],
+    "gpu_engine.engine_device_negative_items.State": [
+      {
+        "name": "percent",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "known",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "bool"
+        }
+      }
+    ],
+    "gpu_engine.engine_device_visible_belief.State": [
+      {
+        "name": "pin",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            2
+          ],
+          "dtype": "uint32"
+        }
+      },
+      {
+        "name": "pin_active",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "conflicts",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "visible_hard",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            2
+          ],
+          "dtype": "uint32"
+        }
+      },
+      {
+        "name": "visible_pin",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            2
+          ],
+          "dtype": "uint32"
+        }
+      },
+      {
+        "name": "visible_pin_active",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "excluded_abilities",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            "A"
+          ],
+          "dtype": "uint32"
+        }
+      },
+      {
+        "name": "excluded_items",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6,
+            "I"
+          ],
+          "dtype": "uint32"
+        }
+      }
+    ],
+    "gpu_engine.engine_device_public_port.State": [
+      {
+        "name": "holder",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "victims",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            6
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "known",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "loaf",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "traced",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "skip_flip",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "post_upkeep",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B"
+          ],
+          "dtype": "bool"
+        }
+      },
+      {
+        "name": "hazards",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32"
+        }
+      },
+      {
+        "name": "blocked",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "pursuit",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2
+          ],
+          "dtype": "int32"
+        }
+      },
+      {
+        "name": "weather",
+        "spec": {
+          "kind": "array",
+          "shape": [
+            "B",
+            2,
+            3,
+            2
+          ],
+          "dtype": "bool"
+        }
+      }
+    ]
+  },
+  "volatile_names": [
+    "",
+    "attract",
+    "bide",
+    "charge",
+    "confusion",
+    "curse",
+    "defensecurl",
+    "destinybond",
+    "disable",
+    "encore",
+    "flashfire",
+    "focusenergy",
+    "foresight",
+    "grudge",
+    "imprison",
+    "ingrain",
+    "leechseed",
+    "lockon",
+    "magiccoat",
+    "mindreader",
+    "minimize",
+    "mudsport",
+    "mustrecharge",
+    "nightmare",
+    "partiallytrapped",
+    "perish0",
+    "perish1",
+    "perish2",
+    "perish3",
+    "perishsong",
+    "rage",
+    "snatch",
+    "solarbeam",
+    "stockpile",
+    "substitute",
+    "taunt",
+    "torment",
+    "uproar",
+    "watersport",
+    "yawn"
+  ],
+  "mon_keys": [
+    "turns_active",
+    "turns_active_total",
+    "sleep_turns",
+    "rest_sleep",
+    "toxic_stage",
+    "sleep_skipped_turns",
+    "sleep_cant_pending",
+    "sleep_usable_pending",
+    "confusion_turns",
+    "encore_turns",
+    "stall_counter",
+    "sub_present",
+    "meanlook_trap",
+    "last_damage_dealt",
+    "last_damage_taken",
+    "switched_before_attack",
+    "stayed_and_attacked",
+    "moves_shown",
+    "switches",
+    "item_swapped",
+    "choice_public",
+    "choice_locked",
+    "item_mutated",
+    "item_original",
+    "wrap_trap_turns"
+  ],
+  "profile": "full initialized public hooks with bound belief/port tables; no optional-field inference from artifacts",
+  "none_fields": []
+}

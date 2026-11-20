@@ -14,6 +14,14 @@ import re
 TURN_500_WARNING = ("|bigerror|You will auto-tie if the battle doesn't end in "
                     "500 turns (on turn 1000).")
 
+# Pinned Gen3 Custom Game with the single Sleep Clause Mod override emits
+# these literal setup announcements before installing the initial active slots.
+GEN3_CUSTOM_SETUP = (
+    '|tier|[Gen 3] Custom Game',
+    '|raw|<div class="infobox"><details class="readmore" open><summary><strong>'
+    '1 custom rule:</strong></summary> sleepclausemod</details></div>',
+)
+
 
 def attract_idents(line):
     """Closed singles before-move announcement, including its explicit source."""
@@ -64,9 +72,14 @@ def classify(line):
         # Deliberate Gen3 admission restriction; the source parser's integer
         # decoder is broader. Unsupported counts refuse rather than coerce.
         return 'target' if len(parts)==4 and ident and parts[3] in ('1','2','3','4','5') else None
+    # The pinned Native damage calculation emitted these two diagnostics.
+    # The move, damage and boost lines retain their own state consumers.
+    if line in ('|debug|BP: 70', '|debug|Negating (sp)def boost/penalty.'):
+        return 'text'
     if kind in ('-hint','-message'):
         return 'text' if len(parts)==3 and parts[2].strip() else None
     if line=='|-fieldactivate|move: Perish Song':return 'perish_announcement'
+    if line in GEN3_CUSTOM_SETUP:return 'setup'
     if kind=='start':return 'setup' if line=='|start' else None
     if kind=='gametype':return 'setup' if line=='|gametype|singles' else None
     if kind=='gen':return 'setup' if line=='|gen|3' else None

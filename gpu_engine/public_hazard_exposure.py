@@ -10,6 +10,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -169,7 +170,6 @@ def project(own,mons,context,beliefs,visible,source_tables,field,tables,feature_
     unseen=jnp.maximum(0,6-seen.sum(axis=-1));opp_count=unseen+bench.sum(axis=-1)
     counts=jnp.stack((own_count,opp_count),axis=-1)
     layers=jnp.stack((field.spikes[rows,seat],field.spikes[rows,opp]),axis=-1)
-    fractions=jnp.array([0.,1/8,1/6,1/4],jnp.float32)[jnp.clip(layers,0,3)]
-    values=jnp.minimum(1.,counts.astype(jnp.float32)*fractions/6)
+    values=en.hazard_exposure(counts,layers)
     numeric=jnp.zeros((b,132),jnp.float32).at[:,jnp.array(COLUMNS)].set(jnp.where(ok[:,None],values,0))
     return HazardPatch(numeric,jnp.zeros(132,bool).at[jnp.array(COLUMNS)].set(True),ok)

@@ -182,7 +182,7 @@ EFFECTS = (
          '(gpu_engine/phase_d_protocol_world.py:693 -> v5_hypothetical_state.py:146, held_volatiles) and the protocol world writes '
          'Showdown\'s duration, 4 for the silent perish3 of the Song\'s own turn, carried across a Baton Pass '
          '(gpu_engine/phase_d_protocol_world.py:242-257, 329-339); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:379); '
-         'gpu_engine/public_active.py:46, 217-233 keeps the public counts for the encoder'),
+         'gpu_engine/public_active.py:47, 218-234 keeps the public counts for the encoder'),
         'Misdreavus (Staller), the set that also carries Mean Look (a represented trap).', engine_since='f3e71663'),
     Effect('drowsy', ('yawn',), ('swalot',), False, '',
         'the target falls asleep at the end of the next turn',

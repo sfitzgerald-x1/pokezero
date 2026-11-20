@@ -11,6 +11,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -139,11 +140,11 @@ def project_team(facts: TeamFacts, *, observer_side, expected_vocabulary_binding
     admitted = (observer >= 0) & (observer <= 1) & (observer == facts.owner_side) & jnp.all(
         facts.vocabulary_binding == binding, axis=-1)
     visible = facts.present & admitted[..., None]
-    hp = jnp.clip(facts.hp_numerator / jnp.where(facts.hp_denominator != 0, facts.hp_denominator, 1), 0, 1)
+    hp = en.ratio(facts.hp_numerator, facts.hp_denominator)
     zeros = jnp.zeros_like(hp)
-    values = [hp, facts.active, ~facts.fainted, facts.present, jnp.minimum(1, facts.level / 100)]
-    values.extend(jnp.minimum(1, facts.base_stats[..., i] / 200) for i in range(6))
-    values.extend(jnp.minimum(1, facts.actual_stats[..., i] / 714) for i in range(6))
+    values = [hp, facts.active, ~facts.fainted, facts.present, en.normalized(facts.level, 100)]
+    values.extend(en.normalized(facts.base_stats[..., i], 200) for i in range(6))
+    values.extend(en.normalized(facts.actual_stats[..., i], 714) for i in range(6))
     values.extend([facts.gender == 1, facts.gender == 2, zeros, zeros, zeros,
                    facts.ability_known, facts.item_known, zeros, facts.ability_known, facts.item_known])
     compact = jnp.stack([jnp.asarray(value, jnp.float32) for value in values], axis=-1)

@@ -14,6 +14,7 @@ from typing import Mapping, NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero.belief import variant_identity
@@ -222,7 +223,7 @@ def materialize(state: BeliefState, tables: DeviceTables):
     effective = jnp.where(use_pin[..., None], intersect, base)
     count = jnp.sum(jax.lax.population_count(effective), axis=-1).astype(jnp.int32)
     total = jnp.sum(jax.lax.population_count(pool), axis=-1)
-    uncertainty = jnp.where(known & ~inconsistent, count / jnp.maximum(total, 1), 1).astype(jnp.float32)
+    uncertainty = jnp.where(known & ~inconsistent, en.ratio(count, total, limit=64), 1).astype(jnp.float32)
     reason = jnp.where(~state.source_available, NO_SOURCE,
         jnp.where(~known, UNKNOWN_SPECIES, jnp.where(inconsistent, INCONSISTENT_REVEALS, RESOLVED)))
     return state._replace(conflicts=state.conflicts + pin_conflict.astype(jnp.int32)), BeliefSummary(
@@ -237,4 +238,4 @@ def variant_weights(summary: BeliefSummary, tables: DeviceTables):
     """
     index = jnp.arange(tables.variant_valid.shape[-1], dtype=jnp.uint32)
     selected = (jnp.take(summary.effective, index // 32, axis=-1) >> (index % 32)) & 1
-    return selected.astype(jnp.float32) / jnp.maximum(summary.count[..., None], 1)
+    return en.ratio(selected.astype(jnp.int32), summary.count[..., None], limit=64)

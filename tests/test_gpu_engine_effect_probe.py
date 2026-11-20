@@ -258,13 +258,13 @@ class DevicePureTests(unittest.TestCase):
         dev, b2 = self.views(), self.views();dev['field']['only_on_device'] = 0
         with self.assertRaisesRegex(ValueError, 'differ in keys'):device.compare_views(dev, b2)
 
-    def test_float_fields_within_tolerance_are_numeric_notes(self):
+    def test_float_fields_one_ulp_apart_are_mismatches(self):
         dev, b2 = self.views(), self.views()
         for v in (dev, b2):v[1]['active']['last_damage_taken'] = 0.30000001192092896
         dev[1]['active']['last_damage_taken'] = 0.29999998211860657             # float32 30 * 0.01: one ulp low
         numeric = []
-        self.assertEqual(device.compare_views(dev, b2, numeric), [])
-        self.assertEqual([n['field'] for n in numeric], ['1:active:last_damage_taken'])
+        self.assertEqual([d['field'] for d in device.compare_views(dev, b2, numeric)], ['1:active:last_damage_taken'])
+        self.assertEqual(numeric, [])
         dev[1]['active']['last_damage_taken'] = 0.29                             # a real difference stays a diff
         self.assertEqual([d['field'] for d in device.compare_views(dev, b2, [])], ['1:active:last_damage_taken'])
         dev[1]['active']['last_damage_taken'] = b2[1]['active']['last_damage_taken']
