@@ -1,0 +1,18 @@
+name: Extended pre-bind qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Exact source commit to qualify for the bind
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  extended:
+    uses: sfitzgerald-x1/pokezero/.github/workflows/gpu-engine-components-extended.yml@scott/v2-engine-accel-20261104
+    with:
+      source: ${{ inputs.source }}
