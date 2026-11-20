@@ -37,6 +37,7 @@ class Factory:
     learner_seconds:float
     deterministic:bool
     compute_dtype:str
+    allow_maybe_trapped_switches: bool = False
 
     @property
     def encoder_kind(self):return 'jax-owning'
@@ -53,7 +54,14 @@ class Factory:
         def policy(contract):
             current=holder['backend']
             select,reset=current.select_action,current.reset_policy
-            result=live.RawPolicy(contract,select,reset)
+            class V5Policy(live.RawPolicy):
+                def reselect(self, original, observation, *, rng):
+                    self._validate()
+                    decision = current.reselect(original, observation, rng=rng)
+                    self._validate()
+                    return decision
+
+            result=V5Policy(contract,select,reset)
             def validate():
                 _checked(self);current._check_namespace()
                 if (current.factory is not self or not live._same_callable(result._select_action,select)
@@ -88,11 +96,12 @@ def take_declaration(metadata,*,contract,catalog):
 
 def load_factory(archive,*,catalog,contract,expected_archive_sha256,expected_checkpoint_sha256,
         expected_category_vocabulary_sha256,expected_label_vocabulary_sha256,compute_dtype='float32',
-        learner_seconds=60.,deterministic=True,enable_v5=False):
+        learner_seconds=60.,deterministic=True,enable_v5=False,allow_maybe_trapped_switches=False):
     """Load only the externally digest-bound explicit v5 archive, never legacy."""
     _host()
     if enable_v5 is not True:raise ValueError('explicit v5 protocol enablement required')
     if (type(contract) is not live.ActorContract or type(deterministic) is not bool or compute_dtype not in ('float32','bfloat16')
+            or type(allow_maybe_trapped_switches) is not bool
             or isinstance(learner_seconds,bool) or not isinstance(learner_seconds,(int,float))
             or not math.isfinite(learner_seconds) or not 0<learner_seconds<=60):
         raise ValueError('original owning contract and learner budget<=60s required')
@@ -124,7 +133,7 @@ def load_factory(archive,*,catalog,contract,expected_archive_sha256,expected_che
     append=jax.jit(lambda encoded,state,side:observation.append_device(encoded,state,adapter,observer_sides=side))
     forward=jax.jit(lambda inputs:model.forward(params,inputs,config,compute_dtype=compute_dtype))
     result=Factory(contract,catalog,params,config,adapter,json.dumps(metadata,sort_keys=True,allow_nan=False),
-        encoder,append,forward,float(learner_seconds),deterministic,compute_dtype)
+        encoder,append,forward,float(learner_seconds),deterministic,compute_dtype,allow_maybe_trapped_switches)
     _FACTORIES[result]=tuple(getattr(result,name) for name in result.__dataclass_fields__)
     from pokezero.owning_worker_runtime import register_factory
     register_factory(result,lambda:dict(fold=encoder.step,encode=encoder.encode_step,append=append,forward=forward))
@@ -168,6 +177,7 @@ class _Backend(live.JaxBackend):
         _checked(factory)
         self.factory=factory;self.captured=None;self.pending=None;self.deadline=None;self.last_inputs=None
         self.pending_capture=None;self.last_capture=None
+        self.last_policy = None
         functions=_CaptureFunctions(self,factory.encoder)
         super().__init__(contract,catalog=factory.catalog,compiled_functions=functions,**game)
 
@@ -187,6 +197,7 @@ class _Backend(live.JaxBackend):
             if any(ident.startswith(peer) and '/' in hp and hp.split()[0].split('/',1)[1]!='100' for ident,hp in health):
                 raise ValueError('exact peer HP cannot enter owning public actor')
         self.pending=None;self.last_inputs=None;self.pending_capture=None;self.last_capture=None
+        self.last_policy = None
         super().ingest(lines)
 
     def budget(self):
@@ -195,10 +206,12 @@ class _Backend(live.JaxBackend):
 
     def reset_policy(self):
         self.pending=None;self.last_inputs=None;self.pending_capture=None;self.last_capture=None
+        self.last_policy = None
 
     def encode(self,snapshot):
         self.budget();_checked(self.factory);self.captured=None;self.pending=None
         self.pending_capture=None;self.last_capture=None
+        self.last_policy = None
         arrays,targets=super().encode(snapshot)
         self.budget()
         if self.captured is None:raise ValueError('original same-call EncodedReport capture missing')
@@ -220,24 +233,48 @@ class _Backend(live.JaxBackend):
         self.budget();_checked(self.factory)
         if self.pending is None:raise ValueError('original owning encode must precede v5 raw policy')
         snapshot,arrays,inputs=self.pending
+        expected_mask = arrays['legal_action_mask']
+        if self.factory.allow_maybe_trapped_switches:
+            from pokezero.showdown import _legal_action_mask
+            request = live._packet(snapshot.own_request_line, self.owner)
+            expected_mask = _legal_action_mask(request, allow_maybe_trapped=True)
         if (routing.metadata.get('owner_prefix_sha256')!=snapshot.prefix_sha256
                 or routing.metadata.get('generation')!=snapshot.generation
                 or routing.perspective.player_id!=self.owner
-                or any(not np.array_equal(np.asarray(getattr(routing,name)),arrays[name]) for name in live.SHAPES)):
+                or not np.array_equal(routing.legal_action_mask, expected_mask)
+                or any(not np.array_equal(np.asarray(getattr(routing,name)),arrays[name])
+                       for name in live.SHAPES if name != 'legal_action_mask')):
             raise ValueError('same original owning routing observation required')
         self.pending=None
         output=jax.block_until_ready(self.factory.forward(inputs));self.budget()
         logits=np.asarray(output.policy_logits)[0];value=float(np.asarray(output.value)[0])
-        legal=np.asarray(routing.legal_action_mask,bool)
         if (np.asarray(output.valid).shape!=(1,) or not bool(np.asarray(output.valid)[0])
                 or logits.shape!=(9,) or not np.isfinite(logits).all() or not math.isfinite(value) or not -1<=value<=1):
             raise ValueError('finite valid v5 raw public policy/value required')
+        self.last_inputs=inputs
+        self.last_capture=self.pending_capture;self.pending_capture=None
+        if self.factory.allow_maybe_trapped_switches:
+            self.last_policy = (routing, snapshot, logits, value)
+        return self._decision(routing.legal_action_mask, snapshot, logits, value, rng=rng)
+
+    def reselect(self, original, observation, *, rng):
+        self.budget()
+        _checked(self.factory)
+        if self.last_policy is None or self.last_policy[0] is not original:
+            raise ValueError('same completed v5 decision required for trapped fallback')
+        _, snapshot, logits, value = self.last_policy
+        self.last_policy = None
+        if observation.legal_action_mask != original.legal_action_mask[:4] + (False,) * 5:
+            raise ValueError('v5 trapped fallback requires precisely the original moves')
+        return self._decision(observation.legal_action_mask, snapshot, logits, value, rng=rng)
+
+    def _decision(self, mask, snapshot, logits, value, *, rng):
+        legal=np.asarray(mask,bool)
         probabilities=np.asarray(jax.nn.softmax(j.where(j.asarray(legal),j.asarray(logits),-j.inf))).tolist()
         legal_actions=tuple(np.flatnonzero(legal).tolist())
         action=(_greedy_action_index(probabilities=probabilities,legal=legal_actions,family_gated=False)
             if self.factory.deterministic else _sample_action(probabilities,legal_actions,rng))
-        self.budget();self.last_inputs=inputs
-        self.last_capture=self.pending_capture;self.pending_capture=None
+        self.budget()
         metadata=json.loads(self.factory.metadata)
         return PolicyDecision(action,'v5-raw-'+metadata['weights_archive_sha256'][:12],1. if self.factory.deterministic else probabilities[action],
             dict(policy_family='v5-raw-owning-protocol',actor='RAW_POLICY',view='PUBLIC',
@@ -255,7 +292,7 @@ class Actor(live.LiveProtocolActor):
     """
     def __init__(self,factory,**providers):
         self.factory=self._original_factory=factory;self._request_started=None;self._ingest_seconds=0.
-        super().__init__(factory.contract,**providers)
+        super().__init__(factory.contract,allow_maybe_trapped_switches=factory.allow_maybe_trapped_switches,**providers)
         self._original_factories=(self.backend_factory,self.policy_factory);self._providers=None
 
     def _check_providers(self):
@@ -315,6 +352,11 @@ class Actor(live.LiveProtocolActor):
         # matched recipe in that worker, restoring its prior context afterwards.
         with jax.default_matmul_precision('highest'),jax.enable_x64(False):
             return self._decide(snapshot,rng=rng)
+
+    def retry_trapped_switch(self, snapshot, *, rng):
+        with jax.default_matmul_precision('highest'), jax.enable_x64(False):
+            self._check_providers()
+            return super().retry_trapped_switch(snapshot, rng=rng)
 
     def _decide(self,snapshot,*,rng):
         started=time.monotonic() if self._request_started is None else self._request_started

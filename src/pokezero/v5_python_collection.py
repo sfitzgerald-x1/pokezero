@@ -44,6 +44,7 @@ class OwningEnv(LocalShowdownEnv):
     """
     def __init__(self,config):
         self.owner_lines={'p1':[],'p2':[]}
+        self._expected_trap_errors = set()
         super().__init__(config)
 
     def reset(self,**kwargs):
@@ -58,6 +59,46 @@ class OwningEnv(LocalShowdownEnv):
         # Same original transport seam as finite_stream_comparison's pool
         # constructor. Relabeling Custom Game would change native rules/HP.
         return self._reset(seed=kwargs['seed'],format_id='gen3randombattle',start_override=start)
+
+    def _expected_private_choice_error(self, stream, line):
+        from .live_protocol_actor import TRAPPED_CHOICE_ERRORS
+
+        if stream in self._expected_trap_errors and line in TRAPPED_CHOICE_ERRORS:
+            self._expected_trap_errors.remove(stream)
+            return True
+        return False
+
+    def step_with_guarded_switches(self, choices, tentative, retry, *, submission_id):
+        """Confirm each native tentative switch before sending pending choices."""
+        self._latest_requests = {}
+        battle = self._battle_token
+        command = dict(battleId=battle, submissionId=submission_id)
+        self._send_command(dict(type='attempt_maybe_trapped_switches', choices=tentative, **command))
+        pending = dict(choices)
+        waiting = dict(tentative)
+        try:
+            for _ in tentative:
+                event = self._read_event(timeout=self.config.read_timeout_seconds)
+                player = None if event is None else event.get('player')
+                if player not in waiting:
+                    raise ValueError(f'expected guarded switch result, received {event!r}')
+                expected = dict(player=player, choice=waiting.pop(player), **command)
+                if type(event.get('submissionId')) is not int:
+                    raise ValueError('guarded switch result requires an integer submission ID')
+                if event == dict(type='choice_ack', **expected):
+                    del pending[player]
+                elif event == dict(type='choice_rejected', reason='trapped', **expected):
+                    self._expected_trap_errors.add(player)
+                    pending[player] = retry(player)
+                else:
+                    raise ValueError(f'expected guarded switch result, received {event!r}')
+            if pending:
+                self._send_command(dict(type='choices', battleId=battle, choices=pending))
+            self._read_until_boundary()
+            if self._expected_trap_errors:
+                raise ValueError('guarded switch rejection is missing its private Showdown error')
+        finally:
+            self._expected_trap_errors.clear()
 
     def _apply_event(self,event):
         result=super()._apply_event(event)
