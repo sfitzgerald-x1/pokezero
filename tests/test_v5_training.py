@@ -63,9 +63,9 @@ class V5TrainingTests(unittest.TestCase):
                 model,loss,train=configurations(arm,replicate=replicate,epochs=2,precision=precision)
                 train=replace(train,learning_rate_schedule='mit-thesis')
                 window=training.DeclaredGameWindow(0,4,4)
-                cfg=(model,loss,train);full=training.create(*cfg,enable_v5=True)
+                cfg=(model,loss,train);full=training.create(*cfg,enable_v5=True,self_moves=True)
                 baseline=training.train_caches(full,paths,learning_rate_window=window)
-                resident=training.create(*cfg,enable_v5=True)
+                resident=training.create(*cfg,enable_v5=True,self_moves=True)
                 with training.resident_cache_policy(10**8):
                     prefix=training.train_caches(resident,paths,max_updates=1,learning_rate_window=window)
                 file=root/'checkpoint.pt';training.save_checkpoint(file,resident)
@@ -82,22 +82,22 @@ class V5TrainingTests(unittest.TestCase):
     def test_explicit_enablement_precedes_model_file_access_and_scratch_rng_is_owned(self):
         cfg=configurations()
         with patch.object(training,'_torch') as backend:
-            with self.assertRaisesRegex(ValueError,'enablement'):training.create(*cfg)
+            with self.assertRaisesRegex(ValueError,'enablement'):training.create(*cfg,self_moves=True)
             with self.assertRaisesRegex(ValueError,'enablement'):training.load_checkpoint('/never-read')
             backend.assert_not_called()
         torch.manual_seed(19);random.seed(19);np.random.seed(19)
         before=training._rng_state(torch,False)
-        first=training.create(*cfg,enable_v5=True)
+        first=training.create(*cfg,enable_v5=True,self_moves=True)
         assert_tree_equal(self,before,training._rng_state(torch,False))
-        again=training.create(*cfg,enable_v5=True)
+        again=training.create(*cfg,enable_v5=True,self_moves=True)
         assert_tree_equal(self,first.model.state_dict(),again.model.state_dict())
-        other=training.create(*configurations(replicate=1,seed=38),enable_v5=True)
+        other=training.create(*configurations(replicate=1,seed=38),enable_v5=True,self_moves=True)
         self.assertFalse(torch.equal(first.model.category_embedding.weight,other.model.category_embedding.weight))
 
     def test_first_optimizer_step_changes_small_weights_for_all_four_initial_identities(self):
         for arm,replicate in (('A',0),('B',0),('D',0),('B',1)):
             with self.subTest(arm=arm,replicate=replicate):
-                runtime=training.create(*configurations(arm,replicate=replicate),enable_v5=True)
+                runtime=training.create(*configurations(arm,replicate=replicate),enable_v5=True,self_moves=True)
                 before={key:value.clone() for key,value in runtime.model.state_dict().items()}
                 actual=batch(arm);original_advantage=actual.ppo_advantages
                 metrics=training.update(runtime,actual)
@@ -113,10 +113,10 @@ class V5TrainingTests(unittest.TestCase):
             for i in range(2):
                 path=root/('cache'+str(i));v5_data.write_cache(path,batch(index=i));paths.append(path)
             cfg=configurations(epochs=2)
-            full=training.create(*cfg,enable_v5=True)
+            full=training.create(*cfg,enable_v5=True,self_moves=True)
             report=training.train_caches(full,paths)
             self.assertEqual((report['steps'],report['rows'],report['complete']),(4,4,True))
-            partial=training.create(*cfg,enable_v5=True)
+            partial=training.create(*cfg,enable_v5=True,self_moves=True)
             first=training.train_caches(partial,paths,max_updates=1)
             self.assertEqual((first['progress']['cache'],first['progress']['batch']),(1,0))
             checkpoint=root/'one.pt';receipt=training.save_checkpoint(checkpoint,partial)
@@ -138,7 +138,7 @@ class V5TrainingTests(unittest.TestCase):
             root=Path(directory);paths=[]
             for i in range(2):
                 path=root/('cache'+str(i));v5_data.write_cache(path,batch(index=i));paths.append(path)
-            cfg=configurations();runtime=training.create(*cfg,enable_v5=True)
+            cfg=configurations();runtime=training.create(*cfg,enable_v5=True,self_moves=True)
             training.train_caches(runtime,paths,max_updates=1)
             checkpoint=root/'one.pt';training.save_checkpoint(checkpoint,runtime)
             different=replace(cfg[0],category_vocabulary_sha256='f'*64)
@@ -162,7 +162,7 @@ class V5TrainingTests(unittest.TestCase):
                 training.load_checkpoint(wrong_optimizer,enable_v5=True)
 
     def test_resume_rejects_every_optimizer_behavior_flag_drift(self):
-        runtime=training.create(*configurations(),enable_v5=True)
+        runtime=training.create(*configurations(),enable_v5=True,self_moves=True)
         with tempfile.TemporaryDirectory() as directory:
             original=Path(directory)/'original.pt';training.save_checkpoint(original,runtime)
             for name,value in dict(amsgrad=True,maximize=True,foreach=True,capturable=True,
@@ -178,7 +178,7 @@ class V5TrainingTests(unittest.TestCase):
                 training.save_checkpoint(Path(directory)/'integer-flag.pt',runtime)
 
     def test_capped_critic_needs_literal_later_public_bootstrap_not_return_or_gae(self):
-        actual=batch(status='CAPPED');runtime=training.create(*configurations(),enable_v5=True)
+        actual=batch(status='CAPPED');runtime=training.create(*configurations(),enable_v5=True,self_moves=True)
         before={key:value.clone() for key,value in runtime.model.state_dict().items()}
         with self.assertRaisesRegex(ValueError,'actual v5_bootstrap'):
             training.update(runtime,actual)
@@ -196,7 +196,7 @@ class V5TrainingTests(unittest.TestCase):
         self.assertFalse(masked.v5_columns['outcome_target_mask'][0])
 
     def test_cpu_bfloat16_autocast_is_explicit_and_checkpoint_self_describes_it(self):
-        runtime=training.create(*configurations(precision='bfloat16'),enable_v5=True)
+        runtime=training.create(*configurations(precision='bfloat16'),enable_v5=True,self_moves=True)
         self.assertTrue(np.isfinite(training.update(runtime,batch())['loss']))
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'bf16.pt';training.save_checkpoint(path,runtime)
@@ -213,12 +213,14 @@ class V5TrainingTests(unittest.TestCase):
             cfg=configurations(epochs=2)
             config=root/'config.json';config.write_text(json.dumps(dict(model=cfg[0].metadata(),
                 loss=cfg[1].metadata(),training=training.asdict(cfg[2]))))
-            first=root/'first.pt';last=root/'last.pt';summary=root/'summary.json'
+            first=root/'first.pt';last=root/'last.pt';summary=root/'summary.json';first_summary=root/'first-summary.json'
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(v5_cli.main(['train','--enable-v5','--config',str(config),
-                    '--cache',str(cache),'--out',str(first),'--max-updates','1']),0)
+                    '--cache',str(cache),'--out',str(first),'--max-updates','1','--summary',str(first_summary)]),0)
+                proof=json.loads(first_summary.read_text())['checkpoint']['encoding_receipt']
                 self.assertEqual(v5_cli.main(['train','--enable-v5','--resume',str(first),
-                    '--cache',str(cache),'--out',str(last),'--summary',str(summary)]),0)
+                    '--cache',str(cache),'--out',str(last),'--summary',str(summary),
+                    '--encoding-receipt',proof['path'],'--encoding-receipt-sha256',proof['sha256']]),0)
             report=json.loads(summary.read_text())
             self.assertEqual((report['steps'],report['rows'],report['complete']),(2,2,True))
             with self.assertRaises(FileExistsError):

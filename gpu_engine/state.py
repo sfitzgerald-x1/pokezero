@@ -19,6 +19,7 @@ FOCUS_LOST = 32   # direct damaging hit landed since that preparation
 # cleared at the holder's next move attempt (BeforeMove or MoveAborted), on
 # switch-out (depart zeroes volatile) and at a faint; never Baton-passed.
 DESTINY_BOND = 64
+ATTRACT = 128  # noCopy; source is the opposing active, cleared on its departure
 
 
 class BattleState(NamedTuple):
@@ -83,7 +84,7 @@ class BattleState(NamedTuple):
     winner: jax.Array              # [B], -1 undecided,0/1 seat,2 tie
     truant_loaf: jax.Array         # [B,2,6] explicit Gen3 residual clock, not action history
     item_knocked: jax.Array        # [B,2,6] bool, pokemon.itemKnockedOff; never reset (sim/pokemon.ts)
-    effect_draws: jax.Array        # [B,2,4], ChanceInputs.effect saved for a suspended turn, else 0 (fidelity patch R)
+    effect_draws: jax.Array        # [B,2,5], saved effect stream; column 4 is infatuation
     recharge_counter: jax.Array    # [B,2,6], volatiles.mustrecharge.duration: 2 after a Hyper Beam hit, 1 after its residual (fidelity M1)
     # Fidelity M2 (design 2.2): each counter equals Showdown's volatile duration at every step boundary.
     perish_counter: jax.Array      # [B,2,6], volatiles.perishsong.duration: 4 at Perish Song, -1 per order-12 residual, faint at 0
@@ -99,6 +100,7 @@ class BattleState(NamedTuple):
     transform_moves: jax.Array         # [B,2,4], saved original move ids (baseMoveSlots)
     transform_pp: jax.Array            # [B,2,4], saved base PP, Transform's own cost already paid
     transform_hidden_power: jax.Array  # [B,2,2], saved original Hidden Power type and power
+    shed_skin_draws: jax.Array     # [B,2], independent residual cure rolls saved across suspended turns
 
 
 def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
@@ -141,12 +143,13 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         spikes=side(), wish_counter=side(),wish_amount=side(),weather=battle(), weather_counter=battle(), turn=battle(),
         keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32),
         truant_loaf=jnp.zeros((b,2,6),jnp.bool_),item_knocked=jnp.zeros((b,2,6),jnp.bool_),
-        effect_draws=jnp.zeros((b,2,4),jnp.int32),recharge_counter=mon(),
+        effect_draws=jnp.zeros((b,2,5),jnp.int32),recharge_counter=mon(),
         perish_counter=mon(),yawn_counter=mon(),partial_trap_counter=mon(),
         partial_trap_source=jnp.full((b,2,6),-1,jnp.int32),
         transformed=jnp.zeros((b,2),jnp.bool_),transform_species=side(),
         transform_stats=jnp.zeros((b,2,5),jnp.int32),transform_moves=jnp.zeros((b,2,4),jnp.int32),
-        transform_pp=jnp.zeros((b,2,4),jnp.int32),transform_hidden_power=jnp.zeros((b,2,2),jnp.int32))
+        transform_pp=jnp.zeros((b,2,4),jnp.int32),transform_hidden_power=jnp.zeros((b,2,2),jnp.int32),
+        shed_skin_draws=side())
 
 
 def bench_indices(active: jax.Array) -> jax.Array:

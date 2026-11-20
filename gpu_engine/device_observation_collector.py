@@ -55,7 +55,9 @@ def validate_plan(plan):
     required = {'schema', 'source_commit', 'pool', 'vocabulary', 'labels', 'gender_policy',
         'showdown_root', 'node', 'node_sha256', 'constructor_seed', 'sampling_seed',
         'gender_seed', 'gender_domain', 'max_requests', 'max_turns', 'cells', 'policy'}
-    if type(plan) is not dict or set(plan) != required or plan['schema'] != SCHEMA:
+    # 'self_moves' (V2) is the one optional key: absent = off, so every existing plan validates unchanged.
+    if (type(plan) is not dict or set(plan) - {'self_moves'} != required or plan['schema'] != SCHEMA
+            or type(plan.get('self_moves', False)) is not bool):
         raise ValueError('complete explicit finite collection plan required')
     if not _hex(plan['source_commit'], 40) or not _hex(plan['node_sha256']):
         raise ValueError('source/Node identities required')
@@ -300,7 +302,9 @@ def prepare(plan):
         raise ValueError('original category/source namespace differs')
     catalog = v4_encoder.compile_encoder(public_belief.compile_source(belief),
         load_showdown_dex_cached(plan['showdown_root']), vocabulary,
-        checkpoint_sha256=CHAMPION_CONTRACT['checkpoint_sha256'], feature_masks=CHAMPION_CONTRACT['feature_masks'])
+        checkpoint_sha256=CHAMPION_CONTRACT['checkpoint_sha256'],
+        # V2 self_moves, declared by the plan (absent = off): the catalog, the device tables and the Python masks follow it.
+        feature_masks=dict(CHAMPION_CONTRACT['feature_masks'], self_moves=bool(plan.get('self_moves', False))))
     model_config = V5ModelConfig(category_vocab_size=vocabulary.size,
         category_vocabulary_sha256=category_binding(vocabulary), label_vocabulary=LabelVocabulary(**labels))
     if (category_binding(vocabulary) != model_config.category_vocabulary_sha256

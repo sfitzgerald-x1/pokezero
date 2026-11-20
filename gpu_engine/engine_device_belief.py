@@ -7,6 +7,7 @@ is constructed. Tables are compiled once with the worker's immutable catalog.
 from typing import NamedTuple
 import jax
 import jax.numpy as j
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero.dex import normalize_id
@@ -51,6 +52,28 @@ class Tables(NamedTuple):
     # (engine_device_negative_items.upkeep); an ID absent from the vocabulary is 0, and a pinch berry absent there takes
     # a present one's ID (a repeated name is a no-op in visible_belief.exclude). None: no Lum/pinch rules (fixtures).
     nonproc_items: object = None
+    # V2 self_moves (v4_encoder.Masks.self_moves): SelfMoves when on, None when off. engine_device_observation.encode writes
+    # the own move/PP cells only when this is not None, so every off trace is unchanged.
+    self_moves: object = None
+
+
+class SelfMoves(NamedTuple):
+    """Engine move ID -> the B2 (v4_encoder catalog) lexical move ID and the belief:possible_move category of the name
+    the owner's request shows. Hidden Power stays typed (hiddenpower<type>), unlike engine_move/public_move."""
+    rank: object        # [M] int32, catalog.moves ID (lexical order); 0 for the padding ID
+    category: object    # [M] int32 vocabulary row of belief:possible_move:<name>
+
+
+def compile_self_moves(metadata, catalog):
+    """SelfMoves over the engine move vocabulary. Refuses a move the catalog's namespace lacks, and refuses outright
+    without exact_state: the PP cells are exact-state columns, which Python and B2 write only under it."""
+    if not catalog.masks.exact_state:raise ValueError('self_moves requires exact_state (its PP cells are exact-state columns)')
+    names = metadata['vocabulary']['moves']
+    rank = [catalog.moves.ids.get(normalize_id(n), 0) if i else 0 for i, n in enumerate(names)]
+    missing = [n for i, n in enumerate(names) if i and not rank[i]]
+    if missing:raise ValueError('self moves: engine moves missing from the catalog move namespace: ' + ', '.join(missing[:5]))
+    category = np.asarray(catalog.self_moves.device.category)[np.asarray(rank, np.int32)]
+    return SelfMoves(j.asarray(rank, j.int32), j.asarray(category, j.int32))
 
 
 def compile_tables(metadata, catalog):
@@ -95,7 +118,8 @@ def compile_tables(metadata, catalog):
         np.asarray([bool(i) and normalize_id(n) == 'pressure' for i, n in enumerate(v['abilities'])], bool),
         np.asarray(catalog.masks.investment_belief_narrowing,bool), nonproc_item_ids(v['items']))
     # Preserve primitive dtype (especially uint32 bitmasks and compact spreads).
-    return Tables(*(j.asarray(a, j.float32 if n in floating else None) for n, a in zip(Tables._fields, arrays)))
+    return Tables(*(j.asarray(a, j.float32 if n in floating else None) for n, a in zip(Tables._fields, arrays)),
+        self_moves=compile_self_moves(metadata, catalog) if getattr(catalog.masks, 'self_moves', False) else None)
 
 
 def nonproc_item_ids(items):
@@ -159,7 +183,7 @@ def project(view, tables):
     selected = original._bits(effective, maximum)
     count = j.sum(selected, axis=-1).astype(j.int32)
     total = j.sum(jax.lax.population_count(pool), axis=-1)
-    uncertainty = j.where(known & ~inconsistent, count / j.maximum(total, 1), 1).astype(j.float32)
+    uncertainty = j.where(known & ~inconsistent, en.ratio(count, total, limit=64), 1).astype(j.float32)
     reason = j.where(~known, 1, j.where(inconsistent, 2, 0)).astype(j.int32)
     ability = _take(tables.variant_ability, source_id)
     item = _take(tables.variant_item, source_id)
@@ -192,7 +216,7 @@ def project(view, tables):
     seen = j.any(matches, axis=-1) & (move_buckets > 0)
     uses = j.sum(j.where(matches, j.maximum(0, used[..., None, :]), 0), axis=-1)
     max_pp = _take(tables.max_pp, move_buckets)
-    fractions = j.where(seen & (max_pp > 0), j.maximum(0, max_pp - uses) / j.maximum(max_pp, 1), 0)
+    fractions = j.where(seen & (max_pp > 0), en.ratio(j.maximum(0, max_pp - uses), max_pp, limit=64), 0)
     removed = _optional(view, 'item_removed', j.zeros((b, 6), bool))
     core = j.stack((revealed_count, count, uncertainty, ability_mask.sum(-1), item_mask.sum(-1),
         possible_move.sum(-1), known_ability > 0, (known_item > 0) & ~removed), axis=-1).astype(j.float32)
@@ -201,7 +225,7 @@ def project(view, tables):
     visible = view.present[..., None]
     numeric = j.zeros((b, 6, 132), j.float32).at[..., j.asarray(original.NUMERIC_COLUMNS)].set(j.where(visible, values, 0))
     categorical = j.zeros((b, 6, 41), j.int32).at[..., j.asarray(original.CATEGORY_COLUMNS)].set(j.where(visible, cats, 0))
-    weights = selected.astype(j.float32) / j.maximum(count[..., None], 1)
+    weights = en.ratio(selected.astype(j.int32), count[..., None], limit=64)
     weights = j.pad(weights, ((0, 0), (0, 0), (0, 64 - maximum)))
     semantic_count = possible_ability.sum(axis=-1)
     certain = j.where(known_ability > 0, known_ability, j.where(semantic_count == 1, j.argmax(possible_ability, axis=-1), 0))
@@ -243,5 +267,5 @@ def expected_stats(view, result, tables, *, own_species=None, own_stats=None):
         copied = j.stack((trans_hp, trans_hp, trans_hp, stats[..., 1], stats[..., 1], stats[..., 1],
             *(stats[..., n] for n in range(2, 6))), axis=-1)
         copied = j.where((at >= 0)[..., None], copied, 0)
-    values = j.minimum(1., j.where(transformed[..., None], copied, values) / 714.)
+    values = en.normalized(j.where(transformed[..., None], copied, values), 714)
     return j.where(view.present[..., None], values, 0).astype(j.float32), j.any(view.present & ~transformed & (first_status == 2), axis=-1)

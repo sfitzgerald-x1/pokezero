@@ -79,7 +79,7 @@ class KernelFrameRiskTests(unittest.TestCase):
     def test_literal_before_move_and_hit_outcome_controls(self):
         carry,tape,state=self.boundary()
         before=mechanics.BeforeMove(j.zeros(2,j.int32),j.zeros(2,j.int32),j.zeros(2,j.int32),
-            j.array([False,True]),j.zeros(2,bool))
+            j.array([False,True]),j.zeros(2,bool),j.zeros(2,bool))
         out=r.observe_pre_move_device(carry,tape,state,0,before,self.tables,eligible=True,active=True)
         self.assertEqual(out.risk.tolist(),[r.BLOCKED_ACTION,0])
         base=r.Outcome(0,True,True,False,1,1,False,False,False,False,0,False)
@@ -110,7 +110,7 @@ class KernelFrameRiskTests(unittest.TestCase):
     def test_pre_move_physical_bounds_typed_storage_eligible_rows_and_hot_jit(self):
         carry,tape,state=self.boundary(8)
         before=mechanics.BeforeMove(j.zeros(8,j.int32),j.zeros(8,j.int32),j.zeros(8,j.int32),
-            j.ones(8,bool),j.zeros(8,bool))
+            j.ones(8,bool),j.zeros(8,bool),j.zeros(8,bool))
         active=state.active.at[0,0].set(-1).at[1,0].set(6).at[2,0].set(2**31-1)
         active=active.at[3,1].set(-1).at[4,1].set(6).at[5,1].set(2**31-1)
         actual=state._replace(active=active)

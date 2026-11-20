@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -58,8 +60,11 @@ def emit_fixture(directory, arm, replicate):
     payload = dict(metadata=metadata, metadata_sha256=actor._sha(metadata), state_dict=model.state_dict())
     directory = Path(directory); checkpoint = directory / 'synthetic.pt'
     torch.save(payload, checkpoint); digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    from pokezero.checkpoint_self_moves import _writer_receipt,off_from_receipt
+    proof=off_from_receipt(_writer_receipt(checkpoint,checkpoint_sha256=digest,
+        metadata_sha256=payload['metadata_sha256'],self_moves=False))
     archive = directory / 'actor.npz'
-    receipt = actor.export(checkpoint, archive, expected_checkpoint_sha256=digest, enable_v5=True)
+    receipt = actor.export(checkpoint, archive, expected_checkpoint_sha256=digest, enable_v5=True,off_provenance=proof)
     (directory / 'export-receipt.json').write_text(json.dumps(receipt))
     arrays['checkpoint_sha256'] = np.frombuffer(digest.encode(), np.uint8)
     np.savez_compressed(directory / 'fixture.npz', **arrays)
@@ -79,8 +84,15 @@ def emit_fixture(directory, arm, replicate):
         elif name == 'value_centers': changed['state_dict']['value_centers'] = torch.zeros(config.value_bins)
         else: changed['state_dict']['value_centers'] = torch.nextafter(model.value_centers, torch.ones_like(model.value_centers))
         bad = directory / 'bad.pt'; torch.save(changed, bad)
+        bad_digest=hashlib.sha256(bad.read_bytes()).hexdigest()
+        # Preserve each original shape/namespace/nonfinite rejection's scope.
+        bad_proof=None
+        if name!='legacy':
+            proof_path=directory/(name+'-writer.pt')
+            bad_proof=off_from_receipt(_writer_receipt(proof_path,checkpoint_sha256=bad_digest,
+                metadata_sha256=changed['metadata_sha256'],self_moves=False))
         try: actor.export(bad, directory / 'must-not-exist.npz',
-            expected_checkpoint_sha256=hashlib.sha256(bad.read_bytes()).hexdigest(), enable_v5=True)
+            expected_checkpoint_sha256=bad_digest, enable_v5=True,off_provenance=bad_proof)
         except ValueError: rejected.append(name)
         else: raise AssertionError('export accepted ' + name)
     (directory / 'rejections.json').write_text(json.dumps(rejected))
@@ -240,6 +252,147 @@ class V5JaxActorTests(unittest.TestCase):
                 expected_checkpoint_sha256=metadata['checkpoint_sha256'],
                 expected_category_vocabulary_sha256=config.category_vocabulary_sha256,
                 expected_label_vocabulary_sha256=config.label_vocabulary.sha256)
+
+
+    def _archive_variant(self, producer, mutate=None, *, name='compat-variant.npz'):
+        directory, _, config, _, _, receipt = self.fixtures[2]
+        with np.load(directory / 'actor.npz', allow_pickle=False) as source:
+            arrays = {key: source[key].copy() for key in source.files if key != 'metadata_json'}
+            metadata = json.loads(source['metadata_json'].tobytes())
+        if producer is None:
+            metadata.pop('torch_source_sha256')
+        else:
+            metadata['torch_source_sha256'] = producer
+        if mutate is not None:
+            mutate(metadata, arrays)
+        arrays['metadata_json'] = np.frombuffer(json.dumps(metadata, sort_keys=True).encode(), np.uint8)
+        path = directory / name
+        np.savez_compressed(path, **arrays)
+        return path, dict(enable_v5=True,
+            expected_archive_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            expected_checkpoint_sha256=receipt['checkpoint_sha256'],
+            expected_category_vocabulary_sha256=config.category_vocabulary_sha256,
+            expected_label_vocabulary_sha256=config.label_vocabulary.sha256)
+
+    def test_current_export_and_bounded_old_archive_provenance_are_distinct(self):
+        directory, original, config, _, _, receipt = self.fixtures[2]
+        self.assertEqual(receipt['torch_source_sha256'], actor.TORCH_SOURCE_SHA256)
+        self.assertEqual(receipt['torch_source_sha256'],
+            hashlib.sha256(Path(__import__('pokezero.v5_model', fromlist=['x']).__file__).read_bytes()).hexdigest())
+        for producer in (actor.TORCH_SOURCE_SHA256, actor.LEGACY_ARCHIVE_TORCH_SOURCE_SHA256):
+            with self.subTest(producer=producer):
+                path, kwargs = self._archive_variant(producer)
+                before = path.read_bytes()
+                params, loaded_config, metadata = actor.load(path, **kwargs)
+                self.assertEqual(loaded_config, config)
+                self.assertEqual(metadata['torch_source_sha256'], producer)
+                self.assertEqual(metadata['loader_torch_source_sha256'], actor.TORCH_SOURCE_SHA256)
+                self.assertEqual(metadata['loader_contract_source_sha256'], actor.CONTRACT_SOURCE_SHA256)
+                self.assertEqual(metadata['weights_archive_sha256'], kwargs['expected_archive_sha256'])
+                self.assertEqual(path.read_bytes(), before)
+                for name in params:
+                    np.testing.assert_array_equal(params[name], original[name])
+        for producer in (None, '0' * 64, [], {}):
+            with self.subTest(rejected_producer=producer):
+                path, kwargs = self._archive_variant(producer)
+                with self.assertRaisesRegex(ValueError, 'public v5 actor archive'):
+                    actor.load(path, **kwargs)
+
+    def test_installed_source_guard_stays_strict_for_both_entrypoints(self):
+        import pokezero.v5_model as original
+        model_bytes = Path(original.__file__).read_bytes()
+        contract_bytes = Path(contract.__file__).read_bytes()
+        sha256 = hashlib.sha256
+        kwargs = dict(enable_v5=True, expected_archive_sha256='a' * 64,
+            expected_checkpoint_sha256='b' * 64, expected_category_vocabulary_sha256='c' * 64,
+            expected_label_vocabulary_sha256='d' * 64)
+        for changed_bytes, fake_digest in ((model_bytes, actor.LEGACY_ARCHIVE_TORCH_SOURCE_SHA256),
+                (model_bytes, '0' * 64), (contract_bytes, '0' * 64)):
+            def altered(value, raw=changed_bytes, digest=fake_digest):
+                return SimpleNamespace(hexdigest=lambda: digest) if value == raw else sha256(value)
+            with self.subTest(digest=fake_digest, model=changed_bytes == model_bytes), \
+                    mock.patch.object(actor.hashlib, 'sha256', side_effect=altered):
+                with self.assertRaisesRegex(ValueError, 'Torch/contract source differs'):
+                    actor.load('/never-read', **kwargs)
+                with self.assertRaisesRegex(ValueError, 'Torch/contract source differs'):
+                    actor.export('/never-read', '/never-written', expected_checkpoint_sha256='b' * 64, enable_v5=True)
+
+    def test_every_archive_invariant_rejects_for_both_compatible_producers(self):
+        changes = [(key, lambda metadata, arrays, key=key, value=value: metadata.update({key:value}))
+            for key, value in (('schema','unknown'), ('actor','unknown'), ('view','PRIVATE'),
+                ('auxiliary_heads',True), ('evaluation',False), ('checkpoint_sha256','e'*64),
+                ('contract_source_sha256','e'*64), ('source_contract_sha256','e'*64),
+                ('parameter_count',-1), ('tensor_sha256',{}))]
+        changes.extend([
+            ('category', lambda m,a: m['model'].update(category_vocabulary_sha256='e'*64)),
+            ('labels', lambda m,a: m['model'].update(label_vocabulary_sha256='e'*64)),
+            ('missing_tensor', lambda m,a: a.pop('policy_head.bias')),
+            ('extra_tensor', lambda m,a: a.update(unexpected=np.zeros(1,np.float32))),
+            ('shape', lambda m,a: a.update({'policy_head.bias':np.zeros(2,np.float32)})),
+            ('dtype', lambda m,a: a.update({'policy_head.bias':a['policy_head.bias'].astype(np.float64)})),
+            ('nonfinite', lambda m,a: a.update({'policy_head.bias':np.full_like(a['policy_head.bias'],np.nan)})),
+            ('value_centers', lambda m,a: a.update(value_centers=np.zeros_like(a['value_centers']))),
+        ])
+        for producer in (actor.TORCH_SOURCE_SHA256, actor.LEGACY_ARCHIVE_TORCH_SOURCE_SHA256):
+            for name, change in changes:
+                with self.subTest(producer=producer, invalid=name):
+                    path, kwargs = self._archive_variant(producer, change)
+                    # Trust the changed outer SHA here, so each inner invariant is exercised.
+                    with self.assertRaises(ValueError):
+                        actor.load(path, **kwargs)
+
+    def test_real_production_and_historical_wrappers_keep_all_bindings(self):
+        from gpu_engine import v2_fused, v5_device_backend
+        _, _, config, _, _, _ = self.fixtures[2]
+        plan = SimpleNamespace(model=config, self_moves=False)
+        backend = object.__new__(v5_device_backend.RuntimeBackend)
+        backend.actors = {}; backend.model_sha256 = actor._sha(config.metadata())
+        def resolve(name, digest):
+            path = self.fixtures[2][0] / name
+            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), digest)
+            return path
+        store = SimpleNamespace(plan=plan, resolve=resolve)
+        for index, producer in enumerate((actor.TORCH_SOURCE_SHA256, actor.LEGACY_ARCHIVE_TORCH_SOURCE_SHA256)):
+            path, kwargs = self._archive_variant(producer, name=f'wrapper-{index}.npz')
+            snapshot = dict(iteration=0, archive=path.name, archive_sha256=kwargs['expected_archive_sha256'],
+                checkpoint_sha256=kwargs['expected_checkpoint_sha256'], model_sha256=backend.model_sha256)
+            fused = v2_fused.load_actor(plan, SimpleNamespace(**snapshot), path.parent)
+            actual = backend._actor(snapshot, store)
+            for name in actual:
+                np.testing.assert_array_equal(actual[name], fused[name])
+            with self.assertRaisesRegex(ValueError, 'cached actor checkpoint provenance'):
+                backend._actor(dict(snapshot, checkpoint_sha256='e'*64), store)
+            changed_plan = SimpleNamespace(model=replace(config, dropout=.3), self_moves=False)
+            with self.assertRaisesRegex(ValueError, 'configuration differs'):
+                v2_fused.load_actor(changed_plan, SimpleNamespace(**snapshot), path.parent)
+            other = object.__new__(v5_device_backend.RuntimeBackend)
+            other.actors = {}; other.model_sha256 = actor._sha(changed_plan.model.metadata())
+            with self.assertRaisesRegex(ValueError, 'configuration differs'):
+                other._actor(dict(snapshot,model_sha256=other.model_sha256),
+                    SimpleNamespace(plan=changed_plan,resolve=resolve))
+
+    def test_fresh_load_without_torch_for_both_archive_producers(self):
+        entries = []
+        for index, producer in enumerate((actor.TORCH_SOURCE_SHA256, actor.LEGACY_ARCHIVE_TORCH_SOURCE_SHA256)):
+            path, kwargs = self._archive_variant(producer, name=f'no-torch-{index}.npz')
+            entries.append((str(path), kwargs, producer))
+        program = """import importlib.abc,json,sys
+class NoTorch(importlib.abc.MetaPathFinder):
+ def find_spec(self,fullname,path=None,target=None):
+  if fullname=='torch' or fullname.startswith('torch.'):raise ModuleNotFoundError('Torch disabled for load-only test',name='torch')
+sys.meta_path.insert(0,NoTorch())
+from gpu_engine import v5_model as actor
+for path,kwargs,producer in json.loads(sys.argv[1]):
+ params,config,metadata=actor.load(path,**kwargs)
+ assert params and metadata['torch_source_sha256']==producer
+ assert metadata['loader_torch_source_sha256']==actor.TORCH_SOURCE_SHA256
+assert 'torch' not in sys.modules
+print('LOAD_ONLY_WITHOUT_TORCH_PASS')
+"""
+        result = subprocess.run([sys.executable,'-c',program,json.dumps(entries)],capture_output=True,text=True,
+            env=dict(os.environ,JAX_PLATFORMS='cpu',PYTHONPATH='src:tests:.'),timeout=60)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('LOAD_ONLY_WITHOUT_TORCH_PASS',result.stdout)
 
 
 if __name__ == '__main__':

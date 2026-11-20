@@ -44,11 +44,11 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO_SCHEMA = 'pokezero.effect_probe.scenario.v1'
 RESULT_SCHEMA = 'pokezero.effect_probe.result.v1'
-TAPE_SCHEMA = 'pokezero.gpu_chance_tape.v3'
+TAPE_SCHEMA = 'pokezero.gpu_chance_tape.v6'
 SLEEP_CLAUSE_FORMAT = 'gen3customgame@@@sleepclausemod'
 STATUS = ['', 'par', 'brn', 'psn', 'tox', 'slp', 'frz']
 DRAW_BOUNDS = (2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2)
-EFFECT_BOUNDS = (16, 16, 4, 2)
+EFFECT_BOUNDS = (16, 16, 4, 2, 2)
 # Neutral tape: no thaw, no full paralysis, hits, no crit, the minimum (85%)
 # damage roll (draws[5]=0 -> random(16)=15), no secondary, protect succeeds,
 # side 0 wins ties. Scenarios override fields.
@@ -58,10 +58,11 @@ DEFAULT_ROW = [0, 99, 99, 0, 15, 0, 0, 0, 0, 0, 0, 0]
 # engine inputs are unchanged. 0 procs a contact ability (0 < 20, < 6: Effect Spore's slp), so a scenario that makes
 # contact with such a holder sets phazing explicitly.
 DEFAULT_TAPE = dict(draws=[list(DEFAULT_ROW), list(DEFAULT_ROW)], secondary=[99, 99], sleep_talk=[0, 0],
-                    effect=[[15, 0, 0, 0], [15, 0, 0, 0]], phazing=[0, 0])
-# Engine-only auxiliary inputs (no Showdown role); kept explicit and in-range.
+                    effect=[[15, 0, 0, 0, 1], [15, 0, 0, 0, 1]], phazing=[0, 0], shed_skin=[99, 99])
+# Entry coordinates are authored separately, then shared with the v6 Showdown tape.
+# The initial coin is shared by both initializers; resuming is derived from engine state.
 DEFAULT_AUX = dict(entry_ties=[0, 0], initial_tie=0)
-BOUNDS = dict(draws=DRAW_BOUNDS, effect=EFFECT_BOUNDS, secondary=100, sleep_talk=60, phazing=60, entry_ties=2, initial_tie=2)
+BOUNDS = dict(draws=DRAW_BOUNDS, effect=EFFECT_BOUNDS, secondary=100, sleep_talk=60, phazing=60, entry_ties=2, initial_tie=2,shed_skin=100)
 # Device mode's optional low-optimization compile of step_with_public (XLA's own options for that one executable, as the
 # CI's low-optimization cases set them): the public step's CPU compile at the default level peaks far above the light tier.
 LOW_OPTIMIZATION = {'xla_backend_optimization_level': 0, 'xla_llvm_disable_expensive_passes': True}
@@ -217,6 +218,8 @@ def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None, transform=Fa
             hp = int(view['hp'][side, slot])
             check(p + 'hp', mon['hp'], hp)
             check(p + 'fainted', mon['fainted'], hp <= 0)
+            if int(view['gender'][side, slot]) >= 0 and 'gender' in mon:
+                check(p + 'gender', mon['gender'], int(view['gender'][side, slot]))
             alive = mon['hp'] > 0 or hp > 0
             if alive:check(p + 'status', mon['status'], STATUS[int(view['status'][side, slot])])
             if alive and mon['status'] == 'slp':
@@ -239,6 +242,7 @@ def compare_lane(view, snapshot, vocab, *, mask, destiny_bond=None, transform=Fa
             check(p + name, read(v), int(view[name][side, active]) if name in view else neutral)
         check(p + 'destiny_bond', v['destinybond'],
               bool(int(view['volatile'][side, active]) & destiny_bond) if destiny_bond is not None else False)
+        check(p + 'attract', v.get('attract', False), bool(int(view['volatile'][side, active]) & 128))
     for side in range(2):
         check(f'{side}:mask', snapshot['sides'][side]['mask'], [bool(x) for x in mask[side]])
     done = bool(view['done'])
@@ -363,14 +367,29 @@ class Engine:
                 if len(team) != 6:raise ValueError('the engine needs six-member teams')
                 teams.append([m[name] for m in team])
             pool[name] = np.asarray(teams)
-        return self.transition.state_from_pool(pool, np.tile([[0, 1]], (self.lanes, 1)), seed=0)
+        state=self.transition.state_from_pool(pool, np.tile([[0, 1]], (self.lanes, 1)), seed=0)
+        genders=getattr(self,'explicit_genders',None)
+        if genders is not None:
+            import jax.numpy as j
+            state=state._replace(gender=j.broadcast_to(j.asarray(genders,j.int32),state.gender.shape))
+        return state
 
-    def start(self, rows):
-        return self.jax.block_until_ready(self.transition.initialize(self._raw(rows), self.table))
+    def _initial_coin(self, initial_ties):
+        if initial_ties is None:return None
+        values=np.asarray(initial_ties)
+        if values.shape!=(self.lanes,) or values.dtype.kind not in 'iu' or not np.isin(values,[0,1]).all():
+            raise ValueError('one initial tie bit per engine lane required')
+        import jax.numpy as j
+        return j.asarray(values,j.int32)
 
-    def start_public(self, rows):
-        """(state, trackers): the same lanes through initialize_with_public."""
-        init = self.transition.initialize_with_public(self._raw(rows), self.table, belief_tables=self.belief_tables)
+    def start(self, rows, initial_ties=None):
+        return self.jax.block_until_ready(self.transition.initialize(self._raw(rows), self.table,
+            tie_coin=self._initial_coin(initial_ties)))
+
+    def start_public(self, rows, initial_ties=None):
+        """(state, trackers): the same lanes and initial coins through initialize_with_public."""
+        init = self.transition.initialize_with_public(self._raw(rows), self.table, belief_tables=self.belief_tables,
+            tie_coin=self._initial_coin(initial_ties))
         return self.jax.block_until_ready((init.state, init.trackers))
 
     def chance(self, tapes, auxes):
@@ -380,7 +399,12 @@ class Engine:
             phazing=stack('phazing'),
             entry_ties=j.asarray(np.asarray([a['entry_ties'] for a in auxes]), j.int32),
             initial_tie=j.asarray(np.asarray([a['initial_tie'] for a in auxes]), j.int32))
-        if self.has_effect:fields['effect'] = stack('effect')
+        if self.has_effect:
+            # Harness-only backports can test an older engine as the negative
+            # control. Its declared effect columns are unchanged; Showdown
+            # still consumes the new column and exposes missing behavior.
+            fields['effect'] = stack('effect')[..., :len(self.transition.EFFECT_BOUNDS)]
+        if 'shed_skin' in self.transition.ChanceInputs._fields:fields['shed_skin']=stack('shed_skin')
         return self.transition.ChanceInputs(**fields)
 
     def advance(self, state, actions, tapes, auxes):
@@ -487,27 +511,31 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
             status_counts={'MISSING_ENGINE_FIELDS': 1}, missing_engine_fields=missing, expectation=scenario.get('expect'),
             expectation_met=False, expectation_detail=f'engine lacks required fields {missing}', results=[])
     prepared = showdown.ask(cmd='prepare', teams=scenario['teams'])
+    engine.explicit_genders=prepared.get('genders')
     if prepared['vocabulary'] != metadata['vocabulary']:raise ValueError('probe vocabulary differs from the pool metadata')
     transform = 'transform' in scenario.get('require_fields', ())
     cases = enumerate_cases(scenario)
     if len(cases) > engine.lanes:raise ValueError(f"{scenario['move']}: {len(cases)} cases exceed {engine.lanes} lanes")
     vocab = metadata['vocabulary']
-    start = dict(cmd='start', format=scenario['format'], seed=scenario['seed'], cases=len(cases), sets=prepared['sets'])
+    initial_ties=[step_inputs(scenario,case,0)[1]['initial_tie'] for case in cases]
+    start = dict(cmd='start', format=scenario['format'], seed=scenario['seed'], cases=len(cases),
+        sets=prepared['sets'], initial_ties=initial_ties)
     if device is not None:start['device'] = True
     started = showdown.ask(**start)
-    state = engine.start(prepared['rows'])
+    lane_initial_ties=initial_ties+[initial_ties[0]]*(engine.lanes-len(cases))
+    state = engine.start(prepared['rows'], initial_ties=lane_initial_ties)
     arrays, mask = engine.views(state)
     if device is not None:
         dev = device.dev
-        pstate, trackers = engine.start_public(prepared['rows'])
+        pstate, trackers = engine.start_public(prepared['rows'], initial_ties=lane_initial_ties)
         initial_equal = dev.trees_equal(state, pstate)
         device.b2.reset([0, 1] * engine.lanes)
         device.b2.feed([lines for i in range(len(cases)) for lines in started['channels'][i]] + [None] * (2 * (engine.lanes - len(cases))))
         host_trackers, host_b2 = engine.jax.device_get(trackers), device.b2.host()
     records = []
     # Start-of-battle randomness runs on the seeded PRNG but is audited: anything
-    # beyond inert gender and the no-Quick-Claw roll (a lead Speed tie, a real
-    # Quick Claw, gender that matters) makes the case unresolved.
+    # beyond the shared initial tie, inert gender and the no-Quick-Claw roll
+    # (a real Quick Claw or an uncoupled gender that matters) stays unresolved.
     initial_random = [e for e in started['audit'] if e['kind'] in ('INITIAL_RANDOM', 'UNRESOLVED')]
     for i, case in enumerate(cases):
         diffs = compare_lane(lane_view(arrays, i), started['snapshots'][i], vocab, mask=mask[i],
@@ -528,10 +556,13 @@ def run_scenario(scenario, engine, showdown, metadata, device=None):
         for i, record in enumerate(records):
             body, aux = step_inputs(scenario, cases[i], step)
             if pending[i] and record['last_tape'] is not None:
-                body, aux = record['last_tape'], record['last_aux']   # a suspended turn replays its block
+                # Reuse the saved turn block, but replacement entries consume the
+                # current request's authored entry coordinates, never the saved ones.
+                body, aux = record['last_tape'], dict(record['last_aux'],entry_ties=aux['entry_ties'])
             else:
                 record['last_tape'], record['last_aux'] = body, aux
-            tapes.append(dict(schema=TAPE_SCHEMA, nonce=f"{scenario['move']}:{i}:{step}", **body));auxes.append(aux)
+            tapes.append(dict(schema=TAPE_SCHEMA, nonce=f"{scenario['move']}:{i}:{step}", **body,
+                entry_ties=list(aux['entry_ties']),resuming=bool(pending[i])));auxes.append(aux)
             actions.append([engine_action(script[s], int(active[i, s])) for s in range(2)])
             choices.append(list(script))
         for lane in range(len(cases), engine.lanes):

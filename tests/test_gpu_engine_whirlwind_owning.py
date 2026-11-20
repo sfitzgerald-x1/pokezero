@@ -113,7 +113,10 @@ console.log(JSON.stringify(out));"""
    at=int(p.start[0])+offset;words=done.words.at[0,at,column].add(1);l=done.execution.ledger._replace(words=done.execution.ledger.words.at[0,at,column].add(1));bad=done._replace(words=words,execution=done.execution._replace(ledger=l));self.assertEqual(cb.owned(bad,p.start+offset).tolist(),[False]+[True]*7,(offset,column))
 
  def test_default_phazing_program_exact_and_current_pins(self):
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/phazing.py'],text=True));new=ast.parse(Path('gpu_engine/phazing.py').read_text())
+  historical=subprocess.check_output(['git','show',BASE+':gpu_engine/phazing.py'],text=True)
+  self.assertEqual(historical.count('entry.restore_sleep('),1)
+  old=ast.parse(historical.replace('entry.restore_sleep(','entry.switch_in_status('))
+  new=ast.parse(Path('gpu_engine/phazing.py').read_text())
   class Strip(ast.NodeTransformer):
    def visit_If(self,n):
     if ast.unparse(n.test)=='_public_trace is not None':return n.orelse
@@ -128,7 +131,7 @@ console.log(JSON.stringify(out));"""
   for file,key,count in(('chance_consumers.py','SOURCE_PINS',14),('ordinary_law.py','MAPPING_PINS',6),('conditional_law.py','MAPPING_PINS',4)):
    tree=ast.parse(Path('gpu_engine',file).read_text());mapping=ast.literal_eval(next(n.value for n in tree.body if isinstance(n,ast.Assign)and any(isinstance(x,ast.Name)and x.id==key for x in n.targets)));self.assertEqual(len(mapping),count)
    for name,value in mapping.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),value)
-  self.assertEqual(len(witness.SOURCE_PINS),90)
+  self.assertEqual(len(witness.SOURCE_PINS),92)
 
  def test_original_both_owner_drag_words(self):
   s,t,p,consumers=self.literal(True);before_registry=life.snapshot(t.cursor);after,t,changed,ko=self.run_write(s,t,p);yes=j.ones(8,bool);no=~yes;z=j.zeros(8,j.int32);t=life.action_end(t,yes);t=life.finish(t,after,live=yes,replacement=no,pending_before=no,residual_ready=yes,defer_residual=no,turn_context=yes);frame=life.LifecycleResult(after,t.cursor,t,before_registry,life.snapshot(t.cursor),no,z);packets=[]

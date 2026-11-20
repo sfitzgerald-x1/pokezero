@@ -39,7 +39,7 @@ from .collection import RolloutRecord, write_rollout_record
 from .determinization import gen3_randbat_belief_start_override_planner
 from .deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION, protocol_signature_counts
 from .dex import ShowdownDex, load_showdown_dex_cached
-from .env import PlayerId, TerminalState
+from .env import BattleStartOverride, PlayerId, TerminalState
 from .fallback_replay import RefusalRecord, attach_refusal_recorder
 from .fullgame_phase_progress import FullgamePhaseProgress
 from .local_showdown import (
@@ -6136,6 +6136,7 @@ async def _run_controlled_foulplay_games(
     actor_runtime: tuple[Any, Any, Any] | None = None,
     actor_version: str = 'champion-v4',
     game_offsets: tuple[int, ...] | None = None,
+    packed_starts: Mapping[int, BattleStartOverride] | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run a preconstructed legal policy through the shared FoulPlay bridge.
 
@@ -6156,6 +6157,13 @@ async def _run_controlled_foulplay_games(
             or tuple(sorted(set(game_offsets)))!=game_offsets):
         raise ValueError('ordered explicit v5 finite game offsets required')
     offsets=range(config.games) if game_offsets is None else game_offsets
+    if packed_starts is not None and (
+        actor_version != "v5" or config.format_id != "gen3randombattle"
+        or set(packed_starts) != set(offsets)
+        or any(type(start) is not BattleStartOverride
+               or start.observation_format_id != config.format_id for start in packed_starts.values())
+    ):
+        raise ValueError("explicit v5 packed teams required for every original offset")
     foulplay_random_seed_schedule = (_per_seed_foulplay_random_seed_schedule(config,count=config.games)
         if game_offsets is None else _per_seed_foulplay_random_seed_schedule_for_offsets(config,offsets=offsets))
 
@@ -6236,6 +6244,7 @@ async def _run_controlled_foulplay_games(
                         **({"owning_actor_factory": actor_factory, "actor_runtime": actor_runtime}
                            if actor_factory is not None else {}),
                         **({'actor_version':actor_version} if actor_version in ('v5','canary-v4') else {}),
+                        **({"packed_start": packed_starts[offset]} if packed_starts is not None else {}),
                     )
                 )
             finally:
@@ -7615,6 +7624,16 @@ async def _run_single_game(
     return result
 
 
+def _controlled_players(config: ControlledFoulPlayConfig, packed_start: BattleStartOverride | None):
+    players = {
+        config.pokezero_player: config.pokezero_username,
+        config.foulplay_player: config.foulplay_username,
+    }
+    if packed_start is not None:
+        return {seat: {"name": name, "team": packed_start.player_teams[seat]} for seat, name in players.items()}
+    return players
+
+
 async def _run_single_game_body(
     *,
     config: ControlledFoulPlayConfig,
@@ -7635,6 +7654,7 @@ async def _run_single_game_body(
     live_continuation_oracle_controller: _LiveFoulPlayContinuationOracleController | None = None,
     phase_progress: FullgamePhaseProgress | None = None,
     owning_session: OwningWireSession | None = None,
+    packed_start: BattleStartOverride | None = None,
 ) -> ControlledFoulPlayGameResult:
     require_session(config, owning_session)
     battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
@@ -7668,10 +7688,7 @@ async def _run_single_game_body(
             "battleId": battle_id,
             "formatid": config.format_id,
             "seed": showdown_seed_from_int(seed),
-            "players": {
-                config.pokezero_player: config.pokezero_username,
-                config.foulplay_player: config.foulplay_username,
-            },
+            "players": _controlled_players(config, packed_start),
         }
     )
 

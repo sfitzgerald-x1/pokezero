@@ -40,6 +40,38 @@ function forcedFixture(hazard,suppression=false) {
     : [b.p1.active[0].boosts.atk,b.p2.active[0].boosts.atk];
   b.destroy();return result;
 }
+function toxicReplacement(hazard) {
+  const b = new Battle({formatid:'gen3customgame',seed:[11,22,33,44]});
+  b.setPlayer('p1',{name:'a',team:[set('Ditto','Limber'),set('Arbok','Shed Skin'),set('Ditto','Limber')]});
+  b.setPlayer('p2',{name:'b',team:[set('Ditto','Limber'),set('Sandslash','Sand Veil')]});
+  const first = b.p1.pokemon[1];
+  const waiting = b.p2.pokemon[1];
+  first.storedStats.spe = 300;
+  waiting.storedStats.spe = 100;
+  waiting.baseMaxhp = waiting.maxhp = waiting.hp = 101;
+  waiting.setStatus('tox');
+  waiting.statusState.stage = 1;
+  if (hazard) {
+    first.hp = 1;
+    b.p1.addSideCondition('spikes', b.p2.active[0]);
+  }
+  b.p1.active[0].faint();
+  b.p2.active[0].faint();
+  b.faintMessages();
+  b.checkFainted();
+  b.midTurn = true;
+  b.queue.addChoice({choice:'residual'});
+  b.makeRequest('switch');
+  b.makeChoices('switch 2','switch 2');
+  if (b.p2.active[0] !== waiting) throw new Error('second entrant was not installed');
+  const stages = [[waiting.statusState.stage, waiting.hp]];
+  if (hazard) {
+    b.makeChoices('switch 3','');
+    stages.push([waiting.statusState.stage, waiting.hp]);
+  }
+  b.destroy();
+  return stages;
+}
 const weatherBattle = new Battle({formatid:'gen3customgame',seed:[11,22,33,44]});
 const fast = {...set('Kyogre','Drizzle'),nature:'Timid',evs:{spe:252}};
 const slow = {...set('Groudon','Drought'),nature:'Brave',ivs:{spe:0}};
@@ -60,6 +92,8 @@ dex.abilities.get('intimidate').onStart.call({hint:()=>{},add:()=>{},boost:()=>{
 process.stdout.write(JSON.stringify({double_switch_attack_stages:stages,weather_start:weatherBattle.field.weather,
   spikes_damage:damages,natural_cure:{status:cured.status,counter:cured.counter},intimidate_substitute_drop_calls:drops,
   forced_attack_stages:forcedFixture(false),forced_hazard_hp:forcedFixture(true),
-  forced_suppression_hazard_hp:forcedFixture(true,true)}));
+  forced_suppression_hazard_hp:forcedFixture(true,true),
+  toxic_replacement:toxicReplacement(false),
+  toxic_replacement_after_spikes:toxicReplacement(true)}));
 battle.destroy();
 weatherBattle.destroy();

@@ -23,7 +23,7 @@ class Mapping:
     refusals: tuple[str, ...]
 
 
-def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, held_volatiles=False, arrays=None):
+def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, held_volatiles=False, arrays=None, transform_last_moves=None):
     """Trusted lower mapping; the public-root factory supplies source inputs.
 
     ``held_volatiles`` maps the public volatiles the engine holds since fidelity A2/M2 instead of refusing them:
@@ -58,6 +58,8 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
             reasons.append(f'deferred-or-replacement-phase:{seat}')
         if set(side.side_conditions)-{'spikes','protect','toxic_count'}:reasons.append(f'side-condition:{seat}')
         held={'destinybond','encore',*PERISH} if held_volatiles else set()
+        if type(side.active_index) is int and 0<=side.active_index<len(side.pokemon) and side.pokemon[side.active_index].pre_transform is not None:
+            held |= {'transformed','typechange'}
         if set(side.volatile_statuses)-{'leechseed','substitute','truant'}-held:reasons.append(f'volatile:{seat}')
         if sum(v in PERISH for v in side.volatile_statuses)>1:reasons.append(f'perish-count:{seat}')
         # The CPU materializer seeds an encored side's clock at its floor of 1 (engine_world); the count is hidden, and the
@@ -66,8 +68,12 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
         if held_volatiles and 'encore' in side.volatile_statuses and clock.get('encore')==1:clock.pop('encore')
         if clock:reasons.append(f'volatile-clock:{seat}')
         for slot,mon in enumerate(side.pokemon):
-            if mon.pre_transform is not None or mon.base_types not in (None,mon.types):reasons.append(f'transformed-types:{seat}:{slot}')
-            if mon.base_ability not in (None,mon.ability):reasons.append(f'copied-ability:{seat}:{slot}')
+            if mon.pre_transform is not None:
+                if slot!=side.active_index:reasons.append(f'transformed-bench:{seat}:{slot}')
+                if mon.pre_transform.pre_transform is not None:reasons.append(f'nested-transform:{seat}:{slot}')
+            else:
+                if mon.base_types not in (None,mon.types):reasons.append(f'transformed-types:{seat}:{slot}')
+                if mon.base_ability not in (None,mon.ability):reasons.append(f'copied-ability:{seat}:{slot}')
             if mon.status=='sleep' or mon.rest_turns or mon.rest_sleep_pending_refund or mon.sleep_turns:
                 reasons.append(f'sleep-clock:{seat}:{slot}')
             if mon.weight_kg is not None:
@@ -88,6 +94,25 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
         if name not in namespaces[kind] or namespaces[kind][name]<=0:
             raise ValueError('namespace:'+kind+':'+name)
         return namespaces[kind][name]
+    def move_values(moves):
+        ids=np.zeros(4,np.int32);pp=np.zeros(4,np.int32);disabled=np.zeros(4,bool);hidden=(0,70)
+        if len(moves)>4:raise ValueError('move-count')
+        for index,move in enumerate(moves):
+            if move.id=='none':
+                if move.pp!=0:raise ValueError('absent-move-pp')
+                continue
+            move_id=normalize_id(move.id)
+            hp=re.fullmatch(r'hiddenpower([a-z]+)([0-9]+)',move_id)
+            if hp:
+                typ,power=hp.groups();power=int(power)
+                if not 30<=power<=70:raise ValueError('hidden-power-power')
+                hidden=(identity('types',typ),power)
+                move_id=next((name for name in ('hiddenpower'+typ,'hiddenpower') if name in namespaces['moves']),move_id)
+            ids[index]=identity('moves',move_id)
+            if type(move.pp) is not int or not 0<=move.pp<2**31 or type(move.disabled) is not bool:
+                raise ValueError('move-pp-or-disabled')
+            pp[index]=move.pp;disabled[index]=move.disabled
+        return ids,pp,disabled,hidden
     boosts=('attack','defense','special_attack','special_defense','speed','accuracy','evasion')
     statuses={'none':0,'paralyze':1,'burn':2,'poison':3,'toxic':4,'freeze':6}
     try:
@@ -130,7 +155,8 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
                 values=(mon.maxhp,mon.attack,mon.defense,mon.special_attack,mon.special_defense,mon.speed)
                 if any(value<=0 or value>=2**31 for value in values):raise ValueError('mon-stats')
                 address=(0,seat,slot)
-                arrays['species'][address]=identity('species',mon.id)
+                original=mon.pre_transform or mon
+                arrays['species'][address]=identity('species',original.id)
                 arrays['level'][address]=mon.level
                 arrays['hp'][address]=mon.hp;arrays['max_hp'][address]=mon.maxhp
                 arrays['stats'][address]=values
@@ -149,7 +175,7 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
                 # replacement as constructor identity. The original static dex
                 # supplies an unmodified species row or this root is unknown.
                 base=mon.base_types
-                info=None if dex is None else dex.species_info(mon.id)
+                info=None if dex is None else dex.species_info(original.id)
                 if base is None:
                     if info is None:raise ValueError('base-types-unavailable')
                     base=tuple(info.types)
@@ -160,31 +186,39 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
                 base=[identity('types',value,none=True) for value in base]
                 if not 1<=len(base)<=2:raise ValueError('base-type-count')
                 base=base+[0]*(2-len(base))
-                if base!=arrays['types'][address].tolist():raise ValueError('changed-types-base-unavailable')
+                if mon.pre_transform is None and base!=arrays['types'][address].tolist():raise ValueError('changed-types-base-unavailable')
                 arrays['base_types'][address]=base
                 mood=happiness[seat][slot]
                 if type(mood) is not int or not 0<=mood<=255:raise ValueError('packed-happiness')
                 arrays['happiness'][address]=mood
-                if len(mon.moves)>4:raise ValueError('move-count')
-                for index,move in enumerate(mon.moves):
-                    if move.id=='none':
-                        if move.pp!=0:raise ValueError('absent-move-pp')
-                        continue
-                    move_id=normalize_id(move.id)
-                    hp=re.fullmatch(r'hiddenpower([a-z]+)([0-9]+)',move_id)
-                    if hp:
-                        typ,power=hp.groups();power=int(power)
-                        if not 30<=power<=70:raise ValueError('hidden-power-power')
-                        arrays['hidden_power_type'][address]=identity('types',typ)
-                        arrays['hidden_power_power'][address]=power
-                        move_id=next((name for name in ('hiddenpower'+typ,'hiddenpower') if name in namespaces['moves']),move_id)
-                    arrays['moves'][address+(index,)]=identity('moves',move_id)
-                    if type(move.pp) is not int or not 0<=move.pp<2**31 or type(move.disabled) is not bool:
-                        raise ValueError('move-pp-or-disabled')
-                    arrays['pp'][address+(index,)]=move.pp
-                    arrays['disabled'][address+(index,)]=move.disabled
+                ids,pp,disabled,hidden=move_values(mon.moves)
+                arrays['moves'][address]=ids;arrays['pp'][address]=pp;arrays['disabled'][address]=disabled
+                arrays['hidden_power_type'][address],arrays['hidden_power_power'][address]=hidden
+                if mon.pre_transform is not None:
+                    saved=(original.attack,original.defense,original.special_attack,original.special_defense,original.speed)
+                    if any(type(v) is not int or not 0<v<2**31 for v in saved):raise ValueError('transform-base-stats')
+                    ids,pp,_,hidden=move_values(original.moves)
+                    arrays['transformed'][0,seat]=True
+                    arrays['transform_species'][0,seat]=identity('species',mon.id)
+                    arrays['transform_stats'][0,seat]=saved
+                    arrays['transform_moves'][0,seat]=ids;arrays['transform_pp'][0,seat]=pp
+                    arrays['transform_hidden_power'][0,seat]=hidden
             last=side.last_used_move
-            if last:
+            if arrays['transformed'][0,seat] and transform_last_moves is not None:
+                # The CPU spec's slot was resolved against the original set.
+                # Resolve the public move identity against the copied set now.
+                name=normalize_id(transform_last_moves[seat] or '')
+                canonical=lambda x:'hiddenpower' if x.startswith('hiddenpower') else x
+                matches=[k for k,mid in enumerate(arrays['moves'][0,seat,active])
+                    if mid and canonical(normalize_id(vocab['moves'][mid]))==canonical(name)]
+                index=-1 if name=='transform' else matches[0] if len(matches)==1 else None
+                if index is None:raise ValueError('PUBLIC_TRANSFORM_LAST_MOVE_UNAVAILABLE')
+                move=identity('moves','transform') if index<0 else arrays['moves'][0,seat,active,index]
+                arrays['last_action_kind'][0,seat]=2;arrays['last_action_index'][0,seat]=index
+                arrays['last_move'][0,seat,active]=move
+                if matches and normalize_id(side.pokemon[active].item or '')=='choiceband':
+                    arrays['choice_move'][0,seat,active]=move
+            elif last:
                 if last=='move:struggle':
                     arrays['last_action_kind'][0,seat]=3
                     arrays['last_move'][0,seat,active]=identity('moves','struggle')

@@ -194,11 +194,19 @@ def collect(reference, prepared, pool, *, gender_policy, resume=False):
     """
     from .v5_device_backend import Prepared
     from .engine_request_source import _gender
+    from pokezero.checkpoint_self_moves import archive_self_moves
     from . import source_provenance
     if type(resume) is not bool: raise ValueError('explicit no-replay resume mode required')
     plan,batches,games,labels = schema.declaration(reference)
     if type(prepared) is not Prepared or prepared.source_sha256!=plan['source_sha256'] or prepared.pool_sha256!=plan['pool_sha256']:
         raise ValueError('genuine same frozen nontraining Prepared/pool required')
+    self_moves = plan.get('self_moves', False)
+    catalog_encoding = prepared.catalog.masks.self_moves
+    if type(catalog_encoding) is not bool or catalog_encoding != self_moves:
+        raise ValueError('prepared catalog self_moves differs from the device-bank declaration')
+    table_encoding = getattr(prepared.observation_tables.belief, 'self_moves', None) is not None
+    if table_encoding != self_moves:
+        raise ValueError('observation tables self_moves differs from the device-bank declaration')
     if (source_provenance._pool(pool,rehash=True)['pool_sha256']!=prepared.pool_sha256
             or pool.metadata()!=json.loads(prepared.metadata_json)):
         raise ValueError('actual constructor pool differs from prepared bank')
@@ -215,13 +223,17 @@ def collect(reference, prepared, pool, *, gender_policy, resume=False):
         if key not in loaded:
             loaded[key] = v5_model.load(actor['archive']['path'],expected_archive_sha256=key[0],expected_checkpoint_sha256=key[1],
                 expected_category_vocabulary_sha256=plan['category_vocabulary_sha256'],expected_label_vocabulary_sha256=labels.sha256,enable_v5=True)
-        params,actual,_ = loaded[key]
+        params,actual,meta = loaded[key]
+        if archive_self_moves(meta) != self_moves:
+            raise ValueError('actor archive self_moves differs from the device-bank declaration')
         if config is not None and actual!=config: raise ValueError('same frozen actor geometry required')
         config = actual; parameters.append(params)
     parameters = tuple(jax.block_until_ready(parameters)); directory = Path(plan['output_directory'])
     namespace = dict(source_commit=plan['source_commit'],source_sha256=prepared.source_sha256,pool_sha256=prepared.pool_sha256,
         category_vocabulary_sha256=prepared.category_sha256,label_vocabulary_sha256=labels.sha256,
         pool_metadata_sha256=binding['pool_metadata_sha256'],public_source_hash=prepared.source.metadata.source_hash)
+    if self_moves:
+        namespace['self_moves'] = True
     journal_path = directory/'journal.json'
     if resume:
         journal = json.loads(journal_path.read_text())
@@ -294,6 +306,8 @@ def collect(reference, prepared, pool, *, gender_policy, resume=False):
                 positions.append(p); groups.append(g)
     header = dict(split='PHASE_C_FIXED_HELDOUT',rows=1024,category_vocabulary_sha256=prepared.category_sha256,
         label_vocabulary_sha256=labels.sha256,category_count=prepared.category_size,device_bank=reference,device_source=plan['source_commit'])
+    if self_moves:
+        header['self_moves'] = True
     publication = directory/('publication-'+uuid.uuid4().hex); publication.mkdir()
     artifacts = {}
     for name,rows,kind in [('positions',positions,schema.POSITIONS),('siblings',groups,schema.SIBLINGS)]:

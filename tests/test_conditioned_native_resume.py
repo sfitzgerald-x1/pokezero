@@ -359,6 +359,30 @@ class ConditionedResumeTests(unittest.TestCase):
             self.assertIn("SUSPENSION_BINDING_CHANGED",repr(refused.gaps))
             self.assertIsInstance(c.canonical_resumed_jax(paused,0,self.meta,native_input=changed),self.f.Refused)
         self.assertEqual(calls,[])
+
+        with self.subTest(contract="saved Shed Skin cure bank"):
+            self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
+            missing=paused._asdict();del missing['shed_skin_draws']
+            refused=c.suspended_input_from_jax(missing,0,self.meta,certificate=certificate,module=self.engine)
+            self.assertIsInstance(refused,self.f.Refused,refused)
+            self.assertIn('MISSING_SAVED_SHED_SKIN_BLOCK',repr(refused.gaps))
+            refused=c.canonical_resumed_jax(missing,0,self.meta,native_input=bound)
+            self.assertIsInstance(refused,self.f.Refused,refused)
+            self.assertIn('MISSING_SAVED_SHED_SKIN_BLOCK',repr(refused.gaps))
+            explicit=c.canonical_resumed_jax(paused._replace(shed_skin_draws=self.j.zeros((1,2),self.j.int32)),
+                0,self.meta,native_input=bound)
+            self.assertIsInstance(explicit,c.ConditionedFuture,explicit)
+            # Even a consistently sealed legacy input must refuse before native execution.
+            raw=tuple((k,v) for k,v in bound.raw_jax if k!='shed_skin_draws')
+            legacy=replace(bound,raw_jax=raw,certificate=replace(bound.certificate,input_fields=raw))
+            legacy=replace(legacy,integrity_sha256=c._binding_digest(legacy.raw_native,raw,
+                legacy.capsule,legacy.certificate,legacy.source_certificate))
+            refused=c.native_successors(legacy,1,[0,1],module=never)
+            self.assertIsInstance(refused,self.f.Refused,refused)
+            self.assertIn('MISSING_SAVED_SHED_SKIN_BLOCK',repr(refused.gaps))
+            self.assertEqual(calls,[])
+            self.assertEqual(c._saved_cure({'pending_residual':False}),(0,0))
+
         # A later unsupported positive branch invalidates the entire result;
         # an earlier supported prefix must never escape as a partial law.
         from types import SimpleNamespace

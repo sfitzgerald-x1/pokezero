@@ -27,7 +27,7 @@ BURN_STATUS,POISON_STATUS=2,3
 START,INSTALL=0,1
 PRIVATE_FIELDS=('hp','max_hp','status','species','level','gender','stats','moves','pp','item','ability','base_ability','types','base_types','hidden_power_type','hidden_power_power','happiness','status_counter','substitute_hp')
 Private=NamedTuple('Private',[(n,object)for n in PRIVATE_FIELDS])
-SUSPENSION_FIELDS=('turn','pending_residual','baton_pass','forced_switch','queued_actor','queued_actions','queued_stall','residual_draws','phazing_draws','secondary_draws','sleep_talk_draws','replacement_count','keys','effect_draws')
+SUSPENSION_FIELDS=('turn','pending_residual','baton_pass','forced_switch','queued_actor','queued_actions','queued_stall','residual_draws','phazing_draws','secondary_draws','sleep_talk_draws','replacement_count','keys','effect_draws','shed_skin_draws')
 Suspension=NamedTuple('Suspension',[(n,object)for n in SUSPENSION_FIELDS])
 class Data(NamedTuple):
     binding:object
@@ -159,7 +159,7 @@ def history_shape(h,b):
 def suspension_shape(s,b):
     if type(s)is not Suspension:raise ValueError('typed same-source Baton suspension required')
     for name,v in zip(SUSPENSION_FIELDS,s,strict=True):
-        tail=(2,12)if name=='residual_draws'else(2,4)if name=='effect_draws'else(2,)if name in ('baton_pass','forced_switch','queued_actions','queued_stall','phazing_draws','secondary_draws','sleep_talk_draws','keys')else()
+        tail=(2,12)if name=='residual_draws'else(2,5)if name=='effect_draws'else(2,)if name in ('baton_pass','forced_switch','queued_actions','queued_stall','phazing_draws','secondary_draws','sleep_talk_draws','shed_skin_draws','keys')else()
         dtype=j.bool_ if name in ('pending_residual','baton_pass','forced_switch')else j.uint32 if name=='keys'else j.int32
         life._typed(v,(b,)+tail,dtype)
 
@@ -366,19 +366,12 @@ def copied_private(before,side,outgoing,incoming):
     return before._replace(substitute_hp=before.substitute_hp.at[r,seat,new].set(before.substitute_hp[r,seat,old]))
 
 def departed_private(before,side,outgoing,data=None):
-    """Same original entry.depart TOX-counter reset; no physical write here.
-
-    Major status remains on the outgoing mon and never transfers, except the
-    explicit source-bound Natural Cure departure below. Original
-    tox.onSwitchIn resets its own stage; the existing kernel clears that private
-    clock on departure. This predicts only that actual already-existing write.
-    """
+    """Predict departure before the entrant's status SwitchIn callback."""
     r=j.arange(len(side));seat=j.clip(side,0,1);old=j.clip(outgoing,0,5)
     counter=before.status_counter[r,seat,old]
-    expected=j.where(before.status[r,seat,old]==TOXIC_STATUS,0,counter)
     from . import engine_natural_cure_callbacks as nc
     cure=j.zeros_like(side,bool)if data is None else nc.source_status(before.ability[r,seat,old],before.status[r,seat,old],counter,data)
-    return before._replace(status=before.status.at[r,seat,old].set(j.where(cure,0,before.status[r,seat,old])),status_counter=before.status_counter.at[r,seat,old].set(j.where(cure,0,expected)),substitute_hp=before.substitute_hp.at[r,seat,old].set(0))
+    return before._replace(status=before.status.at[r,seat,old].set(j.where(cure,0,before.status[r,seat,old])),status_counter=before.status_counter.at[r,seat,old].set(j.where(cure,0,counter)),substitute_hp=before.substitute_hp.at[r,seat,old].set(0))
 
 def cure_install(rec,data):
     from . import engine_natural_cure_callbacks as nc

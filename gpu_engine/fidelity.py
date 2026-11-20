@@ -33,13 +33,16 @@ STATUS=['','par','brn','psn','tox','slp','frz']
 SLEEP_CLAUSE_FORMAT='gen3customgame@@@sleepclausemod'
 FORMATS={SLEEP_CLAUSE_FORMAT:'gen3customgame@@@sleepclausemod; Sleep Clause Mod, no Freeze Clause',
     'gen3customgame':'gen3customgame; no Sleep/Freeze Clause'}
-TAPE_SCHEMA='pokezero.gpu_chance_tape.v4'
+# Tape v6 combines v4's entry coordinates with v5's infatuation coordinate.
+TAPE_SCHEMA='pokezero.gpu_chance_tape.v6'
 PHAZING_SALT=271828
 # The appended ChanceInputs.effect stream (design 2.1), derived here independently of
 # transition.effect_chance so a drift between the two shows as a divergence. Fidelity R
 # consumes [s][0..1] (Bonemerang's second hit); the residual roles arrive with M2.
 EFFECT_SALT=1732050
-EFFECT_BOUNDS=(16,16,4,2)
+EFFECT_BOUNDS=(16,16,4,2,2)
+INFATUATION_SALT=2236067
+SHED_SKIN_SALT=2449489
 # The first 50000..50199 panel is immutable historical evidence. Following
 # its authored adapter correction, use one disjoint fixed panel, not a replay.
 FIRST_GAME=50200
@@ -81,12 +84,35 @@ def reconstruct(pool,metadata,showdown,node,*,first_game=FIRST_GAME,games=200):
 
 def effect_draws(keys):
     """ChanceInputs.effect exactly as design 2.1 derives it from the step's split keys."""
-    return jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,EFFECT_SALT),(2,4),0,
-        j.array(EFFECT_BOUNDS,j.int32)))(keys)
+    old=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,EFFECT_SALT),(2,4),0,
+        j.array(EFFECT_BOUNDS[:4],j.int32)))(keys)
+    attract=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,INFATUATION_SALT),(2,1),0,2))(keys)
+    return j.concatenate((old,attract),axis=-1)
+
+
+def initialize_comparison_genders(state,metadata,showdown,node,root_ids):
+    """Fresh, addressed constructor values coupled to actual Showdown samples.
+
+    This is a prospective comparison cohort, never a reconstruction of genders
+    missing from an old recorded battle. Existing pool tensors/turn keys stay
+    unchanged. The original fixed-gender sets are checked again by the JS hook.
+    """
+    from .gender import initialize_genders
+    policy=json.loads(subprocess.check_output([node,str(ROOT/'gpu_engine/comparison_gender_policy.cjs'),str(showdown)],
+        input=json.dumps(metadata),text=True))
+    return initialize_genders(state,policy,metadata['vocabulary']['species'],
+        seed=719,domain=1129595218,root_ids=np.asarray(root_ids,dtype=np.uint32))
+
+
+def gender_initialization(state):
+    values=np.asarray(state.gender)
+    if values.shape!=(1,2,6) or not np.isin(values,[0,1,2]).all():
+        raise ValueError('comparison requires retained per-party gender')
+    return dict(genders=values[0].tolist(),allow_inert_gender=False)
 
 
 def chance_tape(state,game,index,saved_effect=None):
-    """Tape v4. A suspended turn replays its saved block, except fresh entry ties;
+    """Tape v6. A suspended turn replays its saved block, except fresh entry ties;
     `effect` comes from the
     engine's saved effect_draws (fidelity R), else (an engine without the leaf) from
     the caller's copy of the suspended turn's tape (saved_effect), else it is freshly derived."""
@@ -96,23 +122,35 @@ def chance_tape(state,game,index,saved_effect=None):
     sleep=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,1414213),(2,),0,60))(split)
     phazing=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,PHAZING_SALT),(2,),0,60))(split)
     effect=np.asarray(effect_draws(split))[0].tolist()
+    shed_skin=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,SHED_SKIN_SALT),(2,),0,100))(split)
     entry=jax.vmap(lambda key,count:jax.random.randint(jax.random.fold_in(
         key,j.uint32(982451653)+count.astype(j.uint32)),(2,),0,2))(state.keys,state.replacement_count)
     resuming=bool(np.asarray(state.pending_residual)[0])
     if resuming:
         draws=state.residual_draws;secondary=state.secondary_draws;sleep=state.sleep_talk_draws
         phazing=state.phazing_draws
+        if hasattr(state,'shed_skin_draws'):shed_skin=state.shed_skin_draws
         if hasattr(state,'effect_draws'):effect=np.asarray(state.effect_draws)[0].tolist()
         elif saved_effect is not None:effect=[list(row) for row in saved_effect]
     return dict(schema=TAPE_SCHEMA,nonce=f'{game}:{index}',draws=np.asarray(draws)[0].tolist(),
         secondary=np.asarray(secondary)[0].tolist(),sleep_talk=np.asarray(sleep)[0].tolist(),effect=effect,
-        phazing=np.asarray(phazing)[0].tolist(),entry_ties=np.asarray(entry)[0].tolist(),resuming=resuming)
+        phazing=np.asarray(phazing)[0].tolist(),entry_ties=np.asarray(entry)[0].tolist(),resuming=resuming,
+        shed_skin=np.asarray(shed_skin)[0].tolist())
 
 
 def initial_chance(state, *, allow_inert_gender):
-    """The entry coin uses the unsplit initial key and does not advance it."""
+    """Compose the unsplit initial tie with retained per-party constructor genders.
+
+    Older states with no retained gender keep the legacy initializer contract.
+    A supplied gender row must be complete and valid; it never uses inert draws.
+    """
     tie=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,314159),(),0,2))(state.keys)
-    return dict(allow_inert_gender=allow_inert_gender,initial_tie=int(np.asarray(tie)[0]))
+    initial=dict(allow_inert_gender=allow_inert_gender,initial_tie=int(np.asarray(tie)[0]))
+    if hasattr(state,'gender'):
+        values=np.asarray(state.gender)
+        if values.shape!=(1,2,6):raise ValueError('comparison requires retained per-party gender')
+        if not np.all(values==-1):initial.update(gender_initialization(state))
+    return initial
 
 
 def native_view(snapshot,original,vocab):
@@ -143,6 +181,9 @@ def compare(state,snapshot,original,vocab,*,initial=False):
         for slot,mon in enumerate(parties[side]):
             prefix=f'{side}:{slot}:'
             check(prefix+'hp',mon['hp'],int(state.hp[0,side,slot]))
+            if int(state.gender[0,side,slot])>=0:
+                check(prefix+'gender',{'':0,'N':0,'M':1,'F':2}[mon.get('gender','')],int(state.gender[0,side,slot]))
+            check(prefix+'attract','attract' in mon.get('volatiles',{}),bool(int(state.volatile[0,side,slot])&128))
             # Showdown serializes a KO as status="fnt"; the tensor keeps
             # major status separate from HP/faint. Compare major status only
             # while either representation is alive, retaining independent KO
@@ -254,6 +295,7 @@ def run(pool_path,expected_sha,showdown,node,out,format_id=SLEEP_CLAUSE_FORMAT):
     table=transition.tables_from_metadata(metadata);reference_actions.table=table
     base=transition.state_from_pool(pool,np.arange(2*FIRST_GAME,2*(FIRST_GAME+200)).reshape(200,2),seed=719)
     base=base._replace(keys=jax.vmap(lambda n:jax.random.fold_in(jax.random.PRNGKey(719),n))(j.arange(FIRST_GAME,FIRST_GAME+200)))
+    base=initialize_comparison_genders(base,metadata,showdown,node,np.arange(FIRST_GAME,FIRST_GAME+200))
     base=jax.block_until_ready(transition.initialize(base,table));advance=jax.jit(lambda s,a:transition.step(s,a,table))
     header=dict(schema='pokezero.gpu_fidelity_trace.v1',source_commit=source,source_sha256=before,pool_sha256=pool_sha,
         roster=roster,format=FORMATS[format_id],format_id=format_id,chance_tape_schema=TAPE_SCHEMA,ordinary_turn_cap=20,request_cap=200,
@@ -275,11 +317,10 @@ def run(pool_path,expected_sha,showdown,node,out,format_id=SLEEP_CLAUSE_FORMAT):
                 # launcher whose argv path still identifies this temp directory.
                 bridge.write_text('await import('+json.dumps((ROOT/'gpu_engine/fidelity_bridge.mjs').as_uri())+');\n')
                 control=folder/'chance.json';audit=folder/'chance-audit.jsonl';initializing=folder/'initializing.json'
-                # No gender-dependent selected move/ability may use an inert
-                # gender draw. This check uses the original unfiltered teams.
-                gender_sensitive=any(metadata['vocabulary']['moves'][int(x)]=='attract' for x in np.asarray(state.moves).flat)
-                gender_sensitive |= any(metadata['vocabulary']['abilities'][int(x)]=='cutecharm' for x in np.asarray(state.ability).flat)
-                initializing.write_text(json.dumps(initial_chance(state,allow_inert_gender=not gender_sensitive)))
+                # Retain the addressed constructor genders and the unsplit initial entry coin.
+                initial=initial_chance(state,allow_inert_gender=False)
+                initial.update(gender_initialization(state))
+                initializing.write_text(json.dumps(initial))
                 env=LocalShowdownEnv(LocalShowdownConfig(showdown_root=showdown,node_binary=node,bridge_path=bridge,
                     feature_masks=ObservationFeatureMasks(transition_token_budget=0)))
                 try:

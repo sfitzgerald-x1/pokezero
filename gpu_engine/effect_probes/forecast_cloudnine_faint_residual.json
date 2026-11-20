@@ -1,0 +1,176 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "forecast_cloudnine_faint_residual",
+ "note": "Forecast (data/abilities.ts forecast at f76228a1; gen3 flags {}): onStart and onWeatherChange take the forme of effectiveWeather() (rain Water, sun Fire, else Normal) for a non-transformed Castform; WeatherChange fires at setWeather/clearWeather (sim/field.ts) and at a Cloud Nine / Air Lock End (data/abilities.ts; gen4 removes their arrival event). Kyogre leads (Drizzle) against a level-29 Golduck (100 HP); Castform comes in under Cloud Nine (Normal), badly poisons Golduck (6) and Night Shades it (90): the next toxic tick (12) KOs it at the residual, and its End re-forms Castform (Rainy). The replacement Lanturn's Thunderbolt is 2x.",
+ "teams": [
+  [
+   {
+    "species": "Kyogre",
+    "moves": [
+     "splash",
+     "thunder",
+     "surf",
+     "icebeam"
+    ],
+    "ability": "Drizzle",
+    "item": ""
+   },
+   {
+    "species": "Castform",
+    "moves": [
+     "toxic",
+     "nightshade",
+     "splash",
+     "return"
+    ],
+    "ability": "Forecast",
+    "item": ""
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ],
+  [
+   {
+    "species": "Golduck",
+    "moves": [
+     "splash",
+     "hydropump",
+     "surf",
+     "icebeam"
+    ],
+    "ability": "Cloud Nine",
+    "item": "",
+    "level": 29
+   },
+   {
+    "species": "Lanturn",
+    "moves": [
+     "splash",
+     "thunderbolt",
+     "raindance",
+     "surf"
+    ],
+    "ability": "Illuminate",
+    "item": "",
+    "level": 60
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Blissey",
+    "moves": [
+     "splash",
+     "softboiled",
+     "protect",
+     "seismictoss"
+    ],
+    "ability": "Serene Grace",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "switch 2",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "",
+   "switch 2"
+  ],
+  [
+   "move 3",
+   "move 2"
+  ]
+ ],
+ "expect": {
+  "exact": true
+ },
+ "showdown_lines": {
+  "2": [
+   "|faint|p2a: Golduck",
+   "|-formechange|p1a: Castform|Castform-Rainy|[msg]|[from] ability: Forecast"
+  ]
+ }
+}

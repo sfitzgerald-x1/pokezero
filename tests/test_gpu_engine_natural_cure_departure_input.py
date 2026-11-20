@@ -50,7 +50,7 @@ class NaturalCureTests(unittest.TestCase):
   witness._source();self.assertEqual((self.ability,len(self.metadata['vocabulary']['abilities'])),(38,81));self.assertEqual(int(ex.Site.NATURAL_CURE),45)
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
   # entry.py, baton.py, state.py and items.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
-  for name in ('mechanics.py',):self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]))
+  for name in ('mechanics.py',):self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show',('233bf444:gpu_engine/' if name=='mechanics.py' else 'b8092a85:gpu_engine/')+name]))
   import builtins
   module=symtable.symtable(Path('gpu_engine/transition.py').read_text(),'transition.py','exec');step=next(c for c in module.get_children()if c.get_name()=='step_with_chance');self.assertEqual([s.get_name()for s in step.get_symbols()if s.is_referenced()and s.is_global()and s.get_name()not in set(module.get_identifiers())|set(dir(builtins))],[])
  def test_ordinary_late_owned_all_statuses_and_receipt_poison(self):

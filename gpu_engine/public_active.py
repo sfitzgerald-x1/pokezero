@@ -15,6 +15,7 @@ from typing import Mapping, NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -350,7 +351,7 @@ def project(state,tables,mons,*,expected_vocabulary):
     ok &= jnp.all(state.encounter==current,axis=-1)&jnp.all(expected_vocabulary==tables.vocabulary_binding)
     present=current>0
     numbers=jnp.concatenate((jnp.minimum(1.,state.stall[...,None]/8.),
-        jnp.minimum(1.,state.elapsed/jnp.asarray([5.,6.,5.])),state.meanlook[...,None].astype(jnp.float32),
+        jnp.stack(tuple(en.normalized(state.elapsed[..., i], d) for i, d in enumerate((5, 6, 5))), axis=-1),state.meanlook[...,None].astype(jnp.float32),
         state.choice_locked[...,None].astype(jnp.float32),state.item_swapped[...,None].astype(jnp.float32)),axis=-1)
     numeric=jnp.zeros((batch,2,132),jnp.float32).at[...,jnp.asarray(NUMERIC_COLUMNS)].set(jnp.where(present[...,None],numbers,0.))
     if tables.native_truant is not None:

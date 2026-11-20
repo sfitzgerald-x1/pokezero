@@ -43,9 +43,9 @@ class NativeGenderFutureTests(unittest.TestCase):
                 self.assertEqual(after.reverse_instructions(branch).to_string(),before)
             self.assertEqual(roundtrip.to_string(),before)
 
-    def test_positive_attraction_is_whole_slot_unknown_not_filtered(self):
+    def test_positive_attraction_is_retained_in_every_positive_successor(self):
         import poke_engine as engine
-        from gpu_engine.fidelity_panel import require_future,WholeSlotUnknown
+        from gpu_engine.fidelity_panel import require_future
         for actor in range(2):
             data,meta=self.live();meta=deepcopy(meta)
             meta['vocabulary']['moves'].append('attract')
@@ -53,17 +53,20 @@ class NativeGenderFutureTests(unittest.TestCase):
             native=f.native_input_from_jax(data,None,meta,module=engine)
             self.assertIsInstance(native,f.NativeInput,native)
             moves=['splash','splash'];moves[actor]='attract'
-            positive_unknown=0;mass=0
+            positive=0;mass=0
             for branch in engine.generate_instructions(native.state,*moves):
                 probability=float(branch.percentage)/100;mass+=probability
                 if probability<=0:continue
                 result=f.canonical_native_future(native.state.apply_instructions(branch),native.certificate)
-                if isinstance(result,f.Refused):
-                    self.assertIn('NATIVE_UNREPRESENTED_VOLATILE',{g.code for g in result.gaps})
-                    with self.assertRaises(WholeSlotUnknown):require_future(result)
-                    positive_unknown+=1
+                self.assertIsInstance(result,f.CanonicalFuture,result)
+                self.assertIs(require_future(result),result)
+                target=f.SIDE_NAMES[1-actor]+'.volatile_statuses['
+                source=f.SIDE_NAMES[actor]+'.volatile_statuses['
+                self.assertIn('attract',[v for k,v in result.key if k.startswith(target)])
+                self.assertNotIn('attract',[v for k,v in result.key if k.startswith(source)])
+                positive+=1
             self.assertAlmostEqual(mass,1,places=6)
-            self.assertGreater(positive_unknown,0)
+            self.assertGreater(positive,0)
 
 
 if __name__=='__main__':unittest.main()

@@ -203,9 +203,9 @@ dict keys and leaves two members None). This module turns prepared roots into De
   - A Pokemon benched after a type change: the device carry keeps the changed types (nothing clears shown_types before
     the next install); B2 clears its overlay at the next arrival and the worlds' engine types are base types, so the
     fill writes the species' types, as B2's encoding shows.
-  - Values the device path never writes but from_b2 copies from B2 (choice_locked, wrap_trap_turns, item_swapped,
-    B2-only volatile bits, the items-removed credits): kept, as B2's encoding shows them. In search the three
-    mon_features are not reset on switch-in (the install hook's reset list omits them); the volatile bits are.
+  - Values copied from B2 at the root include choice_locked, wrap_trap_turns, item_swapped, B2-only volatile bits and
+    items-removed credits. In search, hooks.install resets the three mon_features and volatile bits on arrival;
+    baton_copy can then restore a carried partial-trap clock. Cumulative items-removed credits are not arrival-reset.
 - build: W worlds become K = W/2 blocks of two, one Request per block, packed into ONE frame (row = the root's rows[b],
   root-major), since the worlds are pre-built (no per-block recipe or re-materialization). Plans are synthesized:
   selected=True (the quarter selection is bypassed), Start(world index, the constructor's world seed, no fixtures,
@@ -312,9 +312,11 @@ def metadata_sha256(metadata):
 def encoder_identity(catalog):
     """The encoder catalog's identity: checkpoint sha256, category vocabulary sha256 and size, feature masks, source hash."""
     from pokezero.live_protocol_actor import MASK_NAMES,_vocab_sha
-    return (('checkpoint_sha256',catalog.checkpoint_sha256),('category_vocab_sha256',_vocab_sha(catalog.vocabulary)),
+    identity=(('checkpoint_sha256',catalog.checkpoint_sha256),('category_vocab_sha256',_vocab_sha(catalog.vocabulary)),
         ('category_vocab_size',int(catalog.vocabulary.size)),('feature_masks',tuple((k,getattr(catalog.masks,k))for k in MASK_NAMES)),
         ('source_hash',catalog.source.source_hash))
+    # V2 self_moves joins the identity only when on: off bindings are unchanged; on, a pricer and constructor disagreeing fail closed.
+    return identity+((('self_moves',True),)if getattr(catalog.masks,'self_moves',False)else())
 
 
 def binding(source,metadata,catalog):
@@ -878,11 +880,11 @@ def order_peer(state,public,owner,facts,tables):
 
 def fill_owner_spikes(public,owner,facts):
     """The public carry with hazards[owner, shown] (the peer's OPP_HAZARD_CREDIT) filled where from_b2 left it zero: the
-    owner's Spikes hits on the lines, each (_percent(hp before) - _percent(hp after)) / 100 in float32 (the peer sees the
+    owner's Spikes hits on the lines, each (_percent(hp before) - _percent(hp after)) / 100 (the peer sees the
     owner's HP as Showdown's public percent), accumulated by the device's own compensated sum
-    (engine_device_damage_history._add), as engine_device_public_port.spikes would have. Unchanged when the hits are not
+    with quotient residuals, as engine_device_public_port.spikes would have. Unchanged when the hits are not
     all on the lines (facts.owner_spikes None), when there is none, or when the half is already non-zero."""
-    from .engine_device_damage_history import _add
+    from .encoder_numeric import add_pair, ratio
     b=_trackers(public);port=public.public_port
     if port is None or facts is None or not facts.owner_spikes:return public
     _leaf(port.hazards,(b,2,2,2),np.float32,'public_port.hazards')
@@ -891,7 +893,7 @@ def fill_owner_spikes(public,owner,facts):
     pair=jnp.zeros(2,jnp.float32)
     for before,after,maximum in facts.owner_spikes:
         drop=max(0,int(public_trackers._percent(before,maximum))-int(public_trackers._percent(after,maximum)))
-        pair=_add(pair,jnp.asarray(drop,jnp.float32)/100)
+        pair=add_pair(pair,ratio(jnp.asarray(drop,jnp.int32),100,limit=100,pair=True))
     hazards=hazards.copy();hazards[:,owner,0]=np.asarray(pair)
     if not np.any(hazards[:,owner,0]):return public
     return public._replace(public_port=port._replace(hazards=jnp.asarray(hazards)))
@@ -1273,9 +1275,11 @@ def _peer_fold(constructor,request,owner,catalog,functions):
     lines=peer_wire_lines(request['lines'],owner);key=(id(constructor),request.get('battle_id'),owner,request.get('stream_id'))
     held=_PEER_FOLDS.pop(key,None)
     if held is None or held[0]is not constructor or held[2]!=lines[:len(held[2])]:
-        adapter=JaxRecordedAdapter(catalog,owner_side=owner,compiled_functions=functions);adapter.reset(stream_id=1,battle_id='peer-wire');fed=()
-    else:_,adapter,fed=held
-    if len(lines)>len(fed):adapter.feed(lines[len(fed):])
+        adapter=JaxRecordedAdapter(catalog,owner_side=owner,compiled_functions=functions);fed=();fresh=True
+    else:_,adapter,fed=held;fresh=False
+    with adapter.checked_catalog():
+        if fresh:adapter.reset(stream_id=1,battle_id='peer-wire')
+        if len(lines)>len(fed):adapter.feed(lines[len(fed):])
     _PEER_FOLDS[key]=(constructor,adapter,lines)
     while len(_PEER_FOLDS)>PEER_FOLD_CAP:_PEER_FOLDS.pop(next(iter(_PEER_FOLDS)))
     return adapter

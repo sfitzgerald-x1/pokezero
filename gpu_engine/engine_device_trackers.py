@@ -8,6 +8,7 @@ hooks and appended knowledge fields; this module does not establish parity or th
 from typing import NamedTuple
 import jax
 import jax.numpy as j
+from . import encoder_numeric as en
 from . import lane_index as _li
 
 SCHEMA='pokezero.engine_device_public_trackers.v3'
@@ -133,6 +134,7 @@ class Trackers(NamedTuple):
     # ability (both copies), but the observation's traced column is B2's `traced`, which only a Trace line writes, so
     # readout hides a Transform copy there (it also kept-ability of a benched or fainted ex-transformer). Cleared at arrival.
     transform_borrowed:object=None
+    type_changed:object=None     # [B,2] sticky public type/forme event history; no policy/encoder reader
 
 
 class Tendency(NamedTuple):
@@ -185,7 +187,7 @@ def _observe(t,state,side,physical,rows_active,*,identity):
     # Showdown clears them at the faint (sim/pokemon.ts:1509-1518, faintMessages' clearVolatile), and so does the engine
     # (transition._clear_fainted_boosts); B2 keeps them (gpu_engine/public_mon_state.py:164-173: faint writes no boosts;
     # the arrival resets them, :111-112), and so does the Python encoder the champion was trained on
-    # (src/pokezero/showdown.py:2607-2617: cleared only at switch-in). The principle: observation inputs follow the
+    # (src/pokezero/showdown.py:2611-2621: cleared only at switch-in). The principle: observation inputs follow the
     # convention the champion was trained on (B2 + the Python encoder) until V2 retrains; mechanics (legality, dynamics,
     # engine state) follow Showdown. Nobody should "fix" this toward Showdown without retraining the network; V2's flip
     # list records it. So the carry keeps its stages for the side's still-active mon at hp 0, unless the read precedes the
@@ -244,7 +246,7 @@ def initialize(state):
     # public_order starts as identity: the lead's install below takes next_slot0.
     t=Trackers(j.full((b,2,6),-1,j.int32),j.full((b,2),-1,j.int32),j.full((b,2),-1,j.int32),j.zeros((b,2),j.int32),order,
         z,z,j.full_like(z,-1),z,z,j.zeros((b,2,6,7),j.int32),no,no,state.turn,state.weather,state.spikes,j.zeros(b,j.int32),
-        public_order=order)
+        public_order=order,type_changed=j.zeros((b,2),bool))
     r=j.arange(b);yes=j.ones(b,bool)
     for side in range(2):
         physical=j.clip(state.active[:,side],0,5)
@@ -357,7 +359,8 @@ def readout(trackers,observer_sides):
         fields={**({}if fields is None else fields),
             'self_sleep_clause':_li.take(h.holder,r,owner)>=0,'opp_sleep_clause':_li.take(h.holder,r,foe)>=0,
             'sleep_clause_blocks_self':j.any(_li.take(h.victims,r,foe),axis=-1),'sleep_clause_blocks_opp':j.any(_li.take(h.victims,r,owner),axis=-1),
-            'self_hazard_credit':_li.take(hazard,r,owner,1),'opp_hazard_credit':_li.take(hazard,r,foe,0)}
+            'self_hazard_credit':_li.take(hazard,r,owner,1),'opp_hazard_credit':_li.take(hazard,r,foe,0),
+            'self_hazard_credit_pair':_li.take(h.hazards,r,owner,1),'opp_hazard_credit_pair':_li.take(h.hazards,r,foe,0)}
         stats={**({}if stats is None else stats),'blocked_on_our_attack':_li.take(h.blocked,r,owner),'pursuit_intercept_predict':_li.take(h.pursuit,r,foe)}
         reveals=_li.take(h.weather,r,foe).reshape(b,6)
         stats.update({'weather_reveal_'+str(i):reveals[:,i]for i in range(6)})
@@ -374,7 +377,7 @@ def readout(trackers,observer_sides):
             own_transformed=own_cell(trackers.transformed),own_transform_species=own_cell(trackers.transform_species),
             own_shown_types=None if trackers.shown_types is None else own_cell(trackers.shown_types))
     return PublicView(_li.take(trackers.own_order,r,owner),take('species'),take('level'),take('gender'),
-        take('hp_percent').astype(j.float32)/100.0,take('status'),active,present,take('fainted'),
+        en.normalized(take('hp_percent'), 100),take('status'),active,present,take('fainted'),
         j.zeros((b,6,2),j.int32) if trackers.shown_types is None else take('shown_types'),take('boosts'),
         z if trackers.original_ability is None else take('original_ability'),
         z if trackers.shown_item is None else take('shown_item'),

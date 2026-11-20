@@ -29,7 +29,7 @@ class BatonParalysisGuards(unittest.TestCase):
         before=cb.snapshot(s)
         after=cb.departed_private(cb.copied_private(before,side,old,old+3),side,old)
         np.testing.assert_array_equal(after.status,before.status)
-        self.assertEqual(after.status_counter[r,side,old].tolist(),[0,0,1,0,0,0,0,0])
+        np.testing.assert_array_equal(after.status_counter[r,side,old],counter)
         self.assertEqual(after.status[r,side,old+3].tolist(),[0]*b)
         mutated=s._replace(status=s.status.at[1,1,0].set(0))
         self.assertEqual(cb.equal(before,cb.snapshot(mutated)).tolist(),[True,False,True,True,True,True,True,True])
@@ -67,10 +67,10 @@ console.log(JSON.stringify({clear:H(clear),copy:H(copy),par:H(par.onBeforeMove),
         # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components.
         # entry.py, baton.py and state.py are byte-certified against the reviewed SOURCE_PINS by transition_observer_wiring.
         for n in ('mechanics.py','engine_retained_encoder_driver.py','engine_kernel_frame_risk.py','engine_full_v4_event_device.py','engine_lifecycle_event_device.py'):
-            self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+n]),n)
+            self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show',('233bf444:gpu_engine/' if n=='mechanics.py' else 'b8092a85:gpu_engine/')+n]),n)
         from gpu_engine import engine_source_frame_witness as witness
         witness._source()
-        self.assertEqual(len(witness.SOURCE_PINS),90)   # 88, residual_order.py since §6, and transform.py since Transform
+        self.assertEqual(len(witness.SOURCE_PINS),92)   # 88, residual_order.py since §6, plus infatuation.py, transform.py and forecast.py
         # Rollback/claimed snapshot consumers remain exactly their original AST. suspension_shape gained fidelity R's
         # saved effect block (reviewed; the file is byte-certified against SOURCE_PINS above).
         old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_baton_pass_callbacks.py'],text=True));new=ast.parse(Path(cb.__file__).read_text())

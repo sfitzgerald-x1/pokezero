@@ -89,6 +89,14 @@ class V2Config:
         ``None`` pads only in the compiled modes.
     emulate_precision_casts: have Inductor round fused bf16 intermediates as
         eager autocast does. With it on, compiled CPU updates are bitwise eager.
+    distributed_rows: use DistributedTrainer's canonical rank-local rows and
+        globally normalized loss, never the legacy replicated-store DDP math.
+    role_routing: ``indexed`` retains the original expert routing; ``sliced``
+        opts into fixed disjoint slices for the validated 29-token role layout.
+    native_embedding_backward: keep the category embedding's native dense
+        first-order backward opaque to compiler decomposition (explicit opt-in).
+    fallback_random: request compiler native random/dropout behavior; this
+        alone is not a guarantee of eager RNG/statistic parity.
     """
     order: str = 'ordered'
     order_seed: int | None = None
@@ -97,15 +105,27 @@ class V2Config:
     check_interval: int = 64
     pad_partial: bool | None = None
     emulate_precision_casts: bool = True
+    distributed_rows: bool = False
+    role_routing: str = 'indexed'
+    native_embedding_backward: bool = False
+    fallback_random: bool = False
 
     def __post_init__(self):
         if (self.order not in ORDERS or self.mode not in MODES or self.optimizer not in OPTIMIZERS
                 or type(self.check_interval) is not int or self.check_interval <= 0
                 or self.order_seed is not None and (type(self.order_seed) is not int or not 0 <= self.order_seed < 2**63)
-                or self.pad_partial not in (None, True, False) or type(self.emulate_precision_casts) is not bool):
+                or self.pad_partial not in (None, True, False) or type(self.emulate_precision_casts) is not bool
+                or type(self.distributed_rows) is not bool or self.role_routing not in ('indexed', 'sliced')
+                or type(self.native_embedding_backward) is not bool or type(self.fallback_random) is not bool):
             raise ValueError('explicit V2 order/mode/optimizer/check interval required')
         if self.mode == 'reference' and self.pad_partial:
             raise ValueError('reference mode runs the original unpadded batch')
+        if self.mode == 'reference' and self.role_routing != 'indexed':
+            raise ValueError('reference mode requires original indexed role routing')
+        if self.mode == 'reference' and self.native_embedding_backward:
+            raise ValueError('reference mode requires original embedding backward')
+        if self.fallback_random and self.mode not in ('compiled', 'cudagraphs'):
+            raise ValueError('random fallback requires a compiled execution mode')
 
     def pads(self, mode):
         return self.pad_partial if self.pad_partial is not None else mode in ('compiled', 'cudagraphs')
@@ -387,19 +407,46 @@ def expert_indices(model, device):
     return tuple((roles == role).nonzero().flatten() for role in range(3))
 
 
-def forward_unchecked(model, tensors, *, include_auxiliary, experts):
+def _validate_sliced_roles(model):
+    """Validate every layer once, outside the update/compiled callable."""
+    expected = (2,) + (0,) * 12 + (1,) * 9 + (2,) * 7
+    for block in model.encoder.layers:
+        roles = tuple(block.role_experts.roles.detach().cpu().tolist())
+        if roles != expected or len(block.role_experts.experts) != 3:
+            raise ValueError('sliced routing requires the original 29-token expert role mapping in every layer')
+
+
+def _sliced_expert_output(block, hidden):
+    """Fixed disjoint routes, preserving expert invocation order and layouts."""
+    if hidden.ndim != 3 or hidden.shape[1] != 29:
+        raise ValueError('sliced routing requires 29 tokens')
+    torch = _torch()
+    experts = block.role_experts.experts
+    role0 = experts[0](hidden[:, 1:13].contiguous()).to(hidden.dtype)
+    role1 = experts[1](hidden[:, 13:22].contiguous()).to(hidden.dtype)
+    role2 = experts[2](torch.cat((hidden[:, :1], hidden[:, 22:29]), dim=1)).to(hidden.dtype)
+    return torch.cat((role2[:, :1], role0, role1, role2[:, 1:]), dim=1)
+
+
+def forward_unchecked(model, tensors, *, include_auxiliary, experts, role_routing='indexed',
+                      native_embedding_backward=False):
     """``Model.forward`` without its input checks (``validate_store`` made them).
 
     Same modules in the same order, so it consumes dropout RNG identically. The
-    one change is in ``RoleExperts``: the per-call ``nonzero`` is replaced by
-    precomputed ``experts`` indices.
+    Default ``RoleExperts`` replaces per-call ``nonzero`` with precomputed
+    indices. Explicit sliced routing uses the validated fixed role layout.
     """
     torch = _torch()
     config = model.config
     categorical_ids = tensors['categorical_ids']; numeric_features = tensors['numeric_features']
     token_type_ids = tensors['token_type_ids']; attention_mask = tensors['attention_mask']
     mask = attention_mask[:, 0]
-    x = (model.category_embedding(categorical_ids[:, 0]).sum(-2)
+    if native_embedding_backward:
+        from .v2_native_embedding import lookup
+        category = lookup(model.category_embedding, categorical_ids[:, 0])
+    else:
+        category = model.category_embedding(categorical_ids[:, 0])
+    x = (category.sum(-2)
         + model.numeric_projection(numeric_features[:, 0])
         + model.token_type_embedding(token_type_ids[:, 0]) + model.history_position_embedding.weight[0])
     x = x.masked_fill(~mask[..., None], 0)
@@ -408,10 +455,13 @@ def forward_unchecked(model, tensors, *, include_auxiliary, experts):
         value = block.self_attn(normalized, normalized, normalized, key_padding_mask=~mask, need_weights=False)[0]
         x = x + block.dropout(value)
         hidden = block.norm2(x)
-        result = torch.zeros_like(hidden)
-        for indices, expert in zip(experts, block.role_experts.experts):
-            values = expert(hidden.index_select(1, indices)).to(result.dtype)
-            result = result.index_copy(1, indices, values)
+        if role_routing == 'sliced':
+            result = _sliced_expert_output(block, hidden)
+        else:
+            result = torch.zeros_like(hidden)
+            for indices, expert in zip(experts, block.role_experts.experts):
+                values = expert(hidden.index_select(1, indices)).to(result.dtype)
+                result = result.index_copy(1, indices, values)
         x = x + block.dropout(result)
         x = x.masked_fill(~mask[..., None], 0)
     encoded = model.final_norm(x).masked_fill(~mask[..., None], 0)
@@ -470,11 +520,15 @@ def static_v5_loss(output, tensors, model_config, config, *, variant_counts):
     zero = sum(value.reshape(-1)[:0].sum() for name in _OUTPUT_FIELDS
         if (value := getattr(output, name)) is not None)
     metrics = {}
+    global_denominators = tensors.get('_v2_global_denominators')
+    reduction_names = metric_names(model_config, config)[:-1:2]
 
     def average(name, values, mask, row_weights):
         count = mask.sum()
         w = torch.where(mask, row_weights, 0)
         denominator = torch.where(count > 0, w.sum(), 1)
+        if global_denominators is not None:
+            denominator = global_denominators[reduction_names.index(name)]
         result = (torch.where(mask, values, 0) * w).sum() / denominator
         metrics[name] = result.detach(); metrics[name + '_count'] = count
         return result
@@ -497,6 +551,8 @@ def static_v5_loss(output, tensors, model_config, config, *, variant_counts):
         total_weight = torch.where(count > 0, w.sum(), 1)
         mean = (advantage * w).sum() / total_weight
         variance = (torch.where(ppo, (advantage - mean).square(), 0) * w).sum() / total_weight
+        if '_v2_global_advantage' in tensors:
+            count, mean, variance = tensors['_v2_global_advantage'].unbind()
         advantage = torch.where(ppo & (count > 1), (advantage - mean) / (variance.sqrt() + 1e-8), advantage)
     chosen = torch.where(ppo, log_probs.gather(1, actions[:, None]).squeeze(-1), 0.)
     log_ratio = chosen - behavior.log()
@@ -571,11 +627,13 @@ def _autocast(torch, device, precision):
     return torch.autocast(device_type=torch.device(device).type, dtype=torch.bfloat16)
 
 
-def _static_forward_loss(model, tensors, model_config, loss_config, precision, device, experts, variant_counts):
+def _static_forward_loss(model, tensors, model_config, loss_config, precision, device, experts, variant_counts,
+                         role_routing='indexed', native_embedding_backward=False):
     """Forward + loss under the original autocast scope; returns (loss, metric vector, logits_ok)."""
     torch = _torch()
     with _autocast(torch, device, precision):
-        output = forward_unchecked(model, tensors, include_auxiliary=model_config.treatment, experts=experts)
+        output = forward_unchecked(model, tensors, include_auxiliary=model_config.treatment, experts=experts,
+            role_routing=role_routing, native_embedding_backward=native_embedding_backward)
         loss, metrics, logits_ok = static_v5_loss(output, tensors, model_config, loss_config, variant_counts=variant_counts)
     vector = torch.stack([metrics[name].float() for name in metric_names(model_config, loss_config)])
     return loss, vector, logits_ok
@@ -605,6 +663,7 @@ class Runtime:
     order: dict | None = None
     window: v5.DeclaredGameWindow | None = None
     failed: str | None = None
+    self_moves: bool = False
 
 
 def _distributed(process_group):
@@ -626,22 +685,32 @@ def build_optimizer(parameters, train_config, kind):
     return torch.optim.AdamW(parameters, foreach=False, fused=None, **options)
 
 
-def create(model_config, loss_config, train_config, v2_config=None, *, enable_v5=False, device=None, process_group=None):
+def create(model_config, loss_config, train_config, v2_config=None, *, enable_v5=False, device=None, process_group=None,
+           self_moves=False):
     """Scratch runtime. Model parameters and the RNG state come from ``v5_training.create``.
 
     ``device`` overrides ``train_config.device`` for placement only (for example,
     one CUDA device per DDP rank). Rank ``r > 0`` derives its own dropout stream
     from (seed, r). All ranks start from the same parameters.
     """
+    runtime = _create_runtime(model_config, loss_config, train_config, v2_config, enable_v5=enable_v5,
+        device=device, process_group=process_group, self_moves=self_moves)
+    _broadcast_parameters(runtime)
+    return runtime
+
+
+def _create_runtime(model_config, loss_config, train_config, v2_config, *, enable_v5, device, process_group, self_moves):
     if enable_v5 is not True:
         raise ValueError('explicit v5 trainer enablement required')
+    if type(self_moves) is not bool:
+        raise ValueError('explicit bool self_moves required')
     v2_config = V2Config() if v2_config is None else v2_config
     if type(v2_config) is not V2Config:
         raise ValueError('explicit V2 configuration required')
     torch = _torch()
     device = train_config.device if device is None else device
     placed = replace(train_config, device=device)
-    base = v5.create(model_config, loss_config, placed, enable_v5=True)
+    base = v5.create(model_config, loss_config, placed, enable_v5=True, self_moves=self_moves)
     world_size, rank = _distributed(process_group)
     rng = base.rng
     if rank:
@@ -650,13 +719,16 @@ def create(model_config, loss_config, train_config, v2_config=None, *, enable_v5
             rng = v5._rng_state(torch, device.startswith('cuda'))
     optimizer = build_optimizer(base.model.parameters(), train_config, v2_config.optimizer)
     runtime = Runtime(model_config, loss_config, train_config, v2_config, base.model, optimizer, rng,
-        contract.contract_descriptor(), device, world_size, rank, process_group)
-    if world_size > 1:
-        import torch.distributed as dist
-        with torch.no_grad():
-            for parameter in runtime.model.parameters():
-                dist.broadcast(parameter.data, 0, group=process_group)
+        contract.contract_descriptor(), device, world_size, rank, process_group, self_moves=self_moves)
     return runtime
+
+
+def _broadcast_parameters(runtime):
+    if runtime.world_size > 1:
+        import torch.distributed as dist
+        with _torch().no_grad():
+            for parameter in runtime.model.parameters():
+                dist.broadcast(parameter.data, 0, group=runtime.process_group)
 
 
 def learning_rate(train_config, window, epoch):
@@ -676,6 +748,8 @@ class Trainer:
     def __init__(self, runtime):
         if type(runtime) is not Runtime:
             raise ValueError('V2 runtime required')
+        if runtime.v2_config.distributed_rows and type(self) is Trainer:
+            raise ValueError('distributed row checkpoints require DistributedTrainer')
         torch = _torch()
         self.runtime = runtime
         self.requested_mode = runtime.v2_config.mode
@@ -683,6 +757,11 @@ class Trainer:
         self.fallbacks = []
         self._compiled = None; self._warm = False
         self._experts = expert_indices(runtime.model, runtime.device)
+        if runtime.v2_config.role_routing == 'sliced':
+            _validate_sliced_roles(runtime.model)
+        if runtime.v2_config.native_embedding_backward:
+            from .v2_native_embedding import validate
+            validate(runtime.model.category_embedding)
         self._variant_counts = _variant_counts(runtime.model_config, runtime.device)
         self._names = metric_names(runtime.model_config, runtime.loss_config)
         self._parameters = [p for p in runtime.model.parameters()]
@@ -698,6 +777,8 @@ class Trainer:
         if mode in ('compiled', 'cudagraphs'):
             # 'reduce-overhead' is exactly triton.cudagraphs; options and mode are exclusive.
             options = {'emulate_precision_casts': self.runtime.v2_config.emulate_precision_casts}
+            if self.runtime.v2_config.fallback_random:
+                options['fallback_random'] = True
             if mode == 'cudagraphs':
                 options['triton.cudagraphs'] = True
             try:
@@ -713,7 +794,10 @@ class Trainer:
 
     def mode_report(self):
         return dict(requested=self.requested_mode, active=self.mode, fallbacks=list(self.fallbacks),
-            optimizer=self.runtime.v2_config.optimizer, pad_partial=self.runtime.v2_config.pads(self.mode))
+            optimizer=self.runtime.v2_config.optimizer, pad_partial=self.runtime.v2_config.pads(self.mode),
+            role_routing=self.runtime.v2_config.role_routing,
+            native_embedding_backward=self.runtime.v2_config.native_embedding_backward,
+            fallback_random=self.runtime.v2_config.fallback_random)
 
     def _call(self, arguments):
         torch = _torch()
@@ -731,7 +815,7 @@ class Trainer:
         """
         rt = self.runtime; torch = _torch()
         arguments = (rt.model, batch, rt.model_config, rt.loss_config, rt.train_config.precision, rt.device,
-            self._experts, self._variant_counts)
+            self._experts, self._variant_counts, rt.v2_config.role_routing, rt.v2_config.native_embedding_backward)
         while self._compiled is not None and not self._warm:
             rng = v5._rng_state(torch, rt.device.startswith('cuda'))
             try:
@@ -748,6 +832,12 @@ class Trainer:
         return loss, vector, logits_ok
 
     # -- data ---------------------------------------------------------------
+    def _batch_order(self, store):
+        rt = self.runtime
+        seed = rt.train_config.seed if rt.v2_config.order_seed is None else rt.v2_config.order_seed
+        return BatchOrder(store.rows, store.segments, rt.train_config.batch_size,
+            order=rt.v2_config.order, seed=seed, world_size=rt.world_size)
+
     def _bind(self, store, window):
         rt = self.runtime; config = rt.train_config
         if type(store) is not RowStore or not _same_device(store.device, rt.device):
@@ -757,9 +847,7 @@ class Trainer:
             raise ValueError('explicit immutable declared-game learning-rate window required')
         if not scheduled and window is not None:
             raise ValueError('constant learning rate does not accept a scheduled window')
-        seed = config.seed if rt.v2_config.order_seed is None else rt.v2_config.order_seed
-        order = BatchOrder(store.rows, store.segments, config.batch_size, order=rt.v2_config.order,
-            seed=seed, world_size=rt.world_size)
+        order = self._batch_order(store)
         description = dict(order.describe(), store=_sha(store.fingerprint()))
         if rt.cursor is not None and not rt.cursor['complete']:
             if description != rt.order or window != rt.window:
@@ -971,7 +1059,8 @@ def _load_optimizer_state(optimizer, saved):
 
 def _v5_metadata(runtime):
     shim = v5.Runtime(runtime.model_config, runtime.loss_config, runtime.train_config, runtime.model,
-        runtime.optimizer, runtime.rng, runtime.source_contract, steps=runtime.steps, rows=runtime.rows)
+        runtime.optimizer, runtime.rng, runtime.source_contract, steps=runtime.steps, rows=runtime.rows,
+        self_moves=runtime.self_moves)
     return v5._metadata(shim)
 
 
@@ -987,6 +1076,10 @@ def _v2_digest(section):
     return _sha({key: value for key, value in section.items() if key != 'rng_by_rank'})
 
 
+class CheckpointWriteError(RuntimeError):
+    """The rank-zero checkpoint writer reported a common terminal failure."""
+
+
 def save_checkpoint(path, runtime):
     """Write a v5-format checkpoint with a ``v2`` resume section; never overwrite.
 
@@ -996,46 +1089,105 @@ def save_checkpoint(path, runtime):
     """
     if type(runtime) is not Runtime:
         raise ValueError('V2 runtime required')
+    if type(runtime.self_moves) is not bool:
+        raise ValueError('explicit bool runtime self_moves required')
     if runtime.failed:
         raise RuntimeError('refusing to checkpoint a runtime that failed a finiteness check')
-    torch = _torch()
     rng_by_rank = [runtime.rng]
     if runtime.world_size > 1:
         import torch.distributed as dist
         rng_by_rank = [None] * runtime.world_size
         dist.all_gather_object(rng_by_rank, runtime.rng, group=runtime.process_group)
-    path = Path(path); receipt = None
+    path = Path(path)
+    if runtime.world_size == 1:
+        return _write_checkpoint(path, runtime, rng_by_rank)
+    receipt = None
+    error = None
     if runtime.rank == 0:
-        if path.exists():
-            raise FileExistsError(path)
-        metadata = _v5_metadata(runtime)
-        section = _v2_section(runtime, rng_by_rank)
-        payload = dict(metadata=metadata, metadata_sha256=_sha(metadata),
-            state_dict={name: value.detach().cpu().clone() for name, value in runtime.model.state_dict().items()},
-            optimizer_state=_canonical_optimizer_state(runtime.optimizer), rng=rng_by_rank[0],
-            v2=section, v2_sha256=_v2_digest(section))
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.' + path.name + '.', suffix='.tmp', delete=False) as stream:
-            temporary = Path(stream.name); torch.save(payload, stream); stream.flush(); os.fsync(stream.fileno())
-        os.link(temporary, path); temporary.unlink()
-        receipt = dict(path=str(path), sha256=v5_data._file_sha(path), steps=runtime.steps, rows=runtime.rows,
-            schema=v5.CHECKPOINT_SCHEMA, v2_schema=V2_SCHEMA)
-    if runtime.world_size > 1:
-        import torch.distributed as dist
-        dist.barrier(group=runtime.process_group)
+        try:
+            receipt = _write_checkpoint(path, runtime, rng_by_rank)
+        except Exception as exc:
+            error = exc
+    outcome = [None if error is None else f'{type(error).__name__}: {error}']
+    dist.broadcast_object_list(outcome, src=0, group=runtime.process_group)
+    if outcome[0] is not None:
+        message = f'rank 0 checkpoint write failed: {outcome[0]}'
+        raise CheckpointWriteError(message) from error
+    dist.barrier(group=runtime.process_group)
+    return receipt
+
+
+def _write_checkpoint(path, runtime, rng_by_rank):
+    if path.exists():
+        raise FileExistsError(path)
+    torch = _torch()
+    metadata = _v5_metadata(runtime)
+    section = _v2_section(runtime, rng_by_rank)
+    payload = dict(metadata=metadata, metadata_sha256=_sha(metadata),
+        state_dict={name: value.detach().cpu().clone() for name, value in runtime.model.state_dict().items()},
+        optimizer_state=_canonical_optimizer_state(runtime.optimizer), rng=rng_by_rank[0],
+        v2=section, v2_sha256=_v2_digest(section))
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.' + path.name + '.', suffix='.tmp', delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            torch.save(payload, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.link(temporary, path)
+        finally:
+            temporary.unlink()
+    receipt = dict(path=str(path), sha256=v5_data._file_sha(path), steps=runtime.steps, rows=runtime.rows,
+        schema=v5.CHECKPOINT_SCHEMA, v2_schema=V2_SCHEMA)
+    from .checkpoint_self_moves import _writer_receipt
+    receipt['encoding_receipt'] = _writer_receipt(path, checkpoint_sha256=receipt['sha256'],
+        metadata_sha256=payload['metadata_sha256'], self_moves=runtime.self_moves)
     return receipt
 
 
 def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_config=None, expected_loss_config=None,
-                    expected_train_config=None, device=None, process_group=None):
+                    expected_train_config=None, device=None, process_group=None, expected_self_moves=None,
+                    off_provenance=None, expected_checkpoint_sha256=None):
     """Resume a V2 checkpoint exactly: model, optimizer, RNG, cursor and counters.
 
     ``v2_config`` may change execution-only choices (mode, check interval,
     optimizer kernel). ``order``/``order_seed`` must match an unfinished cursor.
     """
+    world_size, _ = _distributed(process_group)
+    error = None
+    try:
+        runtime, digest = _restore_checkpoint(path, enable_v5=enable_v5, v2_config=v2_config,
+            expected_model_config=expected_model_config, expected_loss_config=expected_loss_config,
+            expected_train_config=expected_train_config, device=device, process_group=process_group,
+            expected_self_moves=expected_self_moves, off_provenance=off_provenance,
+            expected_checkpoint_sha256=expected_checkpoint_sha256, world_size=world_size)
+    except Exception as exc:
+        if world_size == 1:
+            raise
+        error = exc
+        digest = None
+    if world_size > 1:
+        import torch.distributed as dist
+        inputs = [None] * world_size
+        dist.all_gather_object(inputs, (digest, None if error is None else str(error)), group=process_group)
+        for rank, (_, failure) in enumerate(inputs):
+            if failure is not None:
+                raise ValueError(f'rank {rank} checkpoint resume failed: {failure}') from error
+        if any(other != digest for other, _ in inputs):
+            raise ValueError('ranks must resume the same immutable checkpoint bytes')
+        _broadcast_parameters(runtime)
+    return runtime
+
+
+def _restore_checkpoint(path, *, enable_v5, v2_config, expected_model_config, expected_loss_config,
+                        expected_train_config, device, process_group, expected_self_moves,
+                        off_provenance, expected_checkpoint_sha256, world_size):
     if enable_v5 is not True:
         raise ValueError('explicit v5 trainer enablement required')
+    from .checkpoint_self_moves import checked_checkpoint, resolve_self_moves
+    checked = checked_checkpoint(path, expected_checkpoint_sha256=expected_checkpoint_sha256)
+    self_moves = resolve_self_moves(checked, expected_self_moves=expected_self_moves, off_provenance=off_provenance)
     torch = _torch()
-    payload = torch.load(Path(path), map_location='cpu', weights_only=True)
+    payload = checked.payload
     metadata = payload.get('metadata', {}); section = payload.get('v2')
     if (metadata.get('schema') != v5.CHECKPOINT_SCHEMA or payload.get('metadata_sha256') != _sha(metadata)
             or metadata.get('training_schema') != TRAINING_CONTRACT_SCHEMA
@@ -1052,12 +1204,20 @@ def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_con
             raise ValueError('explicit resume configuration differs')
     saved = V2Config(**section['config'])
     v2_config = saved if v2_config is None else v2_config
+    if saved.distributed_rows != v2_config.distributed_rows:
+        raise ValueError('resume cannot change distributed row/loss semantics')
+    if saved.role_routing != v2_config.role_routing:
+        raise ValueError('resume requires original role routing; switching is unqualified')
+    if (saved.native_embedding_backward, saved.fallback_random) != (
+            v2_config.native_embedding_backward, v2_config.fallback_random):
+        raise ValueError('resume requires original embedding/RNG execution settings')
     if section['cursor'] is not None and not section['cursor']['complete'] and (
             (v2_config.order, v2_config.order_seed) != (saved.order, saved.order_seed)):
         raise ValueError('an unfinished cursor resumes only with its original batch order')
-    runtime = create(model, loss, training, v2_config, enable_v5=True, device=device, process_group=process_group)
-    if runtime.world_size != section['world_size']:
+    if world_size != section['world_size']:
         raise ValueError('resume requires the original world size')
+    runtime = _create_runtime(model, loss, training, v2_config, enable_v5=True, device=device,
+        process_group=process_group, self_moves=self_moves)
     runtime.model.load_state_dict(payload['state_dict'], strict=True)
     _load_optimizer_state(runtime.optimizer, payload['optimizer_state'])
     if any(not torch.isfinite(parameter).all() for parameter in runtime.model.parameters()):
@@ -1069,10 +1229,11 @@ def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_con
     with v5._rng_scope(torch, runtime.device, state=runtime.rng):
         pass
     runtime.model.train(metadata['model_training'])
-    return runtime
+    return runtime, checked.sha256
 
 
-def export_actor(checkpoint, out):
+def export_actor(checkpoint, out, *, expected_self_moves=None, off_provenance=None):
     """JAX actor archive from a V2 checkpoint, through ``gpu_engine.v5_model.export``."""
     from gpu_engine import v5_model as actor
-    return actor.export(checkpoint, out, expected_checkpoint_sha256=v5_data._file_sha(checkpoint), enable_v5=True)
+    return actor.export(checkpoint, out, expected_checkpoint_sha256=v5_data._file_sha(checkpoint), enable_v5=True,
+        self_moves=expected_self_moves, off_provenance=off_provenance)

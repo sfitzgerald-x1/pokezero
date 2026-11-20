@@ -22,8 +22,34 @@ from pokezero import v5_gumbel as original
 VIEWS = ('eager', 'jit', 'check')
 
 
+def host_stack(trees):
+    """`jax.tree.map(lambda *leaves: jnp.stack(leaves), *trees)`, built on the host: each leaf's values stacked with numpy, then
+    ONE jax.device_put of every stacked leaf (to the default device, uncommitted, as jnp.stack of uncommitted arrays places its
+    result). Each stacked leaf keeps the leaves' dtype and weak type (jnp.stack's result when they all share them), so a jitted
+    program sees the same avals, runs the same compiled executable and returns the same bits. A served root's worlds are tiny
+    uncommitted arrays on the host (prepare's device): jnp.stack ran one device dispatch, with a host-to-device copy of every
+    world's leaf, per leaf (160 leaves x W worlds per call). A leaf whose worlds differ in dtype or weak type keeps jnp.stack."""
+    import jax
+    import jax.numpy as jnp
+    from jax._src import core, literals
+    flat = [jax.tree.flatten(t) for t in trees];treedef = flat[0][1]
+    if any(d != treedef for _, d in flat):raise ValueError('host_stack: the trees differ in structure')
+    host, out = [], []
+    for column in zip(*(leaves for leaves, _ in flat)):
+        kinds = {(str(x.dtype), bool(getattr(getattr(x, 'aval', None), 'weak_type', False)), isinstance(x, jax.Array)) for x in column}
+        if len(kinds) != 1 or not next(iter(kinds))[2]:
+            out.append(jnp.stack(column));continue
+        _, weak, _ = next(iter(kinds));value = np.stack([np.asarray(x) for x in column])
+        if weak:   # device_put of this makes a weak-typed jax.Array (jax.Array's own unpickling's way, as prepare_pool._weak)
+            value = literals.TypedNdArray(value, aval=core.ShapedArray(value.shape, value.dtype, weak_type=True))
+        host.append((len(out), value));out.append(None)
+    for (i, _), array in zip(host, jax.device_put([v for _, v in host])):
+        out[i] = array
+    return jax.tree.unflatten(treedef, out)
+
+
 class ReplyPrior:
-    def __init__(self, executor, evaluator, params=None, *, views=None, mode='eager', identity=None):
+    def __init__(self, executor, evaluator, params=None, *, views=None, mode='eager', identity=None, self_moves=None):
         """`evaluator`: the reply model (a champion_evaluator.ChampionEvaluator of the reply archive, or any callable
         (params, inputs) -> an object with policy_logits); `params` default evaluator.params; `mode` in VIEWS. `identity`: None, or
         the served archive's {archive_sha256, checkpoint_sha256, view}, echoed in every br_fp response's reply_prior record so the
@@ -32,7 +58,13 @@ class ReplyPrior:
         import jax
         from . import device_depth2_pricer as depth2
         if mode not in VIEWS:raise ValueError(f'reply views mode in {VIEWS} required')
-        self.views = depth2._make_views(executor) if views is None else views
+        # V2 self_moves: the reply model's declaration (default its archive meta, absent = False); its peer views carry own
+        # move/PP cells only when it declares them (never filled from the owner's view).
+        self.self_moves = bool((getattr(evaluator, 'meta', None) or {}).get('self_moves', False)) if self_moves is None else bool(self_moves)
+        if self.self_moves and getattr(executor, 'observe_self_moves_off', None) is None:
+            # Off tables (the executor has no self_moves observe) would hand an on reply model views with no own move cells.
+            raise ValueError('a self_moves reply model requires self_moves observation tables')
+        self.views = depth2._make_views(executor, peer_self_moves=self.self_moves) if views is None else views
         self.evaluator, self.params, self.mode = evaluator, (evaluator.params if params is None else params), mode
         if identity is not None and (type(identity) is not dict or set(identity) != {'archive_sha256', 'checkpoint_sha256', 'view'}):
             raise ValueError('identity: None or {archive_sha256, checkpoint_sha256, view} required')
@@ -58,6 +90,13 @@ class ReplyPrior:
     def jit_logits(self, worlds, owner):
         """The same logits from one jitted program: the views vmapped over the stacked worlds, then the reply model."""
         import jax
+        return np.asarray(jax.device_get(self.jit_dispatch(worlds, owner)), np.float32)
+
+    def jit_dispatch(self, worlds, owner):
+        """jit_logits' program dispatched, not fetched: its device array (JAX runs it asynchronously). jit_logits is this,
+        then device_get as float32: the batching pipeline's reply_forward='root' dispatches it in the device thread right after
+        the price and fetches it in reduce (the same program on the same inputs: the same bits)."""
+        import jax
         import jax.numpy as jnp
         if any(w.state is None for w in worlds):raise ValueError('a priced root with an unconstructed world')
         if owner not in self._jitted:
@@ -67,9 +106,7 @@ class ReplyPrior:
                 inputs = jax.tree.map(lambda x: x.reshape((x.shape[0] * x.shape[1],) + x.shape[2:]), inputs)
                 return evaluator(params, inputs).policy_logits
             self._jitted[owner] = jax.jit(program)
-        stack = lambda xs: jax.tree.map(lambda *leaves: jnp.stack(leaves), *xs)
-        out = self._jitted[owner](self.params, stack([w.state for w in worlds]), stack([w.public for w in worlds]))
-        return np.asarray(jax.device_get(out), np.float32)
+        return self._jitted[owner](self.params, host_stack([w.state for w in worlds]), host_stack([w.public for w in worlds]))
 
     def warm(self, worlds):
         """Compile what a live root of these worlds' shapes runs, for both owner seats, before READY (a seat first compiled on

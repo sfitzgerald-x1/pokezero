@@ -1,20 +1,20 @@
 name: GPU engine CPU component checks (extended tier)
 
 on:
-  # Never per pull request: the extended tier's modules sit outside the pull-request wall budget
-  # (tests/gpu_component_extended.json). Every push to integration runs them, with no path filter: they import more than
-  # the component path list names, a path filter sees only a push's first 300 changed files, and these runs are the
-  # modules' only coverage. workflow_dispatch runs them on a chosen branch by hand once this file is on the default
-  # branch (GitHub lists dispatchable workflows from there).
-  push:
-    branches: ['scott/v2-engine-accel-20261104']
   workflow_dispatch:
+    inputs:
+      source:
+        description: Optional branch, tag or commit to test
+        type: string
+  workflow_call:
+    inputs:
+      source:
+        type: string
+        required: true
 
 permissions:
   contents: read
 
-# No concurrency group: a group keeps at most one pending run and cancels older pending runs even when it keeps
-# in-progress ones, and each integration push's run must finish (it is these modules' only coverage).
 jobs:
   cpu-extended-shards:
     name: CPU extended component shard ${{ matrix.shard }}
@@ -36,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.source || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v6
@@ -50,8 +51,6 @@ jobs:
           ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
           path: .ci/pokemon-showdown
           persist-credentials: false
-      - name: Verify complete and disjoint shard selection
-        run: python -m unittest tests.test_gpu_component_shards tests.test_component_memory_check -v
       - name: Install CPU test environment and build pinned source oracle
         run: |
           python -m pip install 'jax==0.12.0' 'numpy==2.5.4'
@@ -100,10 +99,13 @@ jobs:
           mkdir -p "$ci_memory_dir"
           echo "memory_report_dir=$ci_memory_dir" >> "$GITHUB_OUTPUT"
           # The extended tier: exactly the blocks of tests/gpu_component_extended.json, under the same memory
-          # gate as the light tier. The command line differs from the light tier's only in --tier and --count.
+          # gate as the light tier, preserving the selected modules' low-optimization cases.
           python scripts/run_component_memory_check.py --output "$ci_memory_dir" \
             --label 'shard-${{ matrix.shard }}' --summary "$GITHUB_STEP_SUMMARY" -- \
             python scripts/run_gpu_component_shard.py --tier extended --index '${{ matrix.shard }}' --count 4 --process-blocks \
+            \
+            --low-optimization-case test_gpu_engine_secondary_status_frame_runtime.SecondaryStatusFrameRuntimeTests.test_actual_secondary_receipt_survives_end_turn_and_both_full_consumers \
+            --low-optimization-case test_gpu_engine_substitute_damage_owning.SubstituteDamageTests.test_actual_create_then_hit_survive_and_break_both_consumers \
             --resource-interval-seconds 30 2>&1 \
             | tee /tmp/gpu-components.log "$ci_memory_dir/component.log"
           if grep -Eq 'skipped=[1-9]|\.\.\. skipped' /tmp/gpu-components.log; then

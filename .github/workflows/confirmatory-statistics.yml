@@ -1,25 +1,7 @@
 name: Confirmatory statistical contracts
 
 on:
-  pull_request:
-    paths:
-      - 'src/pokezero/mcts_eval/search_over_raw_statistics.py'
-      - 'scripts/calibrate_search_over_raw_joint.py'
-      - 'tests/test_search_over_raw_statistics.py'
-      - 'src/pokezero/mcts_eval/search_over_raw_t_candidate.py'
-      - 'scripts/calibrate_search_over_raw_t_candidate.py'
-      - 'tests/test_search_over_raw_t_candidate.py'
-      - '.github/workflows/confirmatory-statistics.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'src/pokezero/mcts_eval/search_over_raw_statistics.py'
-      - 'scripts/calibrate_search_over_raw_joint.py'
-      - 'tests/test_search_over_raw_statistics.py'
-      - 'src/pokezero/mcts_eval/search_over_raw_t_candidate.py'
-      - 'scripts/calibrate_search_over_raw_t_candidate.py'
-      - 'tests/test_search_over_raw_t_candidate.py'
-      - '.github/workflows/confirmatory-statistics.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read

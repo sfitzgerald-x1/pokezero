@@ -1,5 +1,4 @@
 """Direct pinned-Showdown/JAX primary effects; finite authored subset, not games."""
-import copy
 import importlib.util
 import json
 import os
@@ -199,14 +198,7 @@ class PrimaryExecutionTests(unittest.TestCase):
                             boosts=state.boosts[i][side][mon],item='lumberry' if state.item[i][side][mon] else '',
                             pp=state.pp[i][side][mon][:2 if mon==0 else 1]))
                     actual['mons'].append(party)
-                compare=copy.deepcopy({k:v for k,v in expected.items() if k!='events'})
-                # Native Showdown resets Toxic on entry; JAX resets on departure.
-                # Only an INACTIVE counter is unobservable before that reset.
-                # Preserve the raw oracle counter in the evidence above.
-                for side in range(2):
-                    for mon in range(2):
-                        if compare['mons'][side][mon]['status']=='tox' and mon!=compare['active'][side]:
-                            compare['mons'][side][mon]['counter']=0
+                compare={k:v for k,v in expected.items() if k!='events'}
                 if actual!=compare: mismatches.append({'id':spec['id'],'turn':turn,'actual':actual,'expected':expected})
             if spec.get('accuracyOnly'):
                 accuracy=[d for d in row['draws'] if d['event']=='accuracy']
