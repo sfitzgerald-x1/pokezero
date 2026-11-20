@@ -2,7 +2,7 @@
 
 import argparse
 import asyncio
-from dataclasses import replace
+from dataclasses import fields, replace
 import hashlib
 import json
 import os
@@ -120,6 +120,7 @@ def production_actors(root, spec):
     from . import checkpoint_self_moves, v5_training
     from .live_protocol_actor import ActorContract
     from .s0_transfer_control import shadow, tensor_digest
+    from .v5_loss import V5LossConfig
     from .v5_model import V5ModelConfig
     from .v5_run import Snapshot
 
@@ -131,8 +132,15 @@ def production_actors(root, spec):
         raise ValueError("the Foul Play anchor must be the untouched champion")
 
     result = {}
+    runs, replicate_ids = set(), set()
     for replica, entry in spec["replicas"].items():
         base, declaration, events = checkpoint_self_moves.verified_run(entry["run"])
+        replicate = entry["replicate"]
+        if (type(replicate) is not int or declaration["model"]["replicate"] != replicate
+                or replicate in replicate_ids or base.resolve() in runs):
+            raise ValueError("registered replicas require distinct, matching training runs")
+        runs.add(base.resolve())
+        replicate_ids.add(replicate)
         progress = {event["payload"]["iteration"] for event in events if event["kind"] == "ITERATION_COMPLETE"}
         plan = declaration["iterations"]
         if (len(plan) < cycles or any(sum(len(batch["games"]) for batch in it) != 20_000
@@ -145,7 +153,7 @@ def production_actors(root, spec):
             snap = Snapshot(**entry[role])
             if snap.iteration != iteration:
                 raise ValueError("expected the game-zero and committed milestone checkpoints")
-            checked, self_moves, proof = checkpoint_self_moves.run_checkpoint(
+            checked, self_moves, _ = checkpoint_self_moves.run_checkpoint(
                 base, snap.checkpoint, snap.checkpoint_sha256, iteration=iteration,
                 expected_snapshot=snap, require_snapshot=True,
             )
@@ -163,10 +171,15 @@ def production_actors(root, spec):
             )
             load_actor(actor, V5ModelConfig.from_metadata(model))
             if role == "B":
-                baseline = v5_training.load_checkpoint(
-                    checkpoint, enable_v5=True, expected_checkpoint_sha256=snap.checkpoint_sha256,
-                    expected_self_moves=self_moves, off_provenance=proof,
-                )
+                metadata = checked.metadata
+                if (metadata["steps"] or metadata["rows"] or metadata["progress"] is not None
+                        or checked.payload["optimizer_state"]["state"]):
+                    raise ValueError("B must be the original game-zero checkpoint")
+                loss = V5LossConfig(**{field.name: metadata["loss"][field.name] for field in fields(V5LossConfig)})
+                train = replace(v5_training.TrainConfig(**metadata["training"]), device="cpu")
+                baseline = v5_training.create(V5ModelConfig.from_metadata(model), loss, train,
+                                               enable_v5=True, self_moves=self_moves)
+                baseline.model.load_state_dict(checked.payload["state_dict"], strict=True)
                 actor["tensor_sha256"] = tensor_digest(baseline)
             actors[role] = actor
         if actors["B"]["model"] != actors["T"]["model"]:
@@ -179,8 +192,16 @@ def production_actors(root, spec):
     return result
 
 
-def prepare(args, inputs, config, root, spec):
+def prepare_showdown(inputs):
     from . import v5_python_backend
+
+    prepared = v5_python_backend.prepare(replace(inputs, plan=SimpleNamespace(pool_sha256=inputs.plan.pool_sha256)))
+    contract = replace(prepared.contract, self_moves=inputs.plan.self_moves)
+    masks = replace(prepared.public_config.feature_masks, self_moves=contract.self_moves)
+    return replace(prepared, contract=contract, public_config=replace(prepared.public_config, feature_masks=masks))
+
+
+def prepare(args, inputs, config, root, spec):
     from .s0_transfer_starts import prepare_starts
 
     dry_run = spec is None
@@ -194,7 +215,7 @@ def prepare(args, inputs, config, root, spec):
     cells = expected_cells(banks, dry_run=dry_run)
     warmup = DRY_RUN_ROOT + WARMUP_OFFSET
     clusters = sorted({cell["cluster"] for cell in cells.values()} | {warmup})
-    prepared = v5_python_backend.prepare(inputs)
+    prepared = prepare_showdown(inputs)
     starts = prepare_starts(prepared, clusters, gender_seed=roster_seed, gender_domain=17)
     actors = scratch_actors(root, config) if dry_run else production_actors(root, spec)
     for roles in actors.values():
@@ -357,6 +378,13 @@ async def showdown_fp(prepared, model, manifest, cells, *, publish, replica):
     actors = factories(prepared, model, {role: actor for role, actor in roster_actors.items() if role != "H"},
                        sampled=False)
     prime_actors(actors, manifest, prepared.public_config)
+    if "H" in roster_actors:
+        import torch
+
+        torch.set_float32_matmul_precision("highest")
+        torch.backends.mha.set_fastpath_enabled(False)
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
 
     async def play(cell):
         role, seat = cell["role"], cell["seat"]
@@ -386,8 +414,9 @@ async def showdown_fp(prepared, model, manifest, cells, *, publish, replica):
                 )
             except PermissionError:
                 raise
-            except (RuntimeError, TimeoutError, OSError) as error:
-                return cell, "FAILED", dict(reason=f"{type(error).__name__}: {error}")
+            except (ValueError, RuntimeError, TimeoutError, OSError) as error:
+                status = "REFUSED" if isinstance(error, ValueError) else "FAILED"
+                return cell, status, dict(reason=f"{type(error).__name__}: {error}")
             game, = panel.games
             fp_seed, = panel.foulplay_random_seed_schedule
             raw = dict(seed=game.seed, fp_seed=fp_seed, source_game=game.to_dict())
@@ -459,15 +488,16 @@ def main():
         inputs, _ = load_settings(args.runtime, args.runtime_sha, dry_run=False,
                                   self_moves=manifest["config"]["self_moves"])
         if args.side == "showdown":
-            from . import v5_python_backend
-
             if manifest["config"]["bridge_sha256"] != args.bridge_sha:
                 raise ValueError("Showdown bridge differs from the prepared run")
-            prepared = v5_python_backend.prepare(inputs)
+            prepared = prepare_showdown(inputs)
 
     expected = {key: cell for key, cell in expected_cells(manifest["banks"], dry_run=manifest["dry_run"]).items()
                 if cell["environment"] == args.side}
     with (root / f"{args.side}.jsonl").open("xb") as output:
+        output.write(canonical(dict(manifest_sha256=digest(manifest))) + b"\n")
+        output.flush()
+
         def publish(result):
             cell, status, witness = result
             if expected.get(cell_key(cell)) != cell:

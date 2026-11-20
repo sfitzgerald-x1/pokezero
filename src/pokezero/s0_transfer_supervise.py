@@ -66,12 +66,8 @@ def main():
     try:
         code = run_worker(root, args.side, rest, deadline=deadline)
         if args.side == "showdown" and (root / "manifest.json").is_file():
-            try:
-                engine = wait_for(root / "engine.done.json", "engine terminal status unavailable")
-                code = code or engine["exit_code"]
-            except TimeoutError as error:
-                print(error, file=sys.stderr)
-                code = code or 1
+            engine = wait_for(root / "engine.done.json", "engine terminal status unavailable")
+            code = code or engine["exit_code"]
             scorer = subprocess.run([sys.executable, "-m", "pokezero.s0_transfer_recompute", str(root)],
                                     check=False, timeout=deadline)
             code = code or scorer.returncode

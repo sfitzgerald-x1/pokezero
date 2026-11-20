@@ -102,11 +102,16 @@ def cell_key(cell):
     return tuple(cell[key] for key in CELL_KEYS)
 
 
-def read_terminals(path):
+def read_terminals(path, *, manifest_sha256):
     """Read complete JSONL records, retaining outcomes from an interrupted worker."""
     if not path.is_file():
         return
     with path.open("rb") as stream:
+        header = stream.readline()
+        if not header.endswith(b"\n"):
+            return
+        if json.loads(header) != {"manifest_sha256": manifest_sha256}:
+            raise ValueError(f"{path.name} belongs to a different run manifest")
         for line in stream:
             if not line.endswith(b"\n"):
                 # Process termination can leave the last record partially written.

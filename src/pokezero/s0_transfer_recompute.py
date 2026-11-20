@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .s0_transfer_roster import FP, H2H, SCHEMA, cell_key, expected_cells, read_terminals, write_json
+from .s0_transfer_roster import FP, H2H, SCHEMA, cell_key, digest, expected_cells, read_terminals, write_json
 
 
 CONTRASTS = {
@@ -201,8 +201,9 @@ def main():
     args = parser.parse_args()
     root = args.directory
     manifest = json.loads((root / "manifest.json").read_bytes())
+    manifest_sha256 = digest(manifest)
     rows = [row for side in ("engine", "showdown")
-            for row in read_terminals(root / f"{side}.jsonl")]
+            for row in read_terminals(root / f"{side}.jsonl", manifest_sha256=manifest_sha256)]
     write_json(root / "scores.json", recompute(manifest, rows))
 
 

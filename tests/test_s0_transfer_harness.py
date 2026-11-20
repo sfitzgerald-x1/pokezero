@@ -6,7 +6,7 @@ import pytest
 
 from pokezero import s0_transfer_recompute as scorer
 from pokezero.s0_transfer_roster import (
-    FP, H2H, SCHEMA, canonical, cell_key, dry_run_clusters, expected_cells, read_terminals,
+    FP, H2H, SCHEMA, canonical, cell_key, digest, dry_run_clusters, expected_cells, read_terminals,
 )
 
 
@@ -108,9 +108,12 @@ def test_interrupted_worker_retains_raw_terminals(tmp_path):
     manifest, rows = scratch_rows()
     raw = tmp_path / "showdown.jsonl"
     completed = [r for r in rows if r["environment"] == "showdown"][:4]
-    raw.write_bytes(b"".join(canonical(row) + b"\n" for row in completed) + b'{"incomplete":')
-    assert list(read_terminals(raw)) == completed
-    score = scorer.recompute(manifest, read_terminals(raw))
+    header = dict(manifest_sha256=digest(manifest))
+    raw.write_bytes(b"".join(canonical(row) + b"\n" for row in [header, *completed]) + b'{"incomplete":')
+    with pytest.raises(ValueError, match="different run manifest"):
+        list(read_terminals(raw, manifest_sha256="0" * 64))
+    assert list(read_terminals(raw, **header)) == completed
+    score = scorer.recompute(manifest, read_terminals(raw, **header))
     assert score["dispositions"] == {"COMPLETE": 4, "NOT_ATTEMPTED": 276}
     assert score["missing_cells"] == 276
 
@@ -260,3 +263,44 @@ def test_sampled_showdown_keeps_playing_until_its_terminal(monkeypatch):
     assert status == "COMPLETE"
     assert terminal["frames"] == 210
     assert scorer.terminal_score(dict(cell, environment="showdown", status=status, evidence=terminal)) == 1.
+
+
+def test_prepare_roster_independent_of_actor_self_moves(monkeypatch):
+    from pokezero import v5_python_backend, v5_worker
+    from pokezero.live_protocol_actor import ActorContract
+    from pokezero.local_showdown import LocalShowdownConfig
+    from pokezero.s0_transfer_harness import prepare_showdown
+
+    inputs = v5_worker.Inputs(SimpleNamespace(pool_sha256="pool", self_moves=True), None, "{}", "{}", "null", "")
+    prepared = v5_python_backend.Prepared(None, None, "pool", None, None, None, None, ActorContract.champion(),
+                                          LocalShowdownConfig(), None)
+
+    def prepare(static_inputs):
+        assert not getattr(static_inputs.plan, "self_moves", False)
+        assert static_inputs.plan.pool_sha256 == inputs.plan.pool_sha256
+        return prepared
+
+    monkeypatch.setattr(v5_python_backend, "prepare", prepare)
+    configured = prepare_showdown(inputs)
+    assert configured.contract.self_moves is True
+    assert configured.public_config.feature_masks.self_moves is True
+
+
+def test_supervisor_does_not_score_until_engine_exits(monkeypatch, tmp_path):
+    import sys
+    from pokezero import s0_transfer_supervise
+
+    (tmp_path / "manifest.json").write_text("{}")
+    monkeypatch.setattr(sys, "argv", ["supervisor", "showdown", str(tmp_path)])
+    monkeypatch.setattr(s0_transfer_supervise, "run_worker", lambda *a, **k: 0)
+
+    def wait(*args):
+        raise TimeoutError("engine still running")
+
+    def score(*args, **kwargs):
+        pytest.fail("scored while the engine was still running")
+
+    monkeypatch.setattr(s0_transfer_supervise, "wait_for", wait)
+    monkeypatch.setattr(s0_transfer_supervise.subprocess, "run", score)
+    assert s0_transfer_supervise.main() == 1
+    assert json.loads((tmp_path / "showdown.done.json").read_text())["exit_code"] == 1
