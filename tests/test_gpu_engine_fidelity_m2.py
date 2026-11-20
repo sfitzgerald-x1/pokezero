@@ -294,6 +294,27 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(int(np.asarray(s.partial_trap_counter)[0, 1, 0]), 3)           # the survivor never ticked
         self.assertEqual(np.asarray(s.status)[4, :, 0].tolist(), [SLP, SLP])
 
+    def test_perish_wide_tie_draws_use_only_the_low_bit(self):
+        """Explicit callers may use wide draws: Perish must visit both sides, as with the residual scheduler's ties.
+        Every counter ticks, both last mons faint together, and unequal Speed ignores the tie. Sampled 0/1 is unchanged.
+        """
+        wide = (-2, -1, 0, 1, 2, 3, 98, 99)
+        for tied, count in ((True, 2), (True, 1), (False, 2)):
+            last = [((side, k), 0) for side in (0, 1) for k in range(1, 6)] if count == 1 else []
+            lane = dict(perish_counter=[((0, 0), count), ((1, 0), count)], hp=last,
+                        stats=[((0, 0, 5), 200 if tied else 301)])
+            state = self.build([lane] * N)
+            actual = self.play(state, self.chance(effect=[{(1, 3): draw} for draw in wide]))
+            expected = self.play(state, self.chance(effect=[{(1, 3): draw & 1} for draw in wide]))
+            with self.subTest(tied=tied, count=count):
+                np.testing.assert_array_equal(np.asarray(actual.perish_counter)[:, :, 0], count - 1)
+                if count == 1:
+                    np.testing.assert_array_equal(np.asarray(actual.hp)[:, :, 0], 0)
+                    np.testing.assert_array_equal(np.asarray(actual.winner), 2)
+                for field in self.State._fields:
+                    np.testing.assert_array_equal(np.asarray(getattr(actual, field)), np.asarray(getattr(expected, field)),
+                                                  err_msg=field)
+
     def test_faint_clears_every_m2_leaf(self):
         """faintMessages -> clearVolatile: a KO'd holder loses perish, yawn and its trap (design 2.4)."""
         lanes = [{'hp': [((1, 0), 1)], 'perish_counter': [((1, 0), 3)], 'yawn_counter': [((1, 0), 1)],
