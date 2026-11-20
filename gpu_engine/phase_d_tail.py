@@ -190,6 +190,7 @@ def restore(state,original_spec,cursors,tail,*,metadata,checks):
             state=state._replace(residual_draws=chance.draws,phazing_draws=chance.phazing,
                 secondary_draws=chance.secondary,sleep_talk_draws=chance.sleep_talk)
             if 'effect_draws' in state._fields:state=state._replace(effect_draws=chance.effect)
+            if 'shed_skin_draws' in state._fields:state=state._replace(shed_skin_draws=chance.shed_skin)
         checks.append(dict(kind='PUBLIC_REPLACEMENT_PHASE',status='CLEAR',fatal=True,**phase,
             randomness='SAMPLED_HYPOTHETICAL_FUTURE_FROZEN_CHANCE_LAW_SAME_KERNEL_KEY'))
     for side,name in tail['fresh_substitutes'].items():

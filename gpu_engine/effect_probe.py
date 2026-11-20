@@ -58,11 +58,11 @@ DEFAULT_ROW = [0, 99, 99, 0, 15, 0, 0, 0, 0, 0, 0, 0]
 # engine inputs are unchanged. 0 procs a contact ability (0 < 20, < 6: Effect Spore's slp), so a scenario that makes
 # contact with such a holder sets phazing explicitly.
 DEFAULT_TAPE = dict(draws=[list(DEFAULT_ROW), list(DEFAULT_ROW)], secondary=[99, 99], sleep_talk=[0, 0],
-                    effect=[[15, 0, 0, 0, 1], [15, 0, 0, 0, 1]], phazing=[0, 0])
+                    effect=[[15, 0, 0, 0, 1], [15, 0, 0, 0, 1]], phazing=[0, 0], shed_skin=[99, 99])
 # Entry coordinates are authored separately, then shared with the v6 Showdown tape.
 # The initial coin is shared by both initializers; resuming is derived from engine state.
 DEFAULT_AUX = dict(entry_ties=[0, 0], initial_tie=0)
-BOUNDS = dict(draws=DRAW_BOUNDS, effect=EFFECT_BOUNDS, secondary=100, sleep_talk=60, phazing=60, entry_ties=2, initial_tie=2)
+BOUNDS = dict(draws=DRAW_BOUNDS, effect=EFFECT_BOUNDS, secondary=100, sleep_talk=60, phazing=60, entry_ties=2, initial_tie=2,shed_skin=100)
 # Device mode's optional low-optimization compile of step_with_public (XLA's own options for that one executable, as the
 # CI's low-optimization cases set them): the public step's CPU compile at the default level peaks far above the light tier.
 LOW_OPTIMIZATION = {'xla_backend_optimization_level': 0, 'xla_llvm_disable_expensive_passes': True}
@@ -404,6 +404,7 @@ class Engine:
             # control. Its declared effect columns are unchanged; Showdown
             # still consumes the new column and exposes missing behavior.
             fields['effect'] = stack('effect')[..., :len(self.transition.EFFECT_BOUNDS)]
+        if 'shed_skin' in self.transition.ChanceInputs._fields:fields['shed_skin']=stack('shed_skin')
         return self.transition.ChanceInputs(**fields)
 
     def advance(self, state, actions, tapes, auxes):

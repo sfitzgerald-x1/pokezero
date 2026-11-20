@@ -216,8 +216,10 @@ PUBLIC_ORDER = 'trackers.public_order'
 # Fidelity R (design 2.1): the saved effect stream. While the base pass predates the leaf it is checked
 # against an independent copy of the design's derivation (EFFECT_SALT, EFFECT_BOUNDS) instead of bitwise.
 EFFECT_DRAWS = 'state.effect_draws'
+SHED_SKIN_DRAWS = 'state.shed_skin_draws'
 EFFECT_SALT, EFFECT_BOUNDS = 1732050, (16, 16, 4, 2)
 INFATUATION_SALT = 2236067
+SHED_SKIN_SALT = 2449489
 MEANLOOK = "trackers.mon_features['meanlook_trap']"
 PRE_TRACKERS = (MEANLOOK, 'trackers.active_slot')
 TRAP_MOVES = ('meanlook', 'spiderweb', 'block')
@@ -580,6 +582,14 @@ def ability_target(*names, move_ok=None):
         actor = holder_target(p, *names)[:, ::-1]
         return actor & (np.ones_like(actor) if move_ok is None else move_ok(p))
     return predicate
+
+
+def shed_skin_holders(p):
+    """Reachable holders, including Trace copying an earlier incoming holder on either side."""
+    possible=holder_target(p,'shedskin')
+    trace=installs(p) & np.isin(p.s['ability'],p.ability_ids('trace')).any(-1)
+    for _ in range(2):possible=possible | (trace & possible[:,::-1])
+    return possible
 
 
 def damaging_move(p):
@@ -1116,7 +1126,20 @@ def allowed_leaf(name, families):
 
 # Per-PR plug-in table: effect -> predicate. Choice unlock and the effect stream
 # are never involvement (design 5.2). `none` is the base-against-base self-test.
+ALLOWED['shedskin'] = dict(user=('hp','status','reveal','clause','visible'), target=('hp','clause','visible'), glob=())
+
+SHED_SKIN_STATUS_LEAVES = tuple('state.'+name for name in ('status','status_counter','sleep_skipped','rest_origin'))
+
+
+def shed_skin_status_member_ok(leaf, side, post, reference, active):
+    """A cure's physical status writes belong only to the residual holder, never its bench."""
+    if leaf not in post or leaf not in reference:return False
+    differ=(np.asarray(post[leaf][side])!=np.asarray(reference[leaf][side])).reshape(6,-1).any(-1)
+    return not (differ & ~active_mask(active)[side]).any()
+
+
 PLUGINS = {
+    'SS': dict(shedskin=shed_skin_holders),
     'none': {},
     # PR0's public_order and faint-clear rules are special rules (see the docstring);
     # these are its remaining tracker changes.
@@ -1202,7 +1225,8 @@ def ko_timing_sides(pre, fainted, base_fainted, pp, base_pp, post_active, base_a
     return valid & (valid.sum(-1) == 1)[:, None]
 
 
-def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None, effect_ok=None, timing=()):
+def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade_accepted=None, effect_ok=None, timing=(),
+                 shed_skin_member_ok=None):
     """changed: {(leaf, side)} for side-axis leaves, {(leaf, None)} for side-less ones;
     effects: {effect: [actor sides]}; cascade: None, or dict(ko_sides=[2] bool (sides whose every tracker
     may follow a KO), mon_ok=callable(leaf, side) -> a KO_MON_LEAVES leaf differs only on that side's
@@ -1212,6 +1236,7 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
     optional retype_ok=callable(leaf, side) -> bool: that side's RETYPE_LEAVES differ from the base only at a Color Change
     holder that fainted this step here or (un)fainted relative to the base).
     effect_ok: independent saved-block validation, including lanes without a cascade; false is never waived.
+    shed_skin_member_ok: required per-member status evidence for the Shed Skin allowance.
     cascade_accepted: an optional list that collects the entries only CASCADE_ALLOWED accepted (listed, so they stay visible).
     timing: actor side indices witnessed by ko_timing_sides. Only those sides' TIMING_ACTION_LEAVES and the executed
     move count may follow the cancelled action; neither CASCADE_ALLOWED nor other KO rules apply on timing alone.
@@ -1227,8 +1252,11 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
         ok = False
         for effect, actors in effects.items():
             rule = ALLOWED.get(effect, ALL)
-            if side is None:ok |= allowed_leaf(leaf, rule['glob'])
-            else:ok |= any(allowed_leaf(leaf, rule['user' if side == a else 'target']) for a in actors)
+            if side is None:accept = allowed_leaf(leaf, rule['glob'])
+            else:accept = any(allowed_leaf(leaf, rule['user' if side == a else 'target']) for a in actors)
+            if accept and effect=='shedskin' and leaf in SHED_SKIN_STATUS_LEAVES:
+                accept = shed_skin_member_ok is not None and shed_skin_member_ok(leaf,side)
+            ok |= accept
             if ok:break
         if not ok and cascade is not None:
             # D: an effect's allowance on a KO-cascade lane only (CASCADE_ALLOWED).
@@ -1247,6 +1275,8 @@ def lane_verdict(changed, effects, side_axis, *, cascade=None, waive=(), cascade
                   or (side is not None and leaf in KO_MON_LEAVES + KO_LINK_LEAVES and cascade['mon_ok'](leaf, side))
                   or (side is not None and leaf == EFFECT_DRAWS and cascade.get('effect_ok') is not None
                       and bool(cascade['effect_ok'][side]))
+                  or (side is not None and leaf == SHED_SKIN_DRAWS and cascade.get('shed_skin_ok') is not None
+                      and bool(cascade['shed_skin_ok'][side]))
                   or (side is not None and leaf in RETYPE_LEAVES and cascade.get('retype_ok') is not None
                       and bool(cascade['retype_ok'](leaf, side)))
                   or (side is not None and (leaf.startswith('trackers.') or allowed_leaf(leaf, ('ko_action',)))
@@ -2118,6 +2148,16 @@ class Stepper:
                 saved = j.where(out.step.state.pending_residual[:, None, None], used, 0)
                 reference = j.where(live[:, None, None], saved, state.effect_draws)
                 effect_ok = (out.step.state.effect_draws == reference).all(-1)              # [L,2]
+            shed_skin_ok = None
+            if hasattr(state,'shed_skin_draws'):
+                # Independent copy of the new stream's law and save/replay rule; never effect involvement.
+                split=jax.vmap(lambda k:jax.random.split(k,2))(state.keys)[:,1]
+                fresh=jax.vmap(lambda k:jax.random.randint(jax.random.fold_in(k,SHED_SKIN_SALT),(2,),0,100))(split)
+                live=~state.done & ~out.step.invalid_actions
+                used=j.where((live & state.pending_residual)[:,None],state.shed_skin_draws,fresh)
+                saved=j.where(out.step.state.pending_residual[:,None],used,0)
+                reference=j.where(live[:,None],saved,state.shed_skin_draws)
+                shed_skin_ok=out.step.state.shed_skin_draws==reference
             # M1 rule arrays: this tree's post values the recharge and ledger rules read (absent leaves: None).
             m1 = {}
             if 'state.recharge_counter' in named_out:m1['counter'] = named_out['state.recharge_counter']
@@ -2153,7 +2193,7 @@ class Stepper:
                 post_active=out.step.state.active, post_done=out.step.state.done,
                 physical_to_public=out.trackers.physical_to_public, active_slot=out.trackers.active_slot,
                 public_order=named_out.get(PUBLIC_ORDER), residual_ran=ran[0] if len(ran) == 1 else None,
-                effect_ok=effect_ok, wit={n: named_out[n] for n in witness_names(named_out)}, m2=m2,
+                effect_ok=effect_ok, shed_skin_ok=shed_skin_ok, wit={n: named_out[n] for n in witness_names(named_out)}, m2=m2,
                 wh=whe if wh_ids is not None else None)
         self._jit = jax.jit(traced);self._names = names
 
@@ -2359,7 +2399,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     destiny_bond = getattr(state_module, 'DESTINY_BOND', DEFAULT_DESTINY_BOND)
     counts = dict(lane_steps=0, done_skipped=0, unchanged=0, changed_and_involved=0, changed_but_uninvolved=0,
                   changed_involved_unexpected_fields=0, ko_cascade=0, ko_timing=0, phase_shift=0, terminal=0, terminal_residual=0, waived=0,
-                  rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0,
+                  rule_explained=0, faint_rule_leaves=0, clear_volatile_leaves=0, effect_draws_saved=0, shed_skin_integrity_failures=0,
                   recharge_leaves=0, bag_leaves=0, trick_witness_leaves=0, ledger_leaves=0, m2_leaves=0, m2_wrong_mon=0, m2_forced=0,
                   wh_leaves=0, wh_bad=0, wh_trick_order=0, wh_dropped=0, facade_dropped=0, sacredfire_dropped=0,
                   sacredfire_stopped=0, pinch_leaves=0)
@@ -2420,6 +2460,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
             new_outputs = sorted(set(names) - set(base_names))
             digests = result['digests'][:real]
             done_now = np.asarray(named['state.done'])
+            if result.get('shed_skin_ok') is not None:
+                counts['shed_skin_integrity_failures'] += int((~np.asarray(result['shed_skin_ok'])[:real]).any(-1).sum())
             base = np.load(base_dir / f'digest-{path.stem}.npz')
             diff = np.zeros((real, len(names), 2), bool)
             shared = [position[n] for n in base_names]
@@ -2428,6 +2470,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
             for k, n in enumerate(result['pre_names']):
                 if n == PUBLIC_ORDER and public_order_rule:continue
                 diff[:, position[n]] = (digests[:, position[n]] != result['pre_digests'][:real, k]).any(-1)
+                if n == SHED_SKIN_DRAWS and n not in base_names:
+                    diff[:,position[n]]=~np.asarray(result['shed_skin_ok'])[:real]
             for n in new_outputs:
                 if n not in result['pre_names']:diff[:, position[n]] = True          # a new output with no pre value
             if effect_rule:
@@ -2469,6 +2513,8 @@ def patched_pass(args, *, step_override=None, prepared=None):
             timing_actors = ko_timing_sides(pre, result['fainted'][:real], base['fainted'],
                 None if timing_pp is None else timing_pp[:real], base_ko.get('state.pp'), result['post_active'][:real], base_post_active,
                 result['move_count'][:real], base_move_count)
+            ss_post = {n:np.asarray(result['ko'][n])[:real] for n in SHED_SKIN_STATUS_LEAVES
+                if 'shedskin' in table and n in result['ko']}
             base_wit = {n: base[f'wit_{i:02d}'] for i, n in enumerate(witness_leaves or ())}
             wit = {n: np.asarray(v)[:real] for n, v in result['wit'].items()}
             sub_pre = np.asarray(named['state.substitute_hp'])[:real] if 'state.substitute_hp' in named else None
@@ -2648,13 +2694,19 @@ def patched_pass(args, *, step_override=None, prepared=None):
                         mons = moved[side] if leaf == 'state.types' else _slots(moved[side], result['physical_to_public'][lane][side])
                         return bool(diff.any()) and not (diff & ~mons).any()
                     cascade_info = dict(ko_sides=ko_mons.any(-1), mon_ok=mon_ok, families=families, effect_ok=effect_ok,
+                                        shed_skin_ok=None if result.get('shed_skin_ok') is None else np.asarray(result['shed_skin_ok'])[lane],
                                         retype_ok=retype_ok)
                 by_cascade = []
                 timing_sides = np.flatnonzero(timing_actors[lane]).tolist() if not cascade else []
                 timing = bool(timing_sides)
+                ss_member_ok = None
+                if changed_rest and 'shedskin' in effects:
+                    ss_values={n:v[lane] for n,v in ss_post.items()}
+                    ss_reference={n:base_ko[n][lane] for n in SHED_SKIN_STATUS_LEAVES if n in base_ko}
+                    ss_member_ok=lambda leaf,side: shed_skin_status_member_ok(leaf,side,ss_values,ss_reference,post_active[lane])
                 unexpected, waived, by_ko = lane_verdict(entries, effects, side_axis, cascade=cascade_info, waive=args.waive or (),
                     cascade_accepted=by_cascade, effect_ok=None if result['effect_ok'] is None else
-                    np.asarray(result['effect_ok'])[lane], timing=timing_sides) if changed_rest and effects else ([], [], [])
+                    np.asarray(result['effect_ok'])[lane], timing=timing_sides, shed_skin_member_ok=ss_member_ok) if changed_rest and effects else ([], [], [])
                 m2_wrong = []
                 if changed_rest and m2_rules and any(e in effects for e in M2_EFFECTS):
                     # M2: an M2 effect's per-mon leaves may differ only at that side's pre- or post-step active.
@@ -2725,7 +2777,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     finally:
         listing.close()
     digest, modules = oracle_digest()
-    failures = counts['changed_but_uninvolved'] + counts['changed_involved_unexpected_fields']
+    failures = counts['changed_but_uninvolved'] + counts['changed_involved_unexpected_fields'] + counts['shed_skin_integrity_failures']
     partial = bool(args.limit) or manifest.get('partial', False)
     # A partial run never passes: passed is None without failures (exit 2), False with them (exit 1).
     report = dict(schema=SCHEMA, digest_format=DIGEST_FORMAT, pass_='patched', plug_ins=plugins, source_commit=rev,

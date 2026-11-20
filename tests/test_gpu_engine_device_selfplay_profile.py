@@ -47,6 +47,21 @@ class FakeJit:
 
 
 class DeviceSelfplayProfileTests(unittest.TestCase):
+    def test_six_field_chance_gather_preserves_optional_streams_and_literal_cure_bank(self):
+        snapshot=fixture()
+        for chance in (ChanceInputs(*snapshot.chance[:6]),snapshot.chance._replace(effect=None),
+                snapshot.chance._replace(shed_skin=None)):
+            original=p.FixedInputs(snapshot.state,snapshot.trackers,snapshot.actions,chance,snapshot.active_rows)
+            tail,meta=p.gather_tail(original,capacity=3)
+            for name in ('effect','shed_skin'):
+                value=getattr(chance,name)
+                if value is None:self.assertIsNone(getattr(tail.chance,name))
+                else:np.testing.assert_array_equal(getattr(tail.chance,name),np.asarray(value)[meta['source_rows']])
+        for value in (j.zeros((4,1),j.int32),j.zeros((4,2),j.float32)):
+            wrong=p.FixedInputs(snapshot.state,snapshot.trackers,snapshot.actions,
+                snapshot.chance._replace(shed_skin=value),snapshot.active_rows)
+            with self.assertRaisesRegex(ValueError,'shed_skin'):p.gather_tail(wrong)
+
     def test_one_lower_compile_repeated_identical_input_and_blocked_intervals(self):
         jit=FakeJit();blocks=[];value=np.array([1,2],np.int32)
         def f(x):self.assertIs(x,value);return x+1
