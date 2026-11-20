@@ -1,0 +1,453 @@
+{
+ "fix": "castform_forecast",
+ "code": "PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED",
+ "ordinal": 461,
+ "decision_index": 18,
+ "battle_id": "battle-gen3randombattle-controlled-2103400076",
+ "owner": "p2",
+ "prefix_sha256": "9b9aa62f0ac523c2fe37190977c533d2c870594dfaa6e0d9c05b6f20b8f9b4cd",
+ "line_count": 224,
+ "main": {
+  "built": 0,
+  "error": "Refusal:PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED",
+  "refusals": {}
+ },
+ "patched": {
+  "built": 16,
+  "error": null,
+  "refusals": {}
+ },
+ "checks": {
+  "per_world": [
+   {
+    "world": 0,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 1,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 2,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 3,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 4,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 5,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 6,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 7,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 8,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 9,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 10,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 11,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 12,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 13,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 14,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   },
+   {
+    "world": 15,
+    "species": "castform",
+    "types": [
+     "fire",
+     null
+    ],
+    "base_types": [
+     "normal",
+     null
+    ]
+   }
+  ]
+ },
+ "request": {
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "request_id": "battle-gen3randombattle-controlled-2103400076:18",
+  "battle_id": "battle-gen3randombattle-controlled-2103400076",
+  "owner": "p2",
+  "stream_id": 1,
+  "decision_index": 18,
+  "generation": 38,
+  "prefix_sha256": "9b9aa62f0ac523c2fe37190977c533d2c870594dfaa6e0d9c05b6f20b8f9b4cd",
+  "lines": [
+   "|t:|1794408632",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794408633",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Delibird|Delibird, L98, M|100/100",
+   "|switch|p2a: Jolteon|Jolteon, L77, M|227/227",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Protect\",\"id\":\"protect\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":true,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408635",
+   "|switch|p1a: Dustox|Dustox, L96, M|100/100",
+   "|move|p2a: Jolteon|Toxic|p1a: Dustox",
+   "|-immune|p1a: Dustox",
+   "|",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Protect\",\"id\":\"protect\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":true,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408638",
+   "|move|p2a: Jolteon|Protect|p2a: Jolteon",
+   "|-singleturn|p2a: Jolteon|Protect",
+   "|move|p1a: Dustox|Toxic|p2a: Jolteon|[miss]",
+   "|-miss|p1a: Dustox|p2a: Jolteon",
+   "|",
+   "|upkeep",
+   "|turn|3",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Protect\",\"id\":\"protect\",\"pp\":15,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":true,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408641",
+   "|switch|p2a: Nidoqueen|Nidoqueen, L82, F|282/282",
+   "|move|p1a: Dustox|Sludge Bomb|p2a: Nidoqueen",
+   "|-resisted|p2a: Nidoqueen",
+   "|-damage|p2a: Nidoqueen|263/282",
+   "|",
+   "|-heal|p2a: Nidoqueen|280/282|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|4",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Sludge Bomb\",\"id\":\"sludgebomb\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"280/282\",\"active\":true,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408643",
+   "|move|p2a: Nidoqueen|Earthquake|p1a: Dustox",
+   "|-damage|p1a: Dustox|66/100",
+   "|move|p1a: Dustox|Whirlwind|p2a: Nidoqueen",
+   "|drag|p2a: Jolteon|Jolteon, L77, M|227/227",
+   "|",
+   "|-heal|p1a: Dustox|72/100|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|5",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Protect\",\"id\":\"protect\",\"pp\":15,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":true,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"280/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408646",
+   "|move|p2a: Jolteon|Protect|p2a: Jolteon",
+   "|-singleturn|p2a: Jolteon|Protect",
+   "|move|p1a: Dustox|Moonlight|p1a: Dustox",
+   "|-heal|p1a: Dustox|100/100",
+   "|",
+   "|upkeep",
+   "|turn|6",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Protect\",\"id\":\"protect\",\"pp\":14,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Ice 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunderbolt\",\"id\":\"thunderbolt\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":true,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"280/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408649",
+   "|switch|p2a: Nidoqueen|Nidoqueen, L82, F|280/282",
+   "|move|p1a: Dustox|Sludge Bomb|p2a: Nidoqueen",
+   "|-resisted|p2a: Nidoqueen",
+   "|-damage|p2a: Nidoqueen|260/282",
+   "|",
+   "|-heal|p2a: Nidoqueen|277/282|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|7",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Sludge Bomb\",\"id\":\"sludgebomb\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":15,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"277/282\",\"active\":true,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408651",
+   "|switch|p1a: Delcatty|Delcatty, L96, F|100/100",
+   "|move|p2a: Nidoqueen|Earthquake|p1a: Delcatty",
+   "|-damage|p1a: Delcatty|66/100",
+   "|",
+   "|-heal|p1a: Delcatty|72/100|[from] item: Leftovers",
+   "|-heal|p2a: Nidoqueen|282/282|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|8",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Sludge Bomb\",\"id\":\"sludgebomb\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":14,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":true,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408654",
+   "|switch|p2a: Magcargo|Magcargo, M|262/262",
+   "|move|p1a: Delcatty|Ice Beam|p2a: Magcargo",
+   "|-resisted|p2a: Magcargo",
+   "|-damage|p2a: Magcargo|236/262",
+   "|",
+   "|-heal|p1a: Delcatty|78/100|[from] item: Leftovers",
+   "|-heal|p2a: Magcargo|252/262|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|9",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Protect\",\"id\":\"protect\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Grass 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"252/262\",\"active\":true,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408657",
+   "|switch|p1a: Qwilfish|Qwilfish, L82, M|100/100",
+   "|move|p2a: Magcargo|Toxic|p1a: Qwilfish",
+   "|-immune|p1a: Qwilfish",
+   "|",
+   "|-heal|p2a: Magcargo|262/262|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|10",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Protect\",\"id\":\"protect\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Grass 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":true,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408659",
+   "|switch|p2a: Groudon|Groudon, L69|252/252",
+   "|-weather|SunnyDay|[from] ability: Drought|[of] p2a: Groudon",
+   "|move|p1a: Qwilfish|Spikes|p2a: Groudon",
+   "|-sidestart|p2: PokeZeroBot|Spikes",
+   "|",
+   "|-weather|SunnyDay|[upkeep]",
+   "|upkeep",
+   "|turn|11",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":48,\"maxpp\":48,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":true,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408662",
+   "|switch|p1a: Delcatty|Delcatty, L96, F|78/100",
+   "|move|p2a: Groudon|Thunder Wave|p1a: Delcatty",
+   "|-status|p1a: Delcatty|par",
+   "|",
+   "|-weather|SunnyDay|[upkeep]",
+   "|-heal|p1a: Delcatty|84/100 par|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|12",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":48,\"maxpp\":48,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":true,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408665",
+   "|move|p2a: Groudon|Swords Dance|p2a: Groudon",
+   "|-boost|p2a: Groudon|atk|2",
+   "|cant|p1a: Delcatty|par",
+   "|",
+   "|-weather|SunnyDay|[upkeep]",
+   "|-heal|p1a: Delcatty|90/100 par|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|13",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":47,\"maxpp\":48,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":true,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408667",
+   "|move|p2a: Groudon|Earthquake|p1a: Delcatty",
+   "|-damage|p1a: Delcatty|14/100 par",
+   "|move|p1a: Delcatty|Ice Beam|p2a: Groudon",
+   "|-supereffective|p2a: Groudon",
+   "|-damage|p2a: Groudon|114/252",
+   "|",
+   "|-weather|SunnyDay|[upkeep]",
+   "|-heal|p2a: Groudon|129/252|[from] item: Leftovers",
+   "|-heal|p1a: Delcatty|20/100 par|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|14",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":31,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":15,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":47,\"maxpp\":48,\"target\":\"self\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"129/252\",\"active\":true,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"272/272\",\"active\":false,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408670",
+   "|switch|p2a: Castform|Castform, L90, M|272/272",
+   "|-damage|p2a: Castform|238/272|[from] Spikes",
+   "|-formechange|p2a: Castform|Castform-Sunny|[msg]|[from] ability: Forecast",
+   "|cant|p1a: Delcatty|par",
+   "|",
+   "|-weather|SunnyDay|[upkeep]",
+   "|-heal|p2a: Castform|255/272|[from] item: Leftovers",
+   "|-heal|p1a: Delcatty|26/100 par|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|15",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"255/272\",\"active\":true,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"129/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408673",
+   "|move|p2a: Castform|Ice Beam|p1a: Delcatty",
+   "|-damage|p1a: Delcatty|2/100 par",
+   "|move|p1a: Delcatty|Thunderbolt|p2a: Castform",
+   "|-damage|p2a: Castform|188/272",
+   "|",
+   "|-weather|SunnyDay|[upkeep]",
+   "|-heal|p2a: Castform|205/272|[from] item: Leftovers",
+   "|-heal|p1a: Delcatty|8/100 par|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|16",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":15,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"205/272\",\"active\":true,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"129/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408675",
+   "|switch|p1a: Dustox|Dustox, L96, M|100/100",
+   "|move|p2a: Castform|Ice Beam|p1a: Dustox",
+   "|-damage|p1a: Dustox|80/100",
+   "|",
+   "|-weather|SunnyDay|[upkeep]",
+   "|-heal|p1a: Dustox|86/100|[from] item: Leftovers",
+   "|-heal|p2a: Castform|222/272|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|17",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":14,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"222/272\",\"active\":true,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"129/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408678",
+   "|switch|p1a: Qwilfish|Qwilfish, L82, M|100/100",
+   "|move|p2a: Castform|Fire Blast|p1a: Qwilfish",
+   "|-resisted|p1a: Qwilfish",
+   "|-damage|p1a: Qwilfish|54/100",
+   "|",
+   "|-weather|SunnyDay|[upkeep]",
+   "|-heal|p1a: Qwilfish|60/100|[from] item: Leftovers",
+   "|-heal|p2a: Castform|239/272|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|18",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":14,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":7,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Return 102\",\"id\":\"return\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Thunder Wave\",\"id\":\"thunderwave\",\"pp\":32,\"maxpp\":32,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"239/272\",\"active\":true,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"129/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794408681",
+   "|move|p1a: Qwilfish|Self-Destruct|p2a: Castform",
+   "|-damage|p2a: Castform|0 fnt",
+   "|faint|p1a: Qwilfish",
+   "|faint|p2a: Castform",
+   "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"129/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Castform\",\"details\":\"Castform, L90, M\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":177,\"def\":177,\"spa\":177,\"spd\":177,\"spe\":177},\"moves\":[\"icebeam\",\"fireblast\",\"return102\",\"thunderwave\"],\"baseAbility\":\"forecast\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Magcargo\",\"details\":\"Magcargo, M\",\"condition\":\"262/262\",\"active\":false,\"stats\":{\"atk\":107,\"def\":297,\"spa\":216,\"spd\":217,\"spe\":117},\"moves\":[\"protect\",\"fireblast\",\"toxic\",\"hiddenpowergrass\"],\"baseAbility\":\"flamebody\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"129/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"thunderwave\",\"rockslide\",\"earthquake\",\"swordsdance\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Jolteon\",\"details\":\"Jolteon, L77, M\",\"condition\":\"227/227\",\"active\":false,\"stats\":{\"atk\":106,\"def\":136,\"spa\":214,\"spd\":191,\"spe\":245},\"moves\":[\"toxic\",\"protect\",\"hiddenpowerice\",\"thunderbolt\"],\"baseAbility\":\"voltabsorb\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoqueen\",\"details\":\"Nidoqueen, L82, F\",\"condition\":\"282/282\",\"active\":false,\"stats\":{\"atk\":182,\"def\":190,\"spa\":170,\"spd\":187,\"spe\":172},\"moves\":[\"sludgebomb\",\"icebeam\",\"earthquake\",\"substitute\"],\"baseAbility\":\"poisonpoint\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Kangaskhan\",\"details\":\"Kangaskhan, L79, F\",\"condition\":\"295/295\",\"active\":false,\"stats\":{\"atk\":196,\"def\":172,\"spa\":109,\"spd\":172,\"spe\":188},\"moves\":[\"return102\",\"earthquake\",\"wish\",\"protect\"],\"baseAbility\":\"earlybird\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+ }
+}

@@ -21,8 +21,13 @@ class Mapping:
     refusals: tuple[str, ...]
 
 
-def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None):
+def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, live_types=False):
     """Trusted lower mapping; the public-root factory supplies source inputs.
+
+    ``live_types`` admits a mon whose types differ from its original static
+    species types (a public Color Change ``typechange`` or Forecast forme the
+    CPU materializer applied): types are written live and base_types from the
+    original dex row, never from the live value. Off, such a mon refuses.
 
     ``turn`` is the displayed public request turn. ORIGINAL BattleState.turn
     counts completed ordinary turns, so its exact value here is turn-1.
@@ -46,7 +51,8 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None):
         if set(side.volatile_statuses)-{'leechseed','substitute','truant'}:reasons.append(f'volatile:{seat}')
         if side.volatile_status_durations:reasons.append(f'volatile-clock:{seat}')
         for slot,mon in enumerate(side.pokemon):
-            if mon.pre_transform is not None or mon.base_types not in (None,mon.types):reasons.append(f'transformed-types:{seat}:{slot}')
+            if mon.pre_transform is not None or (mon.base_types not in (None,mon.types) and not (live_types and dex is not None)):
+                reasons.append(f'transformed-types:{seat}:{slot}')
             if mon.base_ability not in (None,mon.ability):reasons.append(f'copied-ability:{seat}:{slot}')
             if mon.status=='sleep' or mon.rest_turns or mon.rest_sleep_pending_refund or mon.sleep_turns:
                 reasons.append(f'sleep-clock:{seat}:{slot}')
@@ -134,7 +140,8 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None):
                 base=[identity('types',value,none=True) for value in base]
                 if not 1<=len(base)<=2:raise ValueError('base-type-count')
                 base=base+[0]*(2-len(base))
-                if base!=arrays['types'][address].tolist():raise ValueError('changed-types-base-unavailable')
+                if base!=arrays['types'][address].tolist() and not (live_types and dex is not None):
+                    raise ValueError('changed-types-base-unavailable')
                 arrays['base_types'][address]=base
                 mood=happiness[seat][slot]
                 if type(mood) is not int or not 0<=mood<=255:raise ValueError('packed-happiness')
