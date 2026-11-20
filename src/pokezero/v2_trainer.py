@@ -40,6 +40,7 @@ from pathlib import Path
 import tempfile
 
 from . import v5_contract as contract, v5_data, v5_training as v5
+from .v2_lr_start import LRStart
 from .v5_contract import MAX_VARIANTS, OBSERVATION_SCHEMA_VERSION_V5, TRAINING_CONTRACT_SCHEMA
 from .v5_loss import BASE_PPO_FIELDS, FLOAT_FIELDS, INTEGER_FIELDS, MASK_FIELDS, SEARCH_FIELDS, V5LossConfig, v5_loss
 from .v5_model import MODEL_INPUTS, TOKEN_ROLES, V5ModelConfig, V5Output, forward_v5, require_v5_bindings
@@ -74,7 +75,7 @@ class NonFiniteUpdate(RuntimeError):
 
 @dataclass(frozen=True)
 class V2Config:
-    """Execution choices; none of these is part of the v5 checkpoint math recipe.
+    """V2 execution and learning-rate start choices.
 
     order: ``ordered`` reproduces the original cache reader: per-segment
         sequential slices with each segment's short last batch. ``shuffled``
@@ -97,6 +98,8 @@ class V2Config:
         first-order backward opaque to compiler decomposition (explicit opt-in).
     fallback_random: request compiler native random/dropout behavior; this
         alone is not a guarantee of eager RNG/statistic parity.
+    lr_start: optional global update warmup and scaled peak. The declared
+        game windows account for inputs but do not drive the warmup.
     """
     order: str = 'ordered'
     order_seed: int | None = None
@@ -109,8 +112,16 @@ class V2Config:
     role_routing: str = 'indexed'
     native_embedding_backward: bool = False
     fallback_random: bool = False
+    lr_start: LRStart | None = None
 
     def __post_init__(self):
+        if type(self.lr_start) is dict:
+            try:
+                object.__setattr__(self, 'lr_start', LRStart(**self.lr_start))
+            except TypeError as error:
+                raise ValueError('invalid LR-start declaration') from error
+        if self.lr_start is not None and type(self.lr_start) is not LRStart:
+            raise ValueError('explicit LR-start declaration required')
         if (self.order not in ORDERS or self.mode not in MODES or self.optimizer not in OPTIMIZERS
                 or type(self.check_interval) is not int or self.check_interval <= 0
                 or self.order_seed is not None and (type(self.order_seed) is not int or not 0 <= self.order_seed < 2**63)
@@ -664,6 +675,7 @@ class Runtime:
     window: v5.DeclaredGameWindow | None = None
     failed: str | None = None
     self_moves: bool = False
+    lr_start_origin: tuple[int, int] | None = None
 
 
 def _distributed(process_group):
@@ -707,6 +719,8 @@ def _create_runtime(model_config, loss_config, train_config, v2_config, *, enabl
     v2_config = V2Config() if v2_config is None else v2_config
     if type(v2_config) is not V2Config:
         raise ValueError('explicit V2 configuration required')
+    if v2_config.lr_start is not None:
+        v2_config.lr_start.validate_training(train_config)
     torch = _torch()
     device = train_config.device if device is None else device
     placed = replace(train_config, device=device)
@@ -842,7 +856,7 @@ class Trainer:
         rt = self.runtime; config = rt.train_config
         if type(store) is not RowStore or not _same_device(store.device, rt.device):
             raise ValueError('row store on the runtime device required')
-        scheduled = config.learning_rate_schedule != 'constant'
+        scheduled = config.learning_rate_schedule != 'constant' or rt.v2_config.lr_start is not None
         if scheduled and type(window) is not v5.DeclaredGameWindow:
             raise ValueError('explicit immutable declared-game learning-rate window required')
         if not scheduled and window is not None:
@@ -868,6 +882,8 @@ class Trainer:
                     raise ValueError('a new row store requires its own declared window')
             rt.cursor = dict(epoch=0, step=0, epochs=config.epochs, steps_per_epoch=order.steps_per_epoch, complete=False)
             rt.order = description; rt.window = window
+            if rt.v2_config.lr_start is not None:
+                rt.lr_start_origin = (rt.steps, rt.rows)
         key = (id(store), _sha(description))
         if self._order_key != key:
             self._order = order; self._order_key = key; self._device_permutation = None
@@ -975,11 +991,14 @@ class Trainer:
         order = self._bind(store, window)
         cursor = rt.cursor; pad = rt.v2_config.pads(self.mode)
         updates = []; pending = []; current_rate = None
+        lr_start = rt.v2_config.lr_start
+        start_step, start_row = rt.steps, rt.rows
         with v5._rng_scope(torch, rt.device, state=rt.rng):
             rt.model.train()
             while not cursor['complete'] and (max_updates is None or len(updates) + len(pending) < max_updates):
                 epoch, step = cursor['epoch'], cursor['step']
-                rate = learning_rate(config, rt.window, epoch + 1)
+                rate = (learning_rate(config, rt.window, epoch + 1) if lr_start is None
+                    else lr_start.rate(config.learning_rate, rt.steps))
                 if rate != current_rate:
                     for group in rt.optimizer.param_groups:
                         group['lr'] = rate
@@ -999,8 +1018,12 @@ class Trainer:
             if pending:
                 updates.extend(self._flush(pending))
             rt.rng = v5._rng_state(torch, rt.device.startswith('cuda'))
-        return dict(schema=V2_SCHEMA, steps=rt.steps, rows=rt.rows, complete=cursor['complete'],
+        report = dict(schema=V2_SCHEMA, steps=rt.steps, rows=rt.rows, complete=cursor['complete'],
             cursor=dict(cursor), updates=updates, mode=self.mode_report())
+        if lr_start is not None:
+            report['lr_start'] = dict(policy=asdict(lr_start), declared_window=asdict(rt.window),
+                start_update=start_step, end_update=rt.steps, start_row=start_row, end_row=rt.rows)
+        return report
 
     def _flush(self, pending):
         torch = _torch(); rt = self.runtime
@@ -1065,15 +1088,84 @@ def _v5_metadata(runtime):
 
 
 def _v2_section(runtime, rng_by_rank):
-    return dict(schema=V2_SCHEMA, config=asdict(runtime.v2_config), world_size=runtime.world_size,
+    config = asdict(runtime.v2_config)
+    if runtime.v2_config.lr_start is None:
+        config.pop('lr_start')
+    section = dict(schema=V2_SCHEMA, config=config, world_size=runtime.world_size,
         steps=runtime.steps, rows=runtime.rows, cursor=runtime.cursor, order=runtime.order,
         window=None if runtime.window is None else asdict(runtime.window),
         optimizer_flags={name: runtime.optimizer.param_groups[0][name] for name in _V5_GROUP_FLAGS},
         rng_by_rank=rng_by_rank)
+    if runtime.v2_config.lr_start is not None:
+        section['lr_start_origin'] = runtime.lr_start_origin
+    return section
 
 
 def _v2_digest(section):
     return _sha({key: value for key, value in section.items() if key != 'rng_by_rank'})
+
+
+def _validate_lr_start_checkpoint(section, metadata, optimizer, config, lr_start):
+    """Verify the saved update clock against its bound input and last applied LR."""
+    if lr_start is None:
+        if 'lr_start_origin' in section or 'lr_start' in section['config']:
+            raise ValueError('incomplete LR-start declaration in checkpoint')
+        return None
+    lr_start.validate_training(config)
+    if 'lr_start_origin' not in section:
+        raise ValueError('LR-start checkpoint missing its window origin')
+    steps, rows = section['steps'], section['rows']
+    if any(type(value) is not int or value < 0 or type(metadata.get(key)) is not int or metadata[key] != value
+           for key, value in (('steps', steps), ('rows', rows))):
+        raise ValueError('LR-start checkpoint counters differ')
+    groups = optimizer.get('param_groups')
+    last_rate = config.learning_rate if steps == 0 else lr_start.rate(config.learning_rate, steps - 1)
+    if not isinstance(groups, list) or not groups or any(
+            type(group) is not dict or type(group.get('lr')) is not float or group['lr'] != last_rate
+            for group in groups):
+        raise ValueError('LR-start optimizer rate differs from the saved update clock')
+
+    origin, cursor, order, raw_window = (section[key] for key in
+        ('lr_start_origin', 'cursor', 'order', 'window'))
+    if cursor is None:
+        if steps or rows or any(value is not None for value in (origin, order, raw_window)):
+            raise ValueError('unbound LR-start checkpoint has progress')
+        return None
+    if type(origin) is not tuple or len(origin) != 2 or any(type(x) is not int or x < 0 for x in origin):
+        raise ValueError('invalid LR-start window origin')
+    if type(raw_window) is not dict or type(order) is not dict or type(cursor) is not dict:
+        raise ValueError('LR-start checkpoint missing window or batch accounting')
+    window = v5.DeclaredGameWindow(**raw_window)
+    if window.start_game == 0 and origin != (0, 0):
+        raise ValueError('the first LR-start window must begin at the initial counters')
+    if section['config'].get('distributed_rows'):
+        counts = order.get('global_counts')
+        ranks = section['world_size']
+        if (type(counts) is not list or type(ranks) is not int or ranks < 1
+                or config.batch_size % ranks or order.get('rank_count') != ranks
+                or order.get('batch_size') != config.batch_size // ranks
+                or order.get('rows') != len(counts) * order['batch_size']
+                or any(type(count) is not int or not 0 < count <= config.batch_size for count in counts)):
+            raise ValueError('invalid canonical LR-start batch counts')
+    else:
+        segments = order.get('segments')
+        if (type(segments) is not list or any(type(count) is not int or count < 0 for count in segments)
+                or order.get('rows') != sum(segments) or order.get('batch_size') != config.batch_size
+                or order.get('world_size') != section['world_size']):
+            raise ValueError('invalid LR-start batch order')
+        geometry = BatchOrder(order['rows'], segments, config.batch_size,
+            order=order['order'], seed=order['seed'], world_size=section['world_size'])
+        counts = [geometry.step_rows(i) for i in range(geometry.steps_per_epoch)]
+    epoch, step = cursor.get('epoch'), cursor.get('step')
+    complete = cursor.get('complete')
+    if (not counts or type(epoch) is not int or type(step) is not int or type(complete) is not bool
+            or not 0 <= epoch <= config.epochs or not 0 <= step < len(counts)
+            or cursor.get('epochs') != config.epochs or cursor.get('steps_per_epoch') != len(counts)
+            or complete != (epoch == config.epochs) or complete and step != 0
+            or steps != origin[0] + epoch * len(counts) + step
+            or rows != origin[1] + epoch * sum(counts) + sum(counts[:step])):
+        raise ValueError('LR-start checkpoint cursor and counters differ')
+    return origin
 
 
 class CheckpointWriteError(RuntimeError):
@@ -1127,6 +1219,8 @@ def _write_checkpoint(path, runtime, rng_by_rank):
         state_dict={name: value.detach().cpu().clone() for name, value in runtime.model.state_dict().items()},
         optimizer_state=_canonical_optimizer_state(runtime.optimizer), rng=rng_by_rank[0],
         v2=section, v2_sha256=_v2_digest(section))
+    _validate_lr_start_checkpoint(section, metadata, payload['optimizer_state'],
+        runtime.train_config, runtime.v2_config.lr_start)
     with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.' + path.name + '.', suffix='.tmp', delete=False) as stream:
         temporary = Path(stream.name)
         try:
@@ -1204,6 +1298,10 @@ def _restore_checkpoint(path, *, enable_v5, v2_config, expected_model_config, ex
             raise ValueError('explicit resume configuration differs')
     saved = V2Config(**section['config'])
     v2_config = saved if v2_config is None else v2_config
+    if saved.lr_start != v2_config.lr_start:
+        raise ValueError('resume requires the original LR-start declaration')
+    lr_start_origin = _validate_lr_start_checkpoint(section, metadata, payload['optimizer_state'],
+        training, saved.lr_start)
     if saved.distributed_rows != v2_config.distributed_rows:
         raise ValueError('resume cannot change distributed row/loss semantics')
     if saved.role_routing != v2_config.role_routing:
@@ -1225,6 +1323,7 @@ def _restore_checkpoint(path, *, enable_v5, v2_config, expected_model_config, ex
     runtime.steps = section['steps']; runtime.rows = section['rows']
     runtime.cursor = section['cursor']; runtime.order = section['order']
     runtime.window = None if section['window'] is None else v5.DeclaredGameWindow(**section['window'])
+    runtime.lr_start_origin = lr_start_origin
     runtime.rng = section['rng_by_rank'][runtime.rank]
     with v5._rng_scope(torch, runtime.device, state=runtime.rng):
         pass

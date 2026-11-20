@@ -15,7 +15,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-from pokezero import checkpoint_self_moves as encoding, v2_distributed as vd, v2_trainer as v2
+from pokezero import checkpoint_self_moves as encoding, v2_distributed as vd, v2_trainer as v2, v5_training as v5
+from pokezero.v2_lr_start import LRStart, scaled_peak_rate
 import test_v2_trainer as fixture
 
 try:
@@ -35,7 +36,7 @@ def example(dropout=0.):
     return model, loss, train, store, keys, batches
 
 
-def rank_test(rank, world, directory, dropout):
+def rank_test(rank, world, directory, dropout, lr_start=None):
     import torch.distributed as dist
     torch.set_num_threads(1)
     dist.init_process_group('gloo', init_method='file://' + str(Path(directory) / 'rendezvous'),
@@ -45,27 +46,39 @@ def rank_test(rank, world, directory, dropout):
         selected = np.flatnonzero(np.arange(full.rows) % world == rank)
         local = v2.row_store({**{k: t[selected] for k, t in full.tensors.items()}, **full.bindings,
             'terminal_status': tuple(full.terminal_status[i] for i in selected)}, model, loss, store_id='fixed')
-        config = v2.V2Config(mode='eager', optimizer='single', distributed_rows=True, check_interval=3)
+        window = None
+        if lr_start is not None:
+            train = replace(train, learning_rate=scaled_peak_rate(train.batch_size, lr_start.scaling))
+            window = v5.DeclaredGameWindow(0, 23, 46)
+        config = v2.V2Config(mode='eager', optimizer='single', distributed_rows=True, check_interval=3,
+                             lr_start=lr_start)
         runtime = v2.create(model, loss, train, config, enable_v5=True, process_group=dist.group.WORLD)
         store = vd.distribute_store(local, keys[selected], batches, runtime)
         trainer = vd.DistributedTrainer(runtime)
-        prefix = trainer.train(store, max_updates=3)
+        prefix = trainer.train(store, window=window, max_updates=3)
         checkpoint = Path(directory) / 'resume.pt'
         receipt = [v2.save_checkpoint(checkpoint, runtime)]
         dist.broadcast_object_list(receipt, src=0, group=dist.group.WORLD)
         binding = dict(expected_self_moves=False, expected_checkpoint_sha256=receipt[0]['sha256'],
                        off_provenance=encoding.off_from_receipt(receipt[0]['encoding_receipt']))
-        suffix = trainer.train(store)
+        suffix = trainer.train(store, window=window)
         expected = {k: t.clone() for k, t in runtime.model.state_dict().items()}
         resumed = v2.load_checkpoint(checkpoint, enable_v5=True, process_group=dist.group.WORLD, **binding)
-        again = vd.DistributedTrainer(resumed).train(store)
+        again = vd.DistributedTrainer(resumed).train(store, window=window)
         for k, t in resumed.model.state_dict().items():
             if not torch.equal(t, expected[k]):
                 raise AssertionError('same-rank resume differs: ' + k)
         if again['updates'] != suffix['updates']:
             raise AssertionError('resume metrics/cursor differ')
+        if lr_start is not None:
+            assertions = unittest.TestCase()
+            fixture.fixture.assert_tree_equal(assertions, runtime.rng, resumed.rng)
+            fixture.fixture.assert_tree_equal(assertions, runtime.optimizer.state_dict(), resumed.optimizer.state_dict())
+            assertions.assertEqual(again['lr_start'], suffix['lr_start'])
+            assertions.assertEqual(runtime.cursor, resumed.cursor)
         try:
-            v2.load_checkpoint(checkpoint, enable_v5=True, v2_config=v2.V2Config(), process_group=dist.group.WORLD,
+            v2.load_checkpoint(checkpoint, enable_v5=True, v2_config=v2.V2Config(lr_start=lr_start),
+                               process_group=dist.group.WORLD,
                                **binding)
         except ValueError as exc:
             if 'semantics' not in str(exc):
@@ -148,10 +161,10 @@ class DistributedTests(unittest.TestCase):
     def setUp(self):
         torch.set_num_threads(1)
 
-    def run_ranks(self, world, dropout=0.):
+    def run_ranks(self, world, dropout=0., lr_start=None):
         import torch.multiprocessing as mp
         with tempfile.TemporaryDirectory() as directory:
-            mp.spawn(rank_test, args=(world, directory, dropout), nprocs=world, join=True)
+            mp.spawn(rank_test, args=(world, directory, dropout, lr_start), nprocs=world, join=True)
             return torch.load(Path(directory) / 'result.pt', weights_only=True)
 
     def test_four_ranks_match_original_global_update_and_resume(self):
@@ -184,6 +197,14 @@ class DistributedTests(unittest.TestCase):
 
     def test_rank_dropout_streams_resume_exactly(self):
         self.run_ranks(2, dropout=.2)
+
+    def test_four_rank_global_lr_start_resumes_with_rank_local_dropout(self):
+        start = LRStart('sqrt', 5)
+        result = self.run_ranks(4, dropout=.2, lr_start=start)
+        peak = scaled_peak_rate(8, 'sqrt')
+        self.assertEqual((result['steps'], result['rows']), (8, 46))
+        self.assertEqual([update['learning_rate'] for update in result['updates']],
+                         [peak * min(step / 5, 1.) for step in range(1, 9)])
 
 
 if __name__ == '__main__':
