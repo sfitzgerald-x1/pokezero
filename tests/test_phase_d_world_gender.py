@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import unittest
 
 from pokezero.determinization import _sample_gender
+from tests._showdown_root import showdown_root
 
 
 class WorldGenderTests(unittest.TestCase):
@@ -20,7 +21,7 @@ class WorldGenderTests(unittest.TestCase):
             self.assertEqual(rng.getstate(), before)
 
     def test_chi_square_against_actual_generator_and_constructor(self):
-        root = os.environ['POKEZERO_SHOWDOWN_ROOT']
+        root = showdown_root()
         commit = subprocess.check_output(['git', '-C', root, 'rev-parse', 'HEAD'], text=True).strip()
         self.assertTrue(commit.startswith('f76228a1'), commit)
         rows = json.loads(subprocess.check_output([os.environ.get('NODE', 'node'),
