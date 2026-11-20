@@ -66,7 +66,7 @@ class NativeLedgerTests(unittest.TestCase):
 
     def test_missing_dispatch_slot_is_fatal_without_first_id_fallback(self):
         trace=Trace();trace.dispatch(getter=False)
-        with self.assertRaisesRegex(UnmappedNativeHistory,'missing or ambiguous'):
+        with self.assertRaisesRegex(UnmappedNativeHistory,'missing actual Native dispatch-slot witness; no ID/ordinal fallback'):
             ledger().consume(trace.rows)
 
     def test_failed_before_move_preserves_previous_side_history(self):

@@ -133,7 +133,7 @@ class NativeChoiceAndTrapTest(unittest.TestCase):
         args = dict(original_species=inputs['original_species'], conditions=conditions)
         self.assertEqual(project_trapped(boundary, **args)['trapped'].tolist(), [[False, False]])
         boundary.history['trap_causes'] = [dict(actor=[0, 0], causes=[
-            dict(effect=dict(id='other'), sequence=6),
+            dict(effect=dict(id='other', effect_type='Ability'), sequence=6),
         ])]
         with self.assertRaisesRegex(ValueError, 'unexplained contribution'):
             project_trapped(boundary, **args)
