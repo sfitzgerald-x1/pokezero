@@ -889,7 +889,7 @@ class NativeHistory:
             last_active_install=list(self.last_active_install),
             double_faint_trap_proofs=[dict(actor=list(k), causes=v) for k,v in sorted(self.double_faint_trap_proofs.items())],
             retired_fainted_trap_proofs=[dict(actor=list(k), causes=v) for k,v in sorted(self.retired_fainted_trap_proofs.items())],
-            last_active_install=list(self.last_active_install),last_trap_refresh=self.last_trap_refresh,
+            last_trap_refresh=self.last_trap_refresh,
             rest_state_objects=sorted(self.rest_states),encore_slots=[dict(actor=list(k[:2]),state_object=k[2],**v) for k,v in sorted(self.encore_slots.items())],
             weather_creation=self.weather_creation,phase_epoch=self.phase_epoch,old_stall=self.old_stall,
             stall_refreshed=[dict(actor=list(k),**v) for k,v in sorted(self.stall_refreshed.items())],
