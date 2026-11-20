@@ -203,9 +203,9 @@ dict keys and leaves two members None). This module turns prepared roots into De
   - A Pokemon benched after a type change: the device carry keeps the changed types (nothing clears shown_types before
     the next install); B2 clears its overlay at the next arrival and the worlds' engine types are base types, so the
     fill writes the species' types, as B2's encoding shows.
-  - Values the device path never writes but from_b2 copies from B2 (choice_locked, wrap_trap_turns, item_swapped,
-    B2-only volatile bits, the items-removed credits): kept, as B2's encoding shows them. In search the three
-    mon_features are not reset on switch-in (the install hook's reset list omits them); the volatile bits are.
+  - Values copied from B2 at the root include choice_locked, wrap_trap_turns, item_swapped, B2-only volatile bits and
+    items-removed credits. In search, hooks.install resets the three mon_features and volatile bits on arrival;
+    baton_copy can then restore a carried partial-trap clock. Cumulative items-removed credits are not arrival-reset.
 - build: W worlds become K = W/2 blocks of two, one Request per block, packed into ONE frame (row = the root's rows[b],
   root-major), since the worlds are pre-built (no per-block recipe or re-materialization). Plans are synthesized:
   selected=True (the quarter selection is bypassed), Start(world index, the constructor's world seed, no fixtures,
