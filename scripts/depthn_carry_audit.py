@@ -179,7 +179,7 @@ EFFECTS = (
          'probes: 10 perishsong* scenarios (perishsong, _tie, _last_faster, _baton, _switch, _meanlook, _soundproof, _soundproof_user, '
          '_protect_sub, _reuse), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4)',
          'live roots: since #1949 a held perish count is built (both sides): the protocol world\'s typed mapper writes the shown count '
-         '(gpu_engine/phase_d_protocol_world.py:693 -> v5_hypothetical_state.py:146, held_volatiles) and the protocol world writes '
+         '(gpu_engine/phase_d_protocol_world.py:693 -> v5_hypothetical_state.py:149, held_volatiles) and the protocol world writes '
          'Showdown\'s duration, 4 for the silent perish3 of the Song\'s own turn, carried across a Baton Pass '
          '(gpu_engine/phase_d_protocol_world.py:242-257, 329-339); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:379); '
          'gpu_engine/public_active.py:47, 218-234 keeps the public counts for the encoder'),
@@ -203,8 +203,8 @@ EFFECTS = (
         ('Showdown data/moves.ts:3479-3520: the destinybond volatile ends only at the user\'s next move (onBeforeMove)',
          'in-tree since A2 (286a5ffe): gpu_engine/state.py:21 DESTINY_BOND; effects.py:46; transition.py:952-956 its end at the '
          'holder\'s next move',
-         'live roots: since #1949 a bonded active is built with the DESTINY_BOND bit: our own by gpu_engine/phase_d_live_worlds.py:396, '
-         'the opponent\'s by the protocol world\'s typed mapper (gpu_engine/v5_hypothetical_state.py:144, held_volatiles)'),
+         'live roots: since #1949 a bonded active is built with the DESTINY_BOND bit: our own by gpu_engine/phase_d_live_worlds.py:398, '
+         'the opponent\'s by the protocol world\'s typed mapper (gpu_engine/v5_hypothetical_state.py:146, held_volatiles)'),
         'Gengar, Wobbuffet, Qwilfish, Banette.', engine_since='286a5ffe'),
     Effect('transform', ('transform',), ('ditto', 'mew'), False,
         'request_source_rules.cjs:65-66 transform is a missing origin -> engine_request_source.py:380',
@@ -214,7 +214,7 @@ EFFECTS = (
          'copy; transform.py:132 revert), in-tree from the Transform PR and still guarded (tier A) until its merge is the engine_since; '
          'public_refresh_stream.py:17 is the encoder\'s public refresh only',
          'gpu_engine/phase_d_live_worlds.py:308-311: transformed roots require owning history and checked donor evidence; '
-         'phase_d_live_worlds.py:521-522 materializes the copied state'),
+         'phase_d_live_worlds.py:523-524 materializes the copied state'),
         'Ditto and Mew. Checked transformed roots are materialized; the effect can be carried at the root or used in search.'),
     Effect('trick_lock', ('trick',), ('furret', 'kecleon'), False, '',
         'items swap: the user\'s Choice Band choice-locks the target from its next move, the user gets the target\'s item',
