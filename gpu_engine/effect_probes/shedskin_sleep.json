@@ -1,0 +1,222 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "shedskin_sleep",
+ "note": "Pinned f76228a1 Shed Skin: 33/100 at order10/subOrder3; successful cure clears status counters. Failed rolls retain status until a forced later cure, ensuring a base mismatch.",
+ "teams": [
+  [
+   {
+    "species": "Dusclops",
+    "ability": "Pressure",
+    "item": "",
+    "moves": [
+     "spore",
+     "splash",
+     "rest",
+     "protect"
+    ],
+    "evs": {
+     "spe": 252
+    },
+    "gender": "M",
+    "level": 100
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers",
+    "gender": "M",
+    "level": 100
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers",
+    "gender": "M",
+    "level": 100
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers",
+    "gender": "M",
+    "level": 100
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers",
+    "gender": "M",
+    "level": 100
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "gender": "M",
+    "level": 100
+   }
+  ],
+  [
+   {
+    "species": "Dragonair",
+    "ability": "Shed Skin",
+    "item": "",
+    "moves": [
+     "splash",
+     "rest",
+     "protect",
+     "toxic"
+    ],
+    "evs": {
+     "spe": 0
+    },
+    "gender": "M",
+    "level": 100
+   },
+   {
+    "species": "Starmie",
+    "moves": [
+     "splash",
+     "surf",
+     "recover",
+     "protect"
+    ],
+    "ability": "Illuminate",
+    "item": "Leftovers",
+    "gender": "M",
+    "level": 100
+   },
+   {
+    "species": "Skarmory",
+    "moves": [
+     "splash",
+     "protect",
+     "spikes",
+     "peck"
+    ],
+    "ability": "Keen Eye",
+    "item": "Leftovers",
+    "gender": "M",
+    "level": 100
+   },
+   {
+    "species": "Swampert",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "earthquake"
+    ],
+    "ability": "Torrent",
+    "item": "Leftovers",
+    "gender": "M",
+    "level": 100
+   },
+   {
+    "species": "Metagross",
+    "moves": [
+     "splash",
+     "protect",
+     "meteormash",
+     "earthquake"
+    ],
+    "ability": "Clear Body",
+    "item": "Leftovers",
+    "gender": "M",
+    "level": 100
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "gender": "M",
+    "level": 100
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 1"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "shed_skin.1",
+   "steps": [
+    0
+   ],
+   "values": [
+    0,
+    32,
+    33,
+    99
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ],
+ "tape_steps": {
+  "1": {
+   "shed_skin.1": 32
+  },
+  "2": {
+   "shed_skin.1": 99
+  }
+ }
+}

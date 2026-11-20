@@ -78,6 +78,7 @@ FIELD_POLICY = {
     "winner": "derived from all12 party HP; inconsistency refuses",
     "truant_loaf": "native active TRUANT residual clock; bench clock overwritten on entry",
     "item_knocked": "permanent knocked-off flag; native removed item (item none), refused beside a Trick inventory",
+    "shed_skin_draws": "future-reused while suspended; otherwise inactive independent residual cure roll",
     "effect_draws": "future-reused while suspended; otherwise consumed inactive draws (appended effect stream)",
     "recharge_counter": "native MUSTRECHARGE duration; a live recharge refuses until the native No Move action mapping is certified",
     "perish_counter": "native PERISH volatile count; a live count refuses until the native PERISH4..1 mapping is certified",
@@ -144,6 +145,7 @@ NATIVE_PATHS = {
     "done": ("derived from complete party HP",), "winner": ("derived from complete party HP",),
     "truant_loaf": ("side[].volatile_statuses.TRUANT",),
     "item_knocked": ("side[].pokemon[].item: none (no native itemKnockedOff; only Trick reads it)",),
+    "shed_skin_draws": ("EXTERNAL_CHANCE: independent residual cure, saved while suspended",),
     "effect_draws": ("EXTERNAL_CHANCE: future-reused while suspended; otherwise consumed inactive draw",),
     "recharge_counter": ("side[].volatile_statuses.MUSTRECHARGE (refused while nonzero)",),
     "perish_counter": ("side[].volatile_statuses.PERISH4..PERISH1 (refused while nonzero)",),
@@ -183,7 +185,7 @@ SHAPES.update({name: (2,) for name in ("active", "entry_pending", "active_turns"
 SHAPES.update({name: () for name in ("queued_actor", "pending_residual", "replacement_count", "weather",
     "weather_counter", "turn", "done", "winner")})
 SHAPES.update(types=(2, 6, 2), base_types=(2, 6, 2), stats=(2, 6, 6), moves=(2, 6, 4), pp=(2, 6, 4), disabled=(2, 6, 4),
-    boosts=(2, 6, 7), residual_draws=(2, 12), effect_draws=(2, 5),
+    boosts=(2, 6, 7), residual_draws=(2, 12), effect_draws=(2, 5), shed_skin_draws=(2,),
     transform_stats=(2, 5), transform_moves=(2, 4), transform_pp=(2, 4), transform_hidden_power=(2, 2))
 TRANSFORM_FIELDS = ("transformed", "transform_species", "transform_stats", "transform_moves", "transform_pp",
     "transform_hidden_power")
@@ -357,7 +359,7 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
         if set(dict(original_static)) != required or original_genders is None:
             add("source", "INCOMPLETE_ORIGINAL_STATIC", "All12 constructor records and retained genders required")
             return None, gaps, (), False, False
-    expected = set(FIELD_POLICY) - {"truant_loaf", "gender", "item_knocked", "effect_draws", "recharge_counter",
+    expected = set(FIELD_POLICY) - {"truant_loaf", "gender", "item_knocked", "effect_draws", "shed_skin_draws", "recharge_counter",
         "perish_counter", "yawn_counter", "partial_trap_counter", "partial_trap_source",
         *TRANSFORM_FIELDS}  # legacy fields remain explicitly unknown
     if set(data) - set(FIELD_POLICY) or expected - set(data):
@@ -651,6 +653,7 @@ def _native_input_from_data(data, metadata, *, module=None,
     inactive = tuple((name, data[name]) for name in ("keys", "turn", "queued_actor", "queued_actions", "queued_stall",
         "residual_draws", "phazing_draws", "secondary_draws", "sleep_talk_draws", "replacement_count"))
     if "effect_draws" in data:inactive += (("effect_draws", data["effect_draws"]),)
+    if "shed_skin_draws" in data:inactive += (("shed_skin_draws", data["shed_skin_draws"]),)
     certificate = Certificate(tuple((k, FIELD_POLICY[k]) for k in sorted(data)),
         tuple((k, NATIVE_PATHS[k]) for k in sorted(data)), raw, static, _metadata_sha(metadata), last, damage, inactive)
     module = import_module("poke_engine") if module is None else module

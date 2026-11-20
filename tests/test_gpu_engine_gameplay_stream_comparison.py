@@ -101,6 +101,30 @@ class LiteralStateShapeTests(unittest.TestCase):
 
 
 class GameplayCaptureTests(unittest.TestCase):
+    def test_legacy_pending_schema_spools_literal_records_before_per_root_refusal(self):
+        fixture=json.loads((Path(__file__).parent/'fixtures/state_schemas/pre_shed_skin_6caf071b.json').read_text())
+        fields=tuple(fixture['packet']);legacy_type=namedtuple('PreShedSkinState',fields)
+        current_state=state
+        def legacy_state(batch=1,*,hp=100,done=False):
+            current=current_state(batch,hp=hp,done=done)
+            values={name:getattr(current,name) for name in fields}
+            values['effect_draws']=values['effect_draws'][...,:4]
+            values['pending_residual']=np.array([hp==99]+[False]*(batch-1))
+            return legacy_type(**values)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'trace';spool=Path(tmp)/'spool';spool.mkdir()
+            with patch(__name__+'.state',side_effect=legacy_state), patch.object(trace,'BattleState',legacy_type):
+                measured=write_trace(path,batch=2)
+            header,counts=comparison._spool(path,measured,measured['gameplay_trace']['sha256'],spool)
+            self.assertEqual(counts,{101:2,102:2})
+            rows=[json.loads(line) for line in (spool/'101').read_text().splitlines()]
+            pending=rows[1]['payload']['after']['state']
+            self.assertTrue(pending['pending_residual'][0])
+            self.assertNotIn('shed_skin_draws',pending)
+            self.assertNotIn('shed_skin_draws',header['state_layout'])
+            with self.assertRaisesRegex(ValueError,'legacy suspended state lacks saved Shed Skin draws'):
+                comparison.decode_state(pending,header['state_layout'])
+
     def test_actual_boundaries_semantics_hashchain_terminal_and_bounded_capture(self):
         with tempfile.TemporaryDirectory()as tmp:
             path=Path(tmp)/'trace';measured=write_trace(path,batch=2)
@@ -231,6 +255,20 @@ class GameplayReferenceTests(unittest.TestCase):
             control.audit.write_text(json.dumps({'kind':'UNRESOLVED','role':'NO_NEW_HOOK'})+'\n')
             self.assertEqual(control.end(),[{'kind':'UNRESOLVED','role':'NO_NEW_HOOK'}]);self.assertFalse(control.control.exists())
             self.assertIn('fidelity_bridge.mjs',Path(control.config.bridge_path).read_text())
+
+    def test_chance_control_preserves_historical_effect_width(self):
+        fixture = json.loads((Path(__file__).parent/'fixtures/state_schemas/pre_shed_skin_6caf071b.json').read_text())
+        raw = {k:v.tolist() for k,v in chance()._asdict().items() if v is not None and k != 'shed_skin'}
+        raw['effect'] = [[[0, 0, 0, 1], [15, 0, 3, 0]]]
+        captured = dict(stream_id=101, request=1, before={'state':fixture['packet']}, chance=raw)
+        with tempfile.TemporaryDirectory() as tmp:
+            control = comparison.ChanceControl(Path(tmp)/'native', comparison.original.LocalShowdownConfig())
+            tape = control.begin(captured, fixture['layout'])
+            self.assertEqual(tape['schema'], 'pokezero.gpu_chance_tape.v3')
+            self.assertEqual(tape['effect'], raw['effect'][0])
+            raw['effect'][0][0][3] = 2
+            with self.assertRaisesRegex(ValueError, 'actual original finite chance operands required'):
+                control.begin(captured, fixture['layout'])
 
     def test_incremental_original_backend_ingests_each_owner_delta_once_and_rejects_peer(self):
         calls=[]

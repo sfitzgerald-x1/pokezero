@@ -22,9 +22,9 @@ from .finite_law import Axis, COORDINATES, DRAW_BOUNDS, EFFECT_BOUNDS, Cardinali
 # Complete transition-domain proof, including the copy/zero assignments in
 # transition.step_with_chance (the four saved blocks and, since §6, the effect
 # block at :2915-2916). A numeric representative alone is not proof.
-DOMAIN_SHA256 = '400a2f457c5206480f5294cb00ea3a1c8e5c0d9141cb709e43181c037a420986'
+DOMAIN_SHA256 = '7a88947f6c817fac4d5afba339d188a42f590ca9cb663b8b12181625149657ea'
 # Filled only after reviewed implementation stabilizes; drift must refuse.
-MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'cf87ab87209ad39997f88e6731eb429ae48bff298026c85f1ef99daf5612ab7d', 'conditioned_future.py': '6aaff1975525bd64178db5c78a938e61ac78a785a9dedbaf5936b017cdd33b43', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '14aabd57a444e7297485f648dfb2ae2bb7bad607964683828870f5cc4d07a3bd', 'future_state.py': 'a0b0da922c5d03fcab83ffcdd008d0563b398256530724d065984b9d1a7cf416'}
+MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'b7e594192be9e3fc72324c2f0a1bab3fe23d5303a4afc54486294d9cf65fc89f', 'conditioned_future.py': 'bee60d69d535f4d9982c027f75ea6c49906787fc6c1754a9ac4d1a4548c2b8d6', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '6adba87e46cc027d0b45fe4e4d5602dd36ac3bb00e66156774e0705fcabb8231', 'future_state.py': 'a79bc6e0b9e18bf679404444e7d6ac5a148bd4e3a893b5628c909e307ed30bd2'}
 NATIVE_BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
     for s in range(2) for i,bound in enumerate(DRAW_BOUNDS)]
     + [(f'{field}_draws.{s}', f'{field}.{s}', bound)
@@ -33,11 +33,12 @@ NATIVE_BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
 # ordinary-step chance and bank) has no effect stream, so a native output takes it by the engine's save rule.
 EFFECT_BANK = tuple((f'{conditioned_future.SAVED_BLOCK}.{s}.{c}', f'effect.{s}.{c}', bound)
     for s in range(2) for c,bound in enumerate(EFFECT_BOUNDS[:4])) + tuple(
-        (f'{conditioned_future.SAVED_BLOCK}.{s}.4',f'effect.{s}.4',2) for s in range(2))
+        (f'{conditioned_future.SAVED_BLOCK}.{s}.4',f'effect.{s}.4',2) for s in range(2)) + tuple(
+        (f'{conditioned_future.SAVED_CURE}.{s}',f'shed_skin.{s}',100) for s in range(2))
 BANK = NATIVE_BANK + EFFECT_BANK
 SPACE = algebra.OutputSpace(tuple((name,bound) for name,_,bound in BANK))
-BANK_FIELDS = {'residual_draws','phazing_draws','secondary_draws','sleep_talk_draws',conditioned_future.SAVED_BLOCK}
-CAPSULE = (*conditioned_future.CAPSULE_FIELDS,conditioned_future.SAVED_BLOCK)
+BANK_FIELDS = {'residual_draws','phazing_draws','secondary_draws','sleep_talk_draws',conditioned_future.SAVED_BLOCK,conditioned_future.SAVED_CURE}
+CAPSULE = (*conditioned_future.CAPSULE_FIELDS,conditioned_future.SAVED_BLOCK,conditioned_future.SAVED_CURE)
 
 
 def _source_certificate():
@@ -156,14 +157,15 @@ def _native_output(branch,certificate,values):
     if isinstance(physical,mapping.Refused):
         raise WholeSlotUnknown('UNSUPPORTED_POSITIVE_NATIVE_OUTPUT',asdict(physical))
     native_capsule=branch['capsule']
-    if type(native_capsule) is not dict or conditioned_future.SAVED_BLOCK in native_capsule:
+    if type(native_capsule) is not dict or set(native_capsule)!={*conditioned_future.CAPSULE_FIELDS,'version','schema'}:
         raise ValueError('ORDINARY_CAPSULE_FIELDS')
-    # The engine's save rule (transition.py:2770-2771): a suspended successor saves the case's effect block, any other
+    # The engine's save rule (transition.py:2770-2771): a suspended successor saves the case's effect and cure blocks, any other
     # carries 0. The native engine draws no effect stream, so its output takes the block by that rule.
     pending=native_capsule.get('pending_residual') is True
     effect=chance_fields(values)['effect']
     saved=[[value if pending else 0 for value in row] for row in effect]
-    capsule=_capsule({**native_capsule,conditioned_future.SAVED_BLOCK:saved})
+    capsule=_capsule({**native_capsule,conditioned_future.SAVED_BLOCK:saved,
+        conditioned_future.SAVED_CURE:[values[f'shed_skin.{side}'] if pending else 0 for side in range(2)]})
     if type(branch['bank']) is not list or len(branch['bank'])!=len(NATIVE_BANK):
         raise ValueError('COMPLETE_NATIVE_BANK_OUTPUT_REQUIRED')
     expressions=[]
@@ -294,9 +296,9 @@ def compare_plan(plan,state,actions,table,*,cap,batch_size,max_nodes,retain_evid
                 validate_output_address(output,plan.address)
                 reference.append(output.term(plan.law,cell))
                 v=dict(cell.case.values)
-                # The native ordinary-step wire carries the six original fields only (no effect stream); the JAX
-                # executor above received the case's effect block explicitly.
-                chance={name:value for name,value in chance_fields(v).items() if name!='effect'}
+                # The native ordinary-step wire carries only the six original fields. The JAX executor
+                # receives both JAX-only banks explicitly; their native carry is supplied by _native_output.
+                chance={name:value for name,value in chance_fields(v).items() if name not in ('effect','shed_skin')}
                 request={'version':1,'schema':'pokezero.ordinary-step','actions':plan.native_actions.raw_actions,
                     'chance':chance,'address':dict(plan.address)}
                 report=json.loads(module.conditioned_step(plan.native_input.raw_native,json.dumps(request)))

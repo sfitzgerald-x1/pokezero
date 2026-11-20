@@ -88,7 +88,9 @@ class WeatherCallbacksTests(unittest.TestCase):
         self.assertEqual(ast.dump(current_enter,include_attributes=False),ast.dump(original_enter,include_attributes=False))
         table=next(n for n in integrated.body if isinstance(n,ast.ClassDef)and n.name=='EntryTable')
         fields=tuple(n.target.id for n in table.body if isinstance(n,ast.AnnAssign))
-        self.assertEqual(entry.EntryTable._fields,fields)
+        # Shed Skin appends one optional residual flag; all earlier fields and the entry callback stay frozen.
+        self.assertEqual(entry.EntryTable._fields,fields+('shed_skin',))
+        self.assertIsNone(entry.EntryTable._field_defaults['shed_skin'])
 
     def test_actual_writes_mixed_same_weather_dead_and_noop_rows(self):
         s = state(8); rows = j.arange(8)

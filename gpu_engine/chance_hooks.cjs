@@ -45,7 +45,8 @@ function validTape(c){
       &&c.effect.every(x=>row(x,hasInfatuation(c)?[...EFFECT_BOUNDS,2]:EFFECT_BOUNDS)):c.effect===undefined)
     &&(hasPhazing(c)?row(c.phazing,[60,60]):c.phazing===undefined)
     &&(hasEntryTies(c)?(row(c.entry_ties,[2,2])&&typeof c.resuming==='boolean'):
-      c.entry_ties===undefined&&c.resuming===undefined);
+      c.entry_ties===undefined&&c.resuming===undefined)
+    &&(c.shed_skin===undefined||row(c.shed_skin,[100,100]));
 }
 function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   let nonce,used=new Set(),inert=0;
@@ -227,6 +228,13 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     if(from.includes('Battle.endTurn')&&n===1&&d===5){
       if(this.sides.some(x=>x.active.some(p=>p?.item==='quickclaw')))return unknown('QUICK_CLAW',from);
       audit({kind:'INERT_QUICK_CLAW_ROLL',nonce:c.nonce});return false;
+    }
+    if(effect==='shedskin'&&n===33&&d===100&&from.includes('onResidual')){
+      const holder=this.effectState?.target,side=holder?.side?.n;
+      if((side!==0&&side!==1)||!holder.hp||!holder.status||holder.getAbility().id!=='shedskin'
+        ||holder!==this.sides[side].active[0])return unknown('SHED_SKIN_HOLDER',from);
+      if(!Array.isArray(c.shed_skin))return unknown('SHED_SKIN_STREAM_ABSENT',{side});
+      return take(c,'shed_skin',side,c.shed_skin[side])<33;
     }
     if(s!==0&&s!==1)return unknown('MISSING_ACTOR',from);
     if(effect==='static'&&n===1&&d===3&&singles(this)&&from.includes('Battle.onDamagingHit')
@@ -421,7 +429,7 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
         const heals=new Set(['leftovers','oranberry','sitrusberry','liechiberry','ganlonberry','salacberry','petayaberry','apicotberry','lansatberry','starfberry']);
         const category=h=>heals.has(h.effect?.id)?['heal_tie',0,9,4]:
           ['psn','tox','brn'].includes(h.effect?.id)?['status_tie',1,9,6]:
-          {speedboost:['ability_tie',1,0,3],leechseed:['seed_tie',0,10,5],encore:['encore_tie',1,11,14]}[h.effect?.id];
+          {speedboost:['ability_tie',1,0,3],shedskin:['ability_tie',1,0,3],leechseed:['seed_tie',0,10,5],encore:['encore_tie',1,11,14]}[h.effect?.id];
         const row=category(group[0]);
         if(row&&group.every(h=>category(h)?.[0]===row[0]&&h.order===10&&h.subOrder===row[3]&&originalCallback(h,'Residual'))){
           const [role,side,column]=row,first=take(c,role,side,c.draws[side][column]);
