@@ -96,7 +96,8 @@ async def load_and_run(config,archive,*,catalog,contract,expected_archive_sha256
 
 
 async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None,progress_callback=None,
-        trajectory_callback=None,progress_path=None,enable_v5=False,game_offsets=None,packed_starts=None):
+        trajectory_callback=None,progress_path=None,enable_v5=False,game_offsets=None,packed_starts=None,
+        packed_birth_callback=None):
     """One original finite declared panel; exceptions remain unknown cells.
 
     The original low-level runner receives explicit offsets of the ORIGINAL
@@ -116,6 +117,8 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
             raise ValueError('ordered original panel offsets required')
         recipe['game_offsets']=list(game_offsets)
     offsets=tuple(range(config.games)) if game_offsets is None else game_offsets
+    if packed_birth_callback is not None and (packed_starts is None or len(offsets) != 1):
+        raise ValueError('packed birth callback requires a single declared packed-start cell')
     if packed_starts is not None:
         if set(packed_starts) != set(offsets):
             raise ValueError('one immutable packed start per original offset required')
@@ -184,7 +187,8 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
                 dex=factory.catalog.dex,observation_spec=V4_REPLAY_OBSERVATION_SPEC,feature_masks=masks,
                 checkpoint_sha256=factory.contract.checkpoint_sha256,trajectory_callback=trajectory_callback,
                 owning_actor_factory=factory,actor_runtime=factory,actor_version='v5',game_offsets=(row['offset'],),
-                **(dict(packed_starts={row['offset']: packed_starts[row['offset']]}) if packed_starts is not None else {}))
+                **(dict(packed_starts={row['offset']: packed_starts[row['offset']]}) if packed_starts is not None else {}),
+                **(dict(packed_birth_callback=packed_birth_callback) if packed_birth_callback is not None else {}))
             if (len(result.games)!=1 or result.games[0].seed!=row['seed']
                     or result.foulplay_random_seed_schedule!=(row['fp_seed'],)):
                 raise ValueError('actual original FP game cell/seed differs')

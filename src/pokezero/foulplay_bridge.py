@@ -6137,6 +6137,7 @@ async def _run_controlled_foulplay_games(
     actor_version: str = 'champion-v4',
     game_offsets: tuple[int, ...] | None = None,
     packed_starts: Mapping[int, BattleStartOverride] | None = None,
+    packed_birth_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run a preconstructed legal policy through the shared FoulPlay bridge.
 
@@ -6245,6 +6246,7 @@ async def _run_controlled_foulplay_games(
                            if actor_factory is not None else {}),
                         **({'actor_version':actor_version} if actor_version in ('v5','canary-v4') else {}),
                         **({"packed_start": packed_starts[offset]} if packed_starts is not None else {}),
+                        **({"packed_birth_callback": packed_birth_callback} if packed_birth_callback is not None else {}),
                     )
                 )
             finally:
@@ -7655,6 +7657,7 @@ async def _run_single_game_body(
     phase_progress: FullgamePhaseProgress | None = None,
     owning_session: OwningWireSession | None = None,
     packed_start: BattleStartOverride | None = None,
+    packed_birth_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> ControlledFoulPlayGameResult:
     require_session(config, owning_session)
     battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
@@ -7749,6 +7752,12 @@ async def _run_single_game_body(
                 if owning_session is None else owning_session.requested(event))
             if not requested_players:
                 continue
+            if packed_birth_callback is not None:
+                if packed_start is None or owning_session is None or decision_round != 0:
+                    raise ValueError("packed birth verification requires the first owning request")
+                witness = await bridge.capture_snapshot_event(battle_id=battle_id)
+                packed_birth_callback(witness["snapshot"])
+                packed_birth_callback = None
             # Let protocol output from the final permitted choice settle before deciding this
             # battle exceeded the cap. A terminal win/tie follows that choice as a later event.
             if decision_round >= config.max_decision_rounds:

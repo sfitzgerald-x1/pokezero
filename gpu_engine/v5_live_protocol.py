@@ -21,6 +21,7 @@ from pokezero.live_protocol_runtime import CompiledEncoderFunctions
 from pokezero.neural_policy import _greedy_action_index, _sample_action
 from pokezero.policy import PolicyDecision
 from . import v5_model as model, v5_observation as observation
+from .v5_evaluation_sampling import EvaluationDraw
 
 
 @dataclass(frozen=True,eq=False)
@@ -144,6 +145,27 @@ def _checked(factory):
 def check_factory(factory):return _checked(factory)
 
 
+def prime_evaluation(factory, *, battle_id, seed, owner_lines):
+    """Compile on isolated opening requests without selecting or submitting a choice."""
+    _checked(factory)
+    with jax.default_matmul_precision('highest'),jax.enable_x64(False):
+        for seat in ('p1','p2'):
+            actor=factory.create_actor()
+            actor.begin_game(battle_id=battle_id, owner=seat, seed=seed, stream_id=1)
+            try:
+                actor.accept_owner_stream(battle_id=battle_id, owner=seat, generation=actor.generation,
+                    prefix_sha256=actor.prefix_sha256, lines=tuple(owner_lines[seat]))
+                snapshot=actor.snapshot_boundary()
+                # This disposable actor never enters an assay. It only lowers
+                # the owning encode and forward and is closed before play.
+                backend=actor._backend
+                backend.deadline=math.inf
+                backend.encode(snapshot)
+                jax.block_until_ready(factory.forward(backend.pending[2]))
+            finally:
+                actor.close_game()
+
+
 class _CaptureFunctions:
     """Per-game read-only capture at the existing compiled-function API seam."""
     def __init__(self,backend,encoder):
@@ -232,10 +254,17 @@ class _Backend(live.JaxBackend):
         if (np.asarray(output.valid).shape!=(1,) or not bool(np.asarray(output.valid)[0])
                 or logits.shape!=(9,) or not np.isfinite(logits).all() or not math.isfinite(value) or not -1<=value<=1):
             raise ValueError('finite valid v5 raw public policy/value required')
-        probabilities=np.asarray(jax.nn.softmax(j.where(j.asarray(legal),j.asarray(logits),-j.inf))).tolist()
-        legal_actions=tuple(np.flatnonzero(legal).tolist())
-        action=(_greedy_action_index(probabilities=probabilities,legal=legal_actions,family_gated=False)
-            if self.factory.deterministic else _sample_action(probabilities,legal_actions,rng))
+        if type(rng) is EvaluationDraw:
+            if self.factory.deterministic or self.factory.compute_dtype != 'bfloat16':
+                raise ValueError('sampled S0 evaluation requires the bf16 stochastic v5 factory')
+            if output.value_logits is not None and not np.isfinite(np.asarray(output.value_logits)).all():
+                raise ValueError('sampled S0 evaluation requires finite value logits')
+            action,probabilities=rng.choose(logits,legal)
+        else:
+            probabilities=np.asarray(jax.nn.softmax(j.where(j.asarray(legal),j.asarray(logits),-j.inf))).tolist()
+            legal_actions=tuple(np.flatnonzero(legal).tolist())
+            action=(_greedy_action_index(probabilities=probabilities,legal=legal_actions,family_gated=False)
+                if self.factory.deterministic else _sample_action(probabilities,legal_actions,rng))
         self.budget();self.last_inputs=inputs
         self.last_capture=self.pending_capture;self.pending_capture=None
         metadata=json.loads(self.factory.metadata)
