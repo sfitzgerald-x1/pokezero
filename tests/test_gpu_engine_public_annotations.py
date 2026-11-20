@@ -98,7 +98,7 @@ class AnnotationLexicalTests(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertEqual(classify(line), 'text')
                 self.assertIsNone(classify(line + '|extra'))
-        for line in ('|debug|damage event succeeded', '|debug|set status [tox] interrupted',
+        for line in ('|debug|damage event succeeded', '|debug|set status [par] interrupted',
                      '|debug|set status [slp] succeeded', '|debug|set status [slp] interrupted '):
             with self.subTest(line=line):
                 self.assertIsNone(classify(line))
