@@ -18,5 +18,6 @@ Train B's combined Stick tree moves it to b3b3b6cd: both critical call sites ret
 Train B composes retained genders, infatuation and the v6 chance tape at 766833fc.
 Train B adds Forecast while preserving all prior state at 77a780c2.
 The explicit wide-draw Perish side-index correction moves it to 500dcc84.
+The Shed Skin composition retains that correction and adds the saved cure bank at f62255ca.
 """
-CURRENT_TRANSITION = '500dcc84816836bbf49a4387f16663718ea8c4e1'
+CURRENT_TRANSITION = 'f62255ca35e615eb13a7df0b94bd1657a7f558ef'
