@@ -59,6 +59,13 @@ def classify(line):
     # Frozen Gen 3 owner streams report the Protect roll and sunlight scaling.
     if line in ('|debug|Success chance: 50%', '|debug|Sunny Day water suppress'):
         return 'text'
+    if line in (
+        '|debug|Wonder Guard immunity: hiddenpower',
+        '|debug|Sand Veil - decreasing accuracy',
+        '|debug|Negating (sp)atk boost/penalty.',
+    ):
+        # These pinned owner-stream diagnostics do not write V4 facts.
+        return 'text'
     if attract_idents(line) is not None:return 'attract'
     # Incidental proc tags retain their existing consumers; text cannot
     # manufacture a source ability/item reveal under this annotation contract.
