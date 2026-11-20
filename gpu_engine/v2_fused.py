@@ -30,6 +30,7 @@ import time
 import uuid
 
 import numpy as np
+from pokezero.v2_lr_start import LRStart, SCALING_RULES, scaled_peak_rate
 
 from gpu_engine.v2_bench_collector import log
 
@@ -203,6 +204,46 @@ def select_learner_precision(context, precision):
     return plan
 
 
+def select_learner_lr_start(context, lr_start):
+    """Override the effective learner recipe after binding the original initializer."""
+    plan = context['plan']
+    if lr_start is None:
+        return plan
+    from pokezero import v5_run as runs
+    peak = scaled_peak_rate(plan.train.batch_size, lr_start.scaling)
+    plan = replace(plan, train=replace(plan.train, learning_rate=peak, learning_rate_schedule='constant'))
+    context['plan'] = plan
+    context['declared'] = dict(context['declared'], lr_start=asdict(lr_start),
+        effective_plan_sha256=runs._sha(plan.manifest()))
+    return plan
+
+
+def _validate_lr_start_reports(runtime, reports, plan, policy):
+    """Bind the fused round ledger and declared games to the loaded checkpoint."""
+    if not reports or len(reports) > len(plan.iterations):
+        raise ValueError('resuming LR start requires its committed fused rounds')
+    start_update = start_row = start_game = 0
+    for iteration, report in enumerate(reports):
+        games = sum(len(batch.games) for batch in plan.iterations[iteration])
+        end_game = start_game + games
+        window = dict(start_game=start_game, end_game=end_game, total_games=len(plan.games))
+        training = report['training']
+        start = training.get('lr_start')
+        steps, rows = training['steps'], training['rows']
+        expected = dict(policy=policy, declared_window=window, start_update=start_update,
+            end_update=steps, start_row=start_row, end_row=rows)
+        if (start != expected or report.get('iteration') != iteration or report.get('games') != games
+                or type(steps) is not int or type(rows) is not int or steps <= start_update
+                or rows <= start_row or training['updates'] != steps - start_update):
+            raise ValueError('LR-start report progress differs from the declaration')
+        origin = (start_update, start_row)
+        start_update, start_row, start_game = steps, rows, end_game
+    if (runtime.cursor is None or not runtime.cursor['complete'] or runtime.window is None
+            or asdict(runtime.window) != window or runtime.lr_start_origin != origin
+            or (runtime.steps, runtime.rows) != (start_update, start_row)):
+        raise ValueError('LR-start round ledger differs from the committed checkpoint')
+
+
 def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', help='20k diagnostic config (smoke schema)')
@@ -221,6 +262,10 @@ def argument_parser():
         help='opt in to compiler native random/dropout (compiled modes); must match on resume')
     parser.add_argument('--learner-precision', choices=('float32', 'bfloat16'), default=None,
         help='explicit learner precision override; recorded in the effective plan and must match on resume')
+    parser.add_argument('--lr-start', choices=SCALING_RULES,
+        help='opt in to global-batch peak LR scaling and optional update warmup')
+    parser.add_argument('--lr-warmup-updates', type=int,
+        help='number of global optimizer updates to reach peak LR (default 0 with --lr-start)')
     parser.add_argument('--order', default='ordered')
     parser.add_argument('--row-order', choices=('tick', 'file'), default=None,
         help='tick: collection order; file (default for new runs): the file pipeline cache order (block, frame, row, owner). '
@@ -271,7 +316,14 @@ def _validated_on_all_ranks(distribution, action):
     return result
 
 def main(argv=None, *, distribution=None):
-    args = argument_parser().parse_args(argv)
+    parser = argument_parser()
+    args = parser.parse_args(argv)
+    if args.lr_start is None and args.lr_warmup_updates is not None:
+        parser.error('--lr-warmup-updates requires --lr-start')
+    try:
+        lr_start = None if args.lr_start is None else LRStart(args.lr_start, args.lr_warmup_updates or 0)
+    except ValueError as error:
+        parser.error(str(error))
     if bool(args.config) == bool(args.declaration):raise SystemExit('exactly one of --config or --declaration')
     out = Path(args.out);(out / 'artifacts').mkdir(parents=True, exist_ok=True);(out / 'audit').mkdir(exist_ok=True)
     wall_start = time.perf_counter()
@@ -288,6 +340,8 @@ def main(argv=None, *, distribution=None):
         context['declared'] = dict(context['declared'], recipe=args.recipe,
             effective_plan_sha256=runs._sha(plan.manifest()))
     plan = select_learner_precision(context, args.learner_precision)
+    plan = select_learner_lr_start(context, lr_start)
+    lr_start_policy = context['declared'].get('lr_start') if lr_start is not None else None
     if distribution is not None:
         distribution.bind(context, args)
     declaration_sha256 = runs._sha(plan.manifest())
@@ -325,7 +379,7 @@ def main(argv=None, *, distribution=None):
     roots = {first.archive_sha256: Path(args.reference_run)}
     v2_config = v2t.V2Config(mode=args.mode, order=args.order, optimizer='fused', check_interval=args.check_interval,
         distributed_rows=distribution is not None, native_embedding_backward=args.native_embedding_backward,
-        fallback_random=args.fallback_random)
+        fallback_random=args.fallback_random, lr_start=lr_start)
     placement = {} if distribution is None else dict(process_group=distribution.process_group)
     def read_resume_manifest():
         try:
@@ -341,6 +395,8 @@ def main(argv=None, *, distribution=None):
         def resume_inputs():
             if saved.get('declaration_sha256') != declaration_sha256:
                 raise ValueError('original fused run declaration binding required')
+            if saved.get('lr_start') != lr_start_policy:
+                raise ValueError('resume requires the original fused LR-start declaration')
             if distribution is not None:
                 distribution.check_resume(saved)
             elif 'distribution' in saved:
@@ -366,6 +422,9 @@ def main(argv=None, *, distribution=None):
             expected_loss_config=plan.loss, expected_train_config=plan.train, device='cuda',
             expected_self_moves=plan.self_moves, expected_checkpoint_sha256=snapshots[-1].checkpoint_sha256,
             off_provenance=off_provenance, **placement)
+        if lr_start is not None:
+            _validated_on_all_ranks(distribution, lambda: _validate_lr_start_reports(
+                runtime, reports, plan, lr_start_policy))
         log('RESUMED', completed_iterations=len(reports), checkpoint=str(checkpoint), steps=runtime.steps, row_order=row_order)
     else:
         snapshots = [first];reports = [];row_order = args.row_order or 'file'
@@ -513,6 +572,8 @@ def main(argv=None, *, distribution=None):
                 **training_summary(updates)),
             collector={k: v for k, v in stats.items() if isinstance(v, (int, float, str))},
             audit=audit_records, games_matching_reference=same, snapshot=asdict(snapshot))
+        if lr_start is not None:
+            report['training']['lr_start'] = train_report['lr_start']
         if distribution is not None:
             report = distribution.reduce_report(report)
         reports.append(report)
@@ -523,6 +584,8 @@ def main(argv=None, *, distribution=None):
         def commit_round():
             state = dict(snapshots=[asdict(s) for s in snapshots], reports=reports, row_order=row_order,
                 declaration_sha256=declaration_sha256, checkpoint_encoding_receipts=encoding_receipts)
+            if lr_start is not None:
+                state['lr_start'] = lr_start_policy
             if distribution is not None:
                 state['distribution'] = distribution.contract
             write_json(state_path, state, durable=deferred)
