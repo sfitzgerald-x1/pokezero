@@ -24,7 +24,7 @@ except ImportError:
 
 
 def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, writer_failure=False,
-                publication_failure=False, stop=False, invalid_resume_rank=None):
+                publication_failure=False, stop=False, invalid_resume_rank=None, fused_options=()):
     from gpu_engine import v2_bench_trainer, v2_collector, v5_device_backend, v5_model
 
     torch.set_num_threads(1)
@@ -43,7 +43,7 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
     events = [{'kind': 'SNAPSHOT', 'payload': asdict(snapshot)}]
     initial = trainer.create(model, loss, train, enable_v5=True, device='cpu')
     argv = ['--config', 'unused.json', '--reference-run', str(root), '--out', str(out),
-            '--torch-memory-fraction', '0', '--mode', 'eager', '--lanes', '8']
+            '--torch-memory-fraction', '0', '--mode', 'eager', '--lanes', '8', *fused_options]
     if limit is not None:
         argv += ['--max-iterations', str(limit)]
     phases = dict(saves=[], exports=[], state=[], collect=[], issues=[])
@@ -213,6 +213,29 @@ def run_four(root, attempt, **options):
 
 @unittest.skipIf(torch is None, 'torch required')
 class FusedDeferredTests(unittest.TestCase):
+    def test_production_profile_freezes_after_first_commit_of_each_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            out = root / 'run'
+            freezes = []
+            collections = []
+
+            def freeze():
+                state = json.loads((out / 'state.json').read_bytes())
+                freezes.append(state['reports'][-1]['iteration'])
+
+            gc = SimpleNamespace(collect=lambda: collections.append(None) or 0,
+                                 freeze=freeze, get_freeze_count=lambda: 1)
+            profile = ('--profile', 'v2-production')
+            with patch.object(v2_fused, 'gc', gc):
+                initial = run_fixture(root, out, limit=2, fused_options=profile)
+                resumed = run_fixture(root, out, limit=4, fused_options=profile)
+                disabled = run_fixture(root, root / 'disabled', limit=2,
+                                       fused_options=(*profile, '--no-freeze-gc-after-warmup'))
+            self.assertEqual([initial['exit'], resumed['exit'], disabled['exit']], [0, 0, 0])
+            self.assertEqual(freezes, [0, 2])
+            self.assertEqual(len(collections), 14)
+
     def test_rank_zero_writer_failure_reaches_every_rank_promptly(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

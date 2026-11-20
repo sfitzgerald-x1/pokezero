@@ -49,7 +49,10 @@ function validTape(c){
     &&(c.shed_skin===undefined||row(c.shed_skin,[100,100]))
     &&(c.protect_stall_order===undefined||c.protect_stall_order===0||c.protect_stall_order===1);
 }
-function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
+function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',options={}) {
+  const strictNoRng=options.strictNoRng===true;
+  if(strictNoRng&&(!Battle.prototype.setPlayer||!Battle.prototype.getTeam||!PRNG.prototype.setSeed))
+    throw Error('strict sealed replay requires original constructor/PRNG APIs');
   let nonce,used=new Set(),inert=0;
   let construction=null,coupledGender=null;
   const control=()=>{
@@ -58,6 +61,17 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
     if(c.nonce!==nonce){nonce=c.nonce;used=new Set();}return c;
   };
   function unknown(kind,detail){audit({kind:'UNRESOLVED',role:kind,detail});throw Error('SPIKE_UNRESOLVED:'+kind);}
+  if(strictNoRng){
+    PRNG.generateSeed=function(){return unknown('UNSEALED_SEED',null);};
+    const setSeed=PRNG.prototype.setSeed;
+    PRNG.prototype.setSeed=function(seed){
+      if(seed===null||seed===undefined)return unknown('UNSEALED_SEED',null);
+      const result=setSeed.call(this,seed);
+      if(!this.rng||typeof this.rng.next!=='function')return unknown('RAW_RNG_BACKEND',null);
+      this.rng.next=function(...args){return unknown('UNMAPPED_RNG_NEXT',args);};
+      return result;
+    };
+  }
   function take(c,role,side,value){
     const key=role+':'+side;if(used.has(key))return unknown('REPEATED_ROLE',key);
     used.add(key);audit({kind:'COUPLED',nonce:c.nonce,role,side,raw:value});return value;
@@ -199,6 +213,11 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
       }finally{construction=previous;}
     };
     Battle.prototype.getTeam=function(options){
+      if(strictNoRng&&(!options||!options.team
+        ||!(typeof options.team==='string'&&options.team.split(']').length===6
+            &&options.team.split(']').every(set=>set.includes('|'))
+          ||Array.isArray(options.team)&&options.team.length===6)))
+        return unknown('EXPLICIT_TEAM_REQUIRED',null);
       const team=getTeam.call(this,options);
       if(construction?.battle===this){
         if(team.length!==6||construction.rows!==null)throw Error('invalid construction team');
@@ -484,6 +503,15 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='') {
   const raw=PRNG.prototype.random;
   PRNG.prototype.random=function(...args){
     if(control())return unknown('UNMAPPED_RAW_RNG',args);
+    // Strict same-prefix replay must not advance an unrecorded Native stream,
+    // even for constructor genders whose returned value is later replaced.
+    if(strictNoRng){
+      if(initializing()&&coupledGender&&args.length===1&&args[0]===2){
+        audit({kind:'COUPLED_INITIAL_GENDER',...coupledGender,raw:coupledGender.value-1});
+        return coupledGender.value-1;
+      }
+      return unknown('UNMAPPED_RAW_RNG',args);
+    }
     const value=raw.apply(this,args);
     if(initializing()){
       if(coupledGender&&args.length===1&&args[0]===2){

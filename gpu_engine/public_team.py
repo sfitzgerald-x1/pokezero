@@ -13,6 +13,7 @@ from typing import Mapping, NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -148,11 +149,11 @@ def project_opponent(mons, abilities, tables, *, observer_side, expected_binding
     original_hp = tables.original_hp[original]
     base = base.at[...,0].set(jnp.where(transformed & (original_hp!=0), original_hp, base[...,0]))
     active = jnp.arange(6)[None,:] == mons.active[address][:,None]
-    hp = jnp.clip(mons.hp_numerator[address].astype(jnp.float32)/jnp.maximum(mons.hp_denominator[address],1),0,1)
+    hp = en.ratio(mons.hp_numerator[address], mons.hp_denominator[address])
     hp = jnp.where(mons.hp_known[address],hp,0)
-    values = [hp, active, ~mons.fainted[address], present, jnp.minimum(1,mons.level[address]/100)]
-    values.extend(jnp.minimum(1,base[...,i]/200) for i in range(6))
-    boosts = jnp.clip(mons.boosts[address][...,:5]/6,-1,1)
+    values = [hp, active, ~mons.fainted[address], present, en.normalized(mons.level[address], 100)]
+    values.extend(en.normalized(base[...,i], 200) for i in range(6))
+    boosts = en.normalized(mons.boosts[address][...,:5], 6, minimum=-6)
     values.extend(jnp.where(active,boosts[:,i,None],0) for i in range(5))
     values.extend([mons.gender[address]==1,mons.gender[address]==2])
     compact = jnp.stack([jnp.asarray(x,jnp.float32) for x in values],axis=-1)

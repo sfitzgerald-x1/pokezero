@@ -7,6 +7,7 @@ capture/admission system. Hard source masks are not refilled on inconsistency.
 from typing import NamedTuple
 import jax
 import jax.numpy as j
+from . import encoder_numeric as en
 from . import engine_device_trackers as tr
 from . import engine_device_negative_items as negative_items
 from .absorption import FLASH_FIRE
@@ -411,7 +412,8 @@ def entry(c,before,after,side,table,use):
     c=weather(c,before,after,changed,permanent=True,side=side)
     if table.trace is not None:
         copied=starts&table.trace[ability]&(_get(before,'hp',1-side)>0)
-        c=reveal_ability(c,before,side,copied,ability=ability)
+        # Trace confirms the donor's ability and the tracer's running copy.
+        # B2/Python leave the tracer's original-ability observation untouched.
         c=reveal_ability(c,before,1-side,copied)
         p=_li.take(after.active,_r(after),side)
         c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,_get(after,'ability',side),copied))
@@ -796,11 +798,12 @@ def damage(c,state,side,dealt,taken,use):
     r=_r(state);foe=1-side;p=_li.take(state.active,r,foe);slot=j.clip(_li.take(c.trackers.physical_to_public,r,foe,p),0,5)
     previous=_li.take(c.trackers.hp_percent,r,foe,slot)
     current=tr._percent(_get(state,'hp',foe),_get(state,'max_hp',foe))
-    shown=j.maximum(0,previous-current).astype(j.float32)/100.0
-    exact=taken.astype(j.float32)/j.maximum(_get(state,'max_hp',foe),1).astype(j.float32)
+    shown=en.ratio(j.maximum(0,previous-current),100,limit=100,pair=True)
+    exact=en.ratio(taken,_get(state,'max_hp',foe),pair=True)
     if c.trackers.damage_history is not None:
         return c._replace(trackers=c.trackers._replace(damage_history=damage_history.direct(
-            c.trackers.damage_history,side,shown,exact,use & (taken>0))))
+            c.trackers.damage_history,side,shown,exact,use & (taken>0),pairs=True)))
+    shown,exact=en.value(shown),en.value(exact)
     c=c._replace(trackers=_write(c.trackers,'damage_exact_dealt',side,_li.take(state.active,r,side),exact,use))
     c=c._replace(trackers=_write(c.trackers,'damage_exact_taken',foe,p,exact,use))
     c=feature(c,side,_li.take(state.active,r,side),'last_damage_dealt',shown,use)

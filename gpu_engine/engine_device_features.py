@@ -5,6 +5,7 @@ keys stay zero. No source reconstruction, event fold, or engine/world access.
 """
 from typing import NamedTuple
 import jax.numpy as j
+from . import encoder_numeric as en
 from pokezero import showdown as s
 from .public_active import NAMES as VOLATILE_NAMES
 from .public_moves import _static_category
@@ -80,7 +81,9 @@ def project_mon(numeric, categorical, facts, *, active, present, tables, last_mo
         if value.shape != present.shape:raise ValueError('public mon fact shape: ' + key)
         bad |= j.any(~j.isfinite(value) | (value < 0), axis=-1)
         use = present & active if active_only else present
-        value = j.where(use, j.clip(j.nan_to_num(value) / divisor, 0., 1.), 0)
+        clean = j.nan_to_num(value)
+        scaled = en.normalized(clean, int(divisor)) if divisor != 1 else clean
+        value = j.where(use, j.clip(scaled, 0., 1.), 0)
         if key in TENDENCY_FIELDS:value=j.where(tables.stats_enabled,value,0)
         # Original _encode_mon_exact_state always gates on actual current
         # condition status, independently of retained counters/Rest evidence.
@@ -117,7 +120,14 @@ def project_field(numeric, facts):
         if key not in facts:continue
         value = facts[key].astype(j.float32)
         bad |= ~j.isfinite(value) | (value < 0)
-        numeric = numeric.at[..., _column(name)].set(j.clip(j.nan_to_num(value) / divisor, 0., 1.))
+        clean = j.nan_to_num(value)
+        if key in ('self_hazard_credit', 'opp_hazard_credit'):
+            pair = facts.get(key + '_pair', j.stack((clean, j.zeros_like(clean)), -1))
+            bad |= j.any(~j.isfinite(pair), axis=-1)
+            scaled = en.scaled_value(j.nan_to_num(pair), divisor)
+        else:
+            scaled = en.normalized(clean, int(divisor)) if divisor != 1 else clean
+        numeric = numeric.at[..., _column(name)].set(j.clip(scaled, 0., 1.))
     return numeric, bad
 
 

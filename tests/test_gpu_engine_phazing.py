@@ -92,13 +92,13 @@ class PhazingTests(unittest.TestCase):
         self.assertEqual(int(self.tr.step(self.live(),self.j.array([[0,0]]),table).state.active[0,1]),0)
 
     def test_natural_cure_toxic_counter_and_recipient_lum_are_resolved_at_entry(self):
-        for ability,status in ((3,0),(0,self.m.TOX)):
+        for ability,status,counter in ((3,0,0),(0,self.m.TOX,3)):
             s=self.only_first_bench(self.live());s=s._replace(status=s.status.at[0,1,0].set(self.m.TOX),
                 status_counter=s.status_counter.at[0,1,0].set(3),ability=s.ability.at[0,1,0].set(ability),
                 item=s.item.at[0,1,1].set(1))
             s=s._replace(status=s.status.at[0,1,1].set(self.m.PSN))
             r=self.play(s).state
-            self.assertEqual((int(r.status[0,1,0]),int(r.status_counter[0,1,0])),(status,0))
+            self.assertEqual((int(r.status[0,1,0]),int(r.status_counter[0,1,0])),(status,counter))
             self.assertEqual((int(r.status[0,1,1]),int(r.item[0,1,1]),int(r.hp[0,1,1])),(0,0,1000))
 
     def test_hazards_weather_and_intimidate_run_before_residuals(self):

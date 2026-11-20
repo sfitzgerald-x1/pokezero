@@ -10,6 +10,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -133,12 +134,12 @@ def apply(state,tables,mons,*,operation,side=-1,slot=-1,encounter=0,value=0,new_
     hp,maximum=mons.hp_numerator[address],mons.hp_denominator[address]
     known=mons.hp_known[address]&(maximum>0)
     ok &= (op!=DAMAGE)|((hp>=0)&(maximum>=0)&jnp.where(maximum>0,hp<=maximum,hp==0))
-    fraction=jnp.where((op==DAMAGE)&known,jnp.maximum(0,hp-new_hp).astype(jnp.float32)/jnp.maximum(maximum,1),0.)
+    fraction=jnp.where(((op==DAMAGE)&known)[:,None],en.ratio(jnp.maximum(0,hp-new_hp),maximum,pair=True),0.)
     victim=jnp.arange(2)==seat[:,None];actor=jnp.arange(2)==state.window_actor[:,None]
-    delta=fraction[:,None]*victim
-    dealt=fraction[:,None]*actor*((state.window_actor>=0)&(state.window_actor!=side)&~tagged)[:,None]
-    current_dealt=_add(state.current_dealt,dealt);current_taken=_add(state.current_taken,delta)
-    hazard=_add(state.hazard_suffered,delta*spikes[:,None])
+    delta=fraction[:,None,:]*victim[...,None]
+    dealt=fraction[:,None,:]*actor[...,None]*((state.window_actor>=0)&(state.window_actor!=side)&~tagged)[:,None,None]
+    current_dealt=en.add_pair(state.current_dealt,dealt);current_taken=en.add_pair(state.current_taken,delta)
+    hazard=en.add_pair(state.hazard_suffered,delta*spikes[:,None,None])
     clear=((op==ARRIVE)[:,None]&victim)[...,None]
     current_dealt=jnp.where(clear,0.,current_dealt);current_taken=jnp.where(clear,0.,current_taken)
     last_dealt=jnp.where(turn[:,None,None],state.current_dealt,jnp.where(clear,0.,state.last_dealt))
@@ -200,9 +201,11 @@ def project_credits(state,tables,mons,*,observer_side,expected_vocabulary):
     batch=_shape(state,mons);_binding(expected_vocabulary)
     observer=_row(observer_side,batch);row=jnp.arange(batch);own=jnp.clip(observer,0,1);opp=1-own
     ok=_coherent(state,tables,mons)&(observer>=0)&(observer<2)&jnp.all(expected_vocabulary==tables.vocabulary_binding)
-    hazard=state.hazard_suffered.sum(axis=-1)
-    values=jnp.stack((hazard[row,own],hazard[row,opp],state.items_removed[row,own],state.items_removed[row,opp]),axis=-1)
+    hazard=en.scaled_value(state.hazard_suffered,reference._TEAM_SIZE)
+    values=jnp.stack((hazard[row,own],hazard[row,opp],
+        en.normalized(state.items_removed[row,own],reference._TEAM_SIZE),
+        en.normalized(state.items_removed[row,opp],reference._TEAM_SIZE)),axis=-1)
     numeric=jnp.zeros((batch,132),jnp.float32).at[:,jnp.asarray(FIELD_COLUMNS)].set(jnp.where(ok[:,None],
-        jnp.minimum(1.,values/reference._TEAM_SIZE),0.))
+        jnp.minimum(1.,values),0.))
     return FieldFeaturePatch(numeric,jnp.zeros((batch,41),jnp.int32),
         jnp.zeros(132,bool).at[jnp.asarray(FIELD_COLUMNS)].set(True),jnp.zeros(41,bool),ok)

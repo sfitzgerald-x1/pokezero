@@ -610,12 +610,15 @@ class OwnerSpikesTests(unittest.TestCase):
         return t._replace(public_port=port.initialize(1)._replace(hazards=j.asarray(hazards)))
 
     def test_the_owners_shown_spikes_credit_is_the_device_hooks(self):
-        from gpu_engine import engine_device_damage_history as dh
+        from gpu_engine import engine_device_public_port as port
         facts=cw.LineFacts(('alpha',),((300,263,300),(299,262,300),(10,0,300)))
         out=cw.fill_owner_spikes(self.port_carry(),0,facts);h=np.asarray(out.public_port.hazards)
-        pair=j.zeros(2,j.float32)
-        for drop in(12,11,4):pair=dh._add(pair,j.asarray(drop,j.float32)/100)   # 100->88, 99->88 (capped below max), 4->0
-        np.testing.assert_array_equal(h[0,0,0],np.asarray(pair))
+        device=self.port_carry();state=empty_state(1)
+        for before_hp,after_hp,maximum in facts.owner_spikes:
+            before=state._replace(hp=state.hp.at[0,0,0].set(before_hp),max_hp=state.max_hp.at[0,0,0].set(maximum))
+            after=before._replace(hp=before.hp.at[0,0,0].set(after_hp))
+            device=port.spikes(device,before,after,0,j.asarray([True]),tr._percent)
+        np.testing.assert_array_equal(h[0,0,0],np.asarray(device.public_port.hazards)[0,0,0])
         np.testing.assert_array_equal(h[0,0,1],[.25,0.]);np.testing.assert_array_equal(h[0,1],np.asarray(self.port_carry().public_port.hazards)[0,1])
         self.assertAlmostEqual(float(np.float32(h[0,0,0,0])+np.float32(h[0,0,0,1])),.27,places=6)   # the peer's OPP_HAZARD_CREDIT (high + low)
         self.assertIs(cw.fill_owner_spikes(out,0,facts),out)   # filled once: idempotent

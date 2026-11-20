@@ -7,6 +7,7 @@ Spikes stores shown and owning-exact victim fractions separately.
 from typing import NamedTuple
 import jax
 import jax.numpy as j
+from . import encoder_numeric as en
 from pokezero.dex import normalize_id
 from .engine_device_damage_history import _add
 from . import lane_index as _li
@@ -120,10 +121,10 @@ def spikes(t,before,after,side,use,percent):
     r=j.arange(len(use));s=_seat(side,len(use));p=_li.take(before.active,r,s)
     hp=_li.take(before.hp,r,s,p);maximum=_li.take(before.max_hp,r,s,p);new=_li.take(after.hp,r,s,p)
     yes=use&(maximum>0)&(hp>new)&(hp>=0)&(hp<=maximum)&(new>=0)
-    shown=j.maximum(0,percent(hp,maximum)-percent(new,maximum)).astype(j.float32)/100
-    exact=j.maximum(0,hp-new).astype(j.float32)/j.maximum(maximum,1)
-    value=j.where(yes[:,None],j.stack((shown,exact),-1),0)
-    old=_li.take(h.hazards,r,s);new=_add(old,value)
+    shown=en.ratio(j.maximum(0,percent(hp,maximum)-percent(new,maximum)),100,limit=100,pair=True)
+    exact=en.ratio(j.maximum(0,hp-new),maximum,pair=True)
+    value=j.where(yes[:,None,None],j.stack((shown,exact),-2),0)
+    old=_li.take(h.hazards,r,s);new=en.add_pair(old,value)
     return t._replace(public_port=h._replace(hazards=_set(h.hazards,s,new,yes)))
 
 

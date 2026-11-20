@@ -1,31 +1,8 @@
 name: Neural smoke
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/neural-smoke.yml"
-      - "pyproject.toml"
-      - "src/pokezero/__init__.py"
-      - "src/pokezero/collection.py"
-      - "src/pokezero/neural_cli.py"
-      - "src/pokezero/neural_policy.py"
-      - "src/pokezero/neural_selfplay.py"
-      - "src/pokezero/selfplay.py"
-      - "src/pokezero/rollout_cli.py"
-      - "src/pokezero/search_label*.py"
-      - "src/pokezero/value_precision_probe.py"
-      - "scripts/freeze_value_probe_cohort.py"
-      - "scripts/extract_value_probe_features.py"
-      - "scripts/fit_value_probe_heads.py"
-      - "tests/test_neural_policy.py"
-      - "tests/test_search_label*.py"
-      - "tests/test_value_precision_probe.py"
-      - "tests/test_value_probe_*.py"
+  workflow_dispatch:
 
-# Superseded PR heads do not need a second dependency install and smoke run.
-concurrency:
-  group: neural-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read

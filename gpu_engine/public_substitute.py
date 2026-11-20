@@ -9,6 +9,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -74,7 +75,7 @@ def project(state,active_tables,mons,own_team,tables,*,observer_side,expected_bi
     hp_ok=jnp.isfinite(hp)&(hp>=0)&(jnp.floor(hp)==hp)
     ok &= jnp.all(hp_ok,axis=-1)
     safe_hp=jnp.where(hp_ok,hp,0)
-    initial=jnp.where(safe_hp>0,jnp.floor(safe_hp/4)/jnp.maximum(safe_hp,1),.25)
+    initial=jnp.where(safe_hp>0,en.ratio(jnp.floor(safe_hp * .25), safe_hp),.25)
     has_sub=state.volatiles[:,:,jnp.clip(tables.substitute_id,0,state.volatiles.shape[-1]-1)]
     own_visible=own_team.present&own_team.active&has_sub[rows,seat,None]
     opponent=1-seat

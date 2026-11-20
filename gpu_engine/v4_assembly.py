@@ -10,7 +10,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from . import private_actions, private_requests, private_team
+from . import private_actions, private_requests, private_team, encoder_numeric as en
 from . import public_field, public_team
 from . import public_moves,public_abilities
 from pokezero import showdown as reference
@@ -233,7 +233,7 @@ def project_own_boosts(mons):
     b=mons.encounter.shape[0]
     columns=jnp.array([reference.v4_numeric_index(getattr(reference,'NUMERIC_BOOST_'+name))
         for name in ('ATK','DEF','SPA','SPD','SPE')])
-    numeric=jnp.zeros((b,2,132),jnp.float32).at[:,:,columns].set(jnp.clip(mons.boosts[:,:,:5]/6.,-1.,1.))
+    numeric=jnp.zeros((b,2,132),jnp.float32).at[:,:,columns].set(en.normalized(mons.boosts[:,:,:5], 6, minimum=-6))
     valid=jnp.all((mons.boosts>=-6)&(mons.boosts<=6),axis=(1,2))
     return private_team.TeamFeaturePatch(numeric,jnp.zeros((b,2,41),jnp.int32),
         jnp.zeros(132,bool).at[columns].set(True),jnp.zeros(41,bool),valid)
