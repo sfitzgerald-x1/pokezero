@@ -2824,7 +2824,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _lifecycle=_lifecycle_trace,_device_public=_device_public)
         work=_clear_fainted_boosts(work,_faint_before_hp,eligible=eligible)
     # Fidelity M2 (design 2.3): Perish Song's residual (data/mods/gen4/moves.ts:993-999, order 12), after the order-10
-    # list. Faster first; an equal-Speed pair takes effect[1][3] (that side first). The duration falls; at 0 its onEnd
+    # list. Faster first; an equal-Speed pair takes effect[1][3] & 1 (that side first). The duration falls; at 0 its onEnd
     # prints perish0 and faints the holder (faint() queues it), else -start|X|perishN. A fainted holder is skipped. The end
     # path runs no faintMessages before the next handler (sim/battle.ts:515-523), so both holders resolve even when the
     # first faint empties a side (Gen 3 checkWin with both sides empty is a tie): the pass is gated once, at its start.
@@ -2833,7 +2833,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _upkeep_alive=work.hp[rows[:,None],sides,work.active]>0
         _upkeep_count=work.perish_counter[rows[:,None],sides,work.active]
     _perish_continues=residual_ready & jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
-    _perish_first=jnp.where(end_speed[:,0]!=end_speed[:,1],(end_speed[:,1]>end_speed[:,0]).astype(jnp.int32),effect_draws[:,1,3])
+    _perish_first=jnp.where(end_speed[:,0]!=end_speed[:,1],(end_speed[:,1]>end_speed[:,0]).astype(jnp.int32),effect_draws[:,1,3] & 1)
     _forecast_perish_hp=work.hp
     for order in range(2):
         side=jnp.where(order==0,_perish_first,1-_perish_first)
