@@ -5,7 +5,7 @@ pure JITs; each game owns a fresh original public fold and only its own request.
 The original V4 observation remains authoritative for routing. The SAME actual
 encode_step result supplies the reviewed six public belief rows exactly once.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import math
 from types import MappingProxyType
@@ -83,7 +83,6 @@ def take_declaration(metadata,*,contract,catalog):
     (v5_model.export writes metadata['self_moves'] only when on; absent = off) is TAKEN, never refused: an on archive is
     served and evaluated on, an off archive off. The catalog is recompiled from its own source, dex and vocabulary only
     when the declaration differs (self_moves is encode-only, so the fold binding is unchanged)."""
-    from dataclasses import replace
     from . import v4_encoder
     declared=metadata.get('self_moves',False)
     if type(declared) is not bool:raise ValueError('v5 archive self_moves must be a bool')
@@ -330,6 +329,11 @@ class Actor(live.LiveProtocolActor):
         old,public=public_observation(encoded,appended,row=0,owner=int(self.owner[1])-1,
             address=c.DecisionAddress(self.stream_id,frame,int(self.owner[1])-1),
             adapter=self.factory.adapter,public_species=species)
+        if self.factory.allow_maybe_trapped_switches:
+            # The serializer checked the native encoder output. Use the exact
+            # mask passed to the serving policy for the captured decision.
+            old = replace(old, legal_action_mask=routing.legal_action_mask)
+            public = replace(public, legal_action_mask=routing.legal_action_mask)
         for name in live.SHAPES:
             if not np.array_equal(np.asarray(getattr(old,name)),np.asarray(getattr(routing,name))):
                 raise ValueError('captured v5 prefix differs from original routing input')

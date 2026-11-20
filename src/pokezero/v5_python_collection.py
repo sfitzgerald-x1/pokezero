@@ -263,6 +263,8 @@ def collect_game(env,game,*,factories,max_requests,collect_owners=(0,1),start_ov
     from gpu_engine import v5_collection_data as data
     for factory in factories.values():
         check_factory(factory)
+        if getattr(factory, 'allow_maybe_trapped_switches', False):
+            raise ValueError('guarded maybe-trapped switches are for serving and deferred evaluation')
         if factory.deterministic or factory.config.arm=='D':raise ValueError('stochastic A/B raw factories required')
     bindings={(x.config.category_vocabulary_sha256,x.config.label_vocabulary.sha256)for x in factories.values()}
     if len(bindings)!=1:raise ValueError('same original v5 category/label axes required')
