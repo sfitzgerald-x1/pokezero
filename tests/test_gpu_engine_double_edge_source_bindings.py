@@ -30,12 +30,12 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # Train B's combined Stick tree at b3b3b6cd additionally preserves its reviewed <4 cuts and
   # CRIT_RATIO_UNREPRESENTABLE refusal alongside Transform's closure; strict AST/membership equality stays required.
   # V6 composition binds all five bodies, including ordinary_law's fifth effect column.
-  # Shed Skin composition adds two cure axes and the saved-block checks to the live inventories.
-  certified={'chance_consumers.py':'f62255ca35e615eb13a7df0b94bd1657a7f558ef',
-             'phase_d_chance.py':'f62255ca35e615eb13a7df0b94bd1657a7f558ef',
-             'conditional_law.py':'f62255ca35e615eb13a7df0b94bd1657a7f558ef',
-             'engine_source_frame_witness.py':'f62255ca35e615eb13a7df0b94bd1657a7f558ef',
-             'ordinary_law.py':'f62255ca35e615eb13a7df0b94bd1657a7f558ef'}
+  # Keep the Shed Skin cure axes and bind the reviewed Toxic SwitchIn composition.
+  certified={'chance_consumers.py':'85abfe4ff255af8a1b91fd4811ddf9baec0ce644',
+             'phase_d_chance.py':'85abfe4ff255af8a1b91fd4811ddf9baec0ce644',
+             'conditional_law.py':'85abfe4ff255af8a1b91fd4811ddf9baec0ce644',
+             'engine_source_frame_witness.py':'85abfe4ff255af8a1b91fd4811ddf9baec0ce644',
+             'ordinary_law.py':'85abfe4ff255af8a1b91fd4811ddf9baec0ce644'}
   constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
   for file in ('chance_consumers.py','ordinary_law.py','conditional_law.py',
                'engine_source_frame_witness.py','phase_d_chance.py'):
