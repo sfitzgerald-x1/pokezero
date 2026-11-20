@@ -177,6 +177,12 @@ def _tick(config, folder, allow_launch, channel, send, observe, release, launch,
     queue_path = folder/'eval-queue.json'
     queue = _read(queue_path, {'exhausted': []})
     void = {row['declared_games']: row for row in queue.get('void', [])}
+    def record_void(games, receipt):
+        if void.get(games) != receipt:
+            log(f'EVALUATION_VOID_ALERT games={games} '
+                f"existing={receipt['existing_request_sha256']} proposed={receipt['proposed_request_sha256']}")
+        void[games] = receipt
+
     for step in range(1, config['milestones']+1):
         games = step * panels.INTERVAL_GAMES
         request = root/'artifacts'/'cpu-panels'/str(games)/'request.json'
@@ -187,22 +193,30 @@ def _tick(config, folder, allow_launch, channel, send, observe, release, launch,
             continue
         if receipt is not None:
             frontier = games
-            if void.get(games) != receipt:
-                log(f'EVALUATION_VOID_ALERT games={games} '
-                    f"existing={receipt['existing_request_sha256']} proposed={receipt['proposed_request_sha256']} "
-                    f'log={request.with_name("evaluation-void.json")}')
-            void[games] = receipt
+            record_void(games, receipt)
         if games in void or not request.is_file():
             continue
         frontier = games
         dispatch = Artifact(str(request), deferred.run._file_sha(request))
         target = index/f'{games}.json'
         if target.is_file():
+            try:
+                receipt = deferred.read_published_eval_void(dispatch, games)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                log(f'milestone observation deferred: {type(error).__name__}')
+                continue
+            if receipt is not None:
+                record_void(games, receipt)
+                continue
             row = json.loads(target.read_bytes())
             if row['dispatch_sha256'] != dispatch.sha256 or row['protocol_sha256'] != protocol.sha256:
                 raise ValueError('completed milestone request changed')
         else:
-            row = panels.summarize(dispatch, protocol, registry)
+            try:
+                row = panels.summarize(dispatch, protocol, registry)
+            except deferred.VoidEvaluation as error:
+                record_void(games, error.receipt)
+                continue
             if row['complete']:
                 deferred._publish_equal(target, row)
             else:
@@ -230,7 +244,11 @@ def _tick(config, folder, allow_launch, channel, send, observe, release, launch,
             dispatch_attempts = [a for a in state['attempts'] if a['key'][0] == dispatch.sha256]
             if slots <= 0 and len(dispatch_attempts) < max_attempts:
                 continue
-            work = panels.pending_shards(dispatch, protocol, registry)
+            try:
+                work = panels.pending_shards(dispatch, protocol, registry)
+            except deferred.VoidEvaluation as error:
+                record_void(error.receipt['declared_games'], error.receipt)
+                continue
             for item in sorted(work, key=lambda x: (x['shard'], x['opponent'])):
                 opponent, shard = item['opponent'], item['shard']
                 key = (dispatch.sha256, opponent, shard)

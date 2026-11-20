@@ -23,7 +23,7 @@ class ProgressMonitorTests(unittest.TestCase):
             root = Path(directory)
             request = root/'artifacts/cpu-panels/1000000/request.json'
             request.parent.mkdir(parents=True)
-            request.write_text('test request only')
+            request.write_text('{}')
             protocol = root/'protocol.json'
             protocol.write_text('{}')
             source = dict(staged_run_root=str(root), registry=str(root/'registry'), milestones=1,
@@ -134,6 +134,39 @@ class ProgressMonitorTests(unittest.TestCase):
             self.assertEqual(json.loads((folder/'eval-queue.json').read_bytes())['void'], [record])
             self.assertEqual((folder/'eval-timeline.jsonl').read_text(), '')
             self.assertIn('| 1,000,000 | VOID |', (folder/'showdown-progress.md').read_text())
+
+    def test_cached_staged_result_is_hidden_after_published_request_goes_void(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original, staged = root/'original', root/'staged'
+            protocol = root/'protocol.json'
+            protocol.write_text('{}')
+            policy = run.EvaluationProtocol(run._file_sha(protocol), 1_000_000, 'deferred')
+            dispatch = deferred.MilestoneDispatch(original, policy, {0: 1_000_000}, 'a'*64)
+            snapshot = run.Snapshot(0, 'train.pt', 'b'*64, 'actor.npz', 'c'*64, 'd'*64)
+            published = dispatch.publish_committed(snapshot, report_error=self.fail)
+            request = staged/published.request
+            request.parent.mkdir(parents=True)
+            request.write_bytes((original/published.request).read_bytes())
+            folder = root/'report'
+            cached = folder/'milestones/1000000.json'
+            cached.parent.mkdir(parents=True)
+            # A cached result needs no model or bank load to be disqualified.
+            cached.write_text(json.dumps({'dispatch_sha256': published.request_sha256,
+                                         'protocol_sha256': policy.protocol_sha256, 'complete': True}))
+            dispatch.publish_committed(snapshot, report_error=lambda _: None,
+                full_checkpoint=dict(path='different.pt', sha256='e'*64))
+            config = dict(staged_run_root=str(staged), registry=str(root/'registry'), milestones=1,
+                          protocol=dict(path=str(protocol), sha256=policy.protocol_sha256))
+            log = Mock()
+            with patch.object(panels, 'summarize') as summarize:
+                result = monitor.tick(config, folder, log=log)
+            self.assertEqual((result['queued'], result['finalized']), (0, 0))
+            summarize.assert_not_called()
+            log.assert_called_once()
+            self.assertIn('EVALUATION_VOID_ALERT', log.call_args.args[0])
+            self.assertIn('| 1,000,000 | VOID |', (folder/'showdown-progress.md').read_text())
+            self.assertEqual((folder/'eval-timeline.jsonl').read_text(), '')
 
     def test_ambiguous_slack_failure_gets_receipt_without_repost(self):
         with tempfile.TemporaryDirectory() as directory:

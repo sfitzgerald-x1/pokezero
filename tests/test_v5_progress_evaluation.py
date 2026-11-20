@@ -149,7 +149,7 @@ battle.destroy();
             request_path = root/'request'
             request_path.write_text(json.dumps({'published_unix': 100}))
             dispatch = Artifact(str(request_path), run._file_sha(request_path))
-            request = SimpleNamespace(declared_games=1_000_000, declaration_sha256='decl')
+            request = SimpleNamespace(declared_games=1_000_000, declaration_sha256='decl', run_directory=root)
             banks = {n: [{}]*1000 for n in progress.OPPONENTS}
             profile = {'shared_cell_registry': str(root)}
             def identity(_request, _profile, opponent, _row, seat):
@@ -197,6 +197,49 @@ battle.destroy();
             archive.write_bytes(b'wrong actor')
             with self.assertRaisesRegex(ValueError, 'frozen evaluation input differs'):
                 deferred.read_milestone(reference, staged_run_root=root)
+
+    def test_staged_void_and_in_flight_shared_cell_are_refused(self):
+        from pokezero import v5_deferred_evaluation as deferred, v5_evaluation as evaluation
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            original, staged = base/'original', base/'jokla'
+            for root in (original, staged):
+                (root/'artifacts').mkdir(parents=True)
+                (root/'artifacts/train.pt').write_bytes(b'test checkpoint')
+                (root/'artifacts/actor.npz').write_bytes(b'test actor')
+            policy = run.EvaluationProtocol('b'*64, 1, 'deferred')
+            declaration = dict(model={'fixture': True}, iterations=[[{'games':[{}]}]], evaluation=policy.metadata())
+            (staged/'declaration.json').write_text(run._json(declaration))
+            snapshot = run.Snapshot(0, 'artifacts/train.pt', run._file_sha(original/'artifacts/train.pt'),
+                'artifacts/actor.npz', run._file_sha(original/'artifacts/actor.npz'), run._sha(declaration['model']))
+            identity = run.EvaluationRequest(1, run._sha(declaration), policy.protocol_sha256, snapshot,
+                original, original/snapshot.checkpoint, original/snapshot.archive)
+            dispatched = deferred.publish_dispatch(identity, None, identity.declaration_sha256)
+            copied = staged/dispatched.request
+            copied.parent.mkdir(parents=True)
+            copied.write_bytes((original/dispatched.request).read_bytes())
+            reference = evaluation.Artifact(str(copied), dispatched.request_sha256)
+            request = deferred.read_milestone(reference, staged_run_root=staged)
+            owner = deferred.MilestoneDispatch(original, policy, {0: 1}, identity.declaration_sha256)
+
+            def evaluate():
+                owner.publish_committed(snapshot, report_error=lambda _: None,
+                    full_checkpoint=dict(path='artifacts/different.pt', sha256='f'*64))
+                return 'p1', {}
+
+            with self.assertRaises(deferred.VoidEvaluation):
+                progress.run_shared_cell(base/'registry', {'seat': 'p1'}, evaluate,
+                    require_live=lambda: deferred.require_live_milestone(request, published_root=original))
+            self.assertFalse(list((base/'registry').glob('*/*/result.json')))
+            self.assertFalse(list((base/'registry').glob('*/*/attempt-*.json')))
+            with self.assertRaises(deferred.VoidEvaluation):
+                deferred.read_milestone(reference, staged_run_root=staged)
+            # Jokla can see a copied receipt even when the source root is unavailable.
+            receipt = (original/dispatched.request).with_name('evaluation-void.json')
+            copied.with_name(receipt.name).write_bytes(receipt.read_bytes())
+            original.rename(base/'unmounted')
+            with self.assertRaises(deferred.VoidEvaluation):
+                deferred.read_milestone(reference, staged_run_root=staged)
 
     def test_mixed_showdown_keeps_9375_and_max_damage_on_their_own_seats(self):
         class Environment:

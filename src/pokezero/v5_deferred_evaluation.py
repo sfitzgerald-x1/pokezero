@@ -70,6 +70,16 @@ class ImmutableRequestMismatch(ValueError):
                 self.diff[field] = dict(existing=before, proposed=after)
 
 
+class VoidEvaluation(ValueError):
+    def __init__(self, receipt):
+        super().__init__(f'VOID milestone evaluation at {receipt["declared_games"]} games')
+        self.receipt = receipt
+
+
+def _milestone_path(root, games):
+    return Path(root) / 'artifacts' / 'cpu-panels' / str(games) / 'request.json'
+
+
 def _void_log(request_path):
     return request_path.with_name('evaluation-void.json')
 
@@ -87,6 +97,30 @@ def read_eval_void(request_path, games):
                 'declaration_sha256', 'protocol_sha256'):
         run.c._binding(row[key])
     return row
+
+
+def read_published_eval_void(reference, games):
+    """Check the published root when inspecting a staged request's cached result."""
+    value = reference.document()
+    if type(value) is not dict:
+        raise ValueError('milestone dispatch must be a JSON object')
+    if value.get('schema') != MILESTONE:
+        return None
+    path = _milestone_path(value['request']['run_directory'], games)
+    if path == Path(reference.path):
+        return None
+    return read_eval_void(path, games)
+
+
+def require_live_milestone(request, *, published_root=None):
+    """A staged run carries its adjacent VOID receipt with the original request."""
+    roots = (request.run_directory,)
+    if published_root is not None and Path(published_root) != request.run_directory:
+        roots += (Path(published_root),)
+    for root in roots:
+        receipt = read_eval_void(_milestone_path(root, request.declared_games), request.declared_games)
+        if receipt is not None:
+            raise VoidEvaluation(receipt)
 
 
 class MilestoneDispatch:
@@ -108,11 +142,26 @@ class MilestoneDispatch:
                 raise ValueError('S0 route requires a configured stop verification key')
 
     def path(self, games):
-        return self.root / 'artifacts' / 'cpu-panels' / str(games) / 'request.json'
+        return _milestone_path(self.root, games)
 
-    def request_missing(self, snapshot):
-        path = self.path(self.milestones[snapshot.iteration])
-        return not path.exists() or _void_log(path).exists()
+    def _request(self, games, snapshot):
+        return run.EvaluationRequest(games, self.declaration_sha256, self.policy.protocol_sha256,
+            snapshot, self.root, self.root / snapshot.checkpoint, self.root / snapshot.archive)
+
+    def request_missing(self, snapshot, *, full_checkpoint=None):
+        # A matching, readable request is the only completed publication.
+        # Recovery must detect a mismatch even if its VOID receipt never landed.
+        games = self.milestones[snapshot.iteration]
+        request = self._request(games, snapshot)
+        path = self.path(games)
+        try:
+            if _void_log(path).exists():
+                return True
+            value = _milestone_document(request, self.policy.route_declaration_sha256, full_checkpoint)
+            _check_existing_milestone(path, value)
+        except (OSError, ValueError):
+            return True
+        return False
 
     def publish_committed(self, snapshot, *, report_error, full_checkpoint=None):
         games = self.milestones.get(snapshot.iteration)
@@ -128,8 +177,7 @@ class MilestoneDispatch:
             return self._publish(games, snapshot, full_checkpoint, report_error)
 
     def _publish(self, games, snapshot, full_checkpoint, report_error):
-        request = run.EvaluationRequest(games, self.declaration_sha256, self.policy.protocol_sha256,
-            snapshot, self.root, self.root / snapshot.checkpoint, self.root / snapshot.archive)
+        request = self._request(games, snapshot)
         try:
             # Only serialize committed artifact references. The evaluator checks
             # their bytes and the actual scientific protocol in its own process.
@@ -231,6 +279,7 @@ def publish_route_failure(reference, verdict_reference, *, key=None):
         declared_games=request.declared_games, dispatch_sha256=reference.sha256,
         independent_verdict_sha256=verdict_reference.sha256)
     path = request.run_directory / 'evaluation-stop.json'
+    require_live_milestone(request)
     return _publish_equal(path, dict(payload=payload, signature=_signature(payload, key)))
 
 
@@ -314,36 +363,43 @@ def checked_dispatch_document(value,request):
     return value
 
 
+def _milestone_document(request, route_declaration_sha256, full_checkpoint):
+    return dict(schema=MILESTONE, request=evaluation._request_document(request),
+                route_declaration_sha256=route_declaration_sha256,
+                full_checkpoint=full_checkpoint or dict(path=request.snapshot.checkpoint,
+                                                       sha256=request.snapshot.checkpoint_sha256))
+
+
+def _check_existing_milestone(path, value):
+    existing, published_sha256 = _small_document(path)
+    if type(existing) is not dict:
+        raise ValueError('milestone dispatch must be a JSON object')
+    comparable = {k: v for k, v in existing.items() if k != 'published_unix'}
+    if run._json(comparable) != run._json(value):
+        raise ImmutableRequestMismatch(comparable, value, published_sha256)
+    return published_sha256
+
+
 def publish_dispatch(request,protocol,expected_run_declaration_sha256, *,
                      route_declaration_sha256=None, full_checkpoint=None):
     """Idempotent publication only; never starts a process or grants RESULT."""
     if protocol is None:
-        value = dict(schema=MILESTONE, request=evaluation._request_document(request),
-                     route_declaration_sha256=route_declaration_sha256,
-                     full_checkpoint=full_checkpoint or dict(path=request.snapshot.checkpoint,
-                                                            sha256=request.snapshot.checkpoint_sha256))
+        value = _milestone_document(request, route_declaration_sha256, full_checkpoint)
         if request.declaration_sha256 != expected_run_declaration_sha256:
             raise ValueError('milestone request differs from the committed declaration')
     else:
         value=dict(schema=SCHEMA,protocol=asdict(protocol),expected_run_declaration_sha256=expected_run_declaration_sha256,
             request=evaluation._request_document(request),prior_completions=_prior(request))
         checked_dispatch_document(value,request)
-    directory=request.run_directory/'artifacts'/'cpu-panels'/str(request.declared_games)
-    path = directory/'request.json'
+    path = _milestone_path(request.run_directory, request.declared_games)
     if protocol is None:
         if not path.exists():
             try:
                 run._publish(path, run._json(dict(value, published_unix=time.time())).encode())
-                sync_directory(directory)
+                sync_directory(path.parent)
             except FileExistsError:
                 pass
-        existing, published_sha256 = _small_document(path)
-        if type(existing) is not dict:
-            raise ValueError('milestone dispatch must be a JSON object')
-        comparable = {k: v for k, v in existing.items() if k != 'published_unix'}
-        if run._json(comparable) != run._json(value):
-            raise ImmutableRequestMismatch(comparable, value, published_sha256)
-        reference = evaluation.Artifact(str(path.resolve()), published_sha256)
+        reference = evaluation.Artifact(str(path.resolve()), _check_existing_milestone(path, value))
     else:
         reference = _publish_equal(path, value)
     relative=str(Path(reference.path).relative_to(request.run_directory))
@@ -381,14 +437,15 @@ def _restore_milestone(value, *, staged_run_root=None):
     if value['schema'] != MILESTONE:
         raise ValueError('committed milestone dispatch required')
     request = evaluation._restore_request(value['request'])
+    original = request.run_directory
     if staged_run_root is not None:
-        original = request.run_directory
         if (request.archive_path != original / request.snapshot.archive
                 or request.checkpoint_path != original / request.snapshot.checkpoint):
             raise ValueError('original dispatch contains a different artifact path')
         root = Path(staged_run_root).resolve()
         request = replace(request, run_directory=root, archive_path=root / request.snapshot.archive,
                           checkpoint_path=root / request.snapshot.checkpoint)
+    require_live_milestone(request, published_root=original)
     declaration = json.loads((request.run_directory / 'declaration.json').read_bytes())
     policy = declaration['evaluation']
     if (run._sha(declaration) != request.declaration_sha256
@@ -418,7 +475,7 @@ def _restore_milestone(value, *, staged_run_root=None):
 def read_milestone(reference, *, staged_run_root=None):
     """Shared reader for separate CPU and GPU evaluator entries."""
     request = _restore_milestone(reference.document(), staged_run_root=staged_run_root)
-    path = request.run_directory / 'artifacts' / 'cpu-panels' / str(request.declared_games) / 'request.json'
+    path = _milestone_path(request.run_directory, request.declared_games)
     if Path(reference.path).resolve() != path:
         raise ValueError('original owned milestone dispatch path required')
     return request
@@ -499,7 +556,9 @@ def execute_assay(reference, protocol, assay, *, resume=False):
                     raise ValueError('assay result identity differs')
                 if metrics['status'] not in ('RESULT', 'UNKNOWN'):
                     raise ValueError('invalid assay result status')
-                outcome.update(status=metrics['status'], result=dict(path=str(output), sha256=run._file_sha(output)))
+                receipt = dict(path=str(output), sha256=run._file_sha(output))
+                require_live_milestone(request)
+                outcome.update(status=metrics['status'], result=receipt)
             else:
                 outcome['reason'] = 'assay entry exited unsuccessfully'
         except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
@@ -531,6 +590,7 @@ def _dispatch_inputs(reference, *, protocol=None):
             raise ValueError('S0 r2 requires its matched assay executor and registered roster')
     else:
         request = _restore(value)
+        require_live_milestone(request)
         original = evaluation.Artifact(**value['protocol'])
         if protocol is not None and protocol != original:
             raise ValueError('legacy dispatch protocol differs')
@@ -544,7 +604,7 @@ def execute_dispatch(reference,*,resume=False,enable_cpu_panel=False,protocol=No
     import fcntl,os
     if os.environ.get('JAX_PLATFORMS')!='cpu' or os.environ.get('CUDA_VISIBLE_DEVICES')!='':
         raise ValueError('explicit CPU-only panel environment required')
-    value, request, protocol = _dispatch_inputs(reference, protocol=protocol)
+    _, request, protocol = _dispatch_inputs(reference, protocol=protocol)
     directory=Path(reference.path).parent
     expected=request.run_directory/'artifacts'/'cpu-panels'/str(request.declared_games)/'request.json'
     if Path(reference.path).resolve()!=expected:raise ValueError('original owned CPU dispatch path required')
@@ -562,6 +622,7 @@ def execute_dispatch(reference,*,resume=False,enable_cpu_panel=False,protocol=No
         started=dict(schema=ATTEMPT,dispatch_sha256=reference.sha256,attempt=attempt)
         _publish_equal(directory/'attempts'/f'{attempt:06d}.json',started)
         def completion(receipt):
+            require_live_milestone(request)
             run._checked_evaluation_completion(receipt)
             run._checked_completion_protocol(receipt,_binding(request))
             if receipt.cell_ordinal in prior and prior[receipt.cell_ordinal]!=receipt:
@@ -631,6 +692,7 @@ def read_dispatched_result(reference, *, protocol=None):
             or report['completed_only_score']!=(sum(scores)/known if known else None)
             or report['score_bounds']!=[sum(scores)/1000,(sum(scores)+unknown)/1000]):
         raise ValueError('full CPU panel denominator or score bounds changed')
+    require_live_milestone(request)
     return dict(status=outcome.status,outcome=asdict(outcome),report=asdict(artifact),
         known_completed=known,unknown_cells=unknown,score_bounds=report['score_bounds'],dispatch=asdict(reference))
 

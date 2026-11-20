@@ -195,6 +195,126 @@ class DeferredTrainingTests(unittest.TestCase):
             snapshot = deferred.read_milestone(ref).snapshot
             self.assertEqual(snapshot, run.Snapshot(**store.matching('SNAPSHOT', iteration=1)[0]))
 
+    def test_failed_void_receipt_is_repaired_on_restart_with_request_unchanged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'run'
+            policy = run.EvaluationProtocol('c'*64, 4, 'deferred')
+            plan = replace(fixture.plan(), evaluation=policy)
+            publish = deferred.publish_dispatch
+
+            def publish_stale(request, protocol, expected, **kwargs):
+                extra = root / 'artifacts' / 'different-full.pt'
+                extra.write_bytes(b'other full checkpoint')
+                kwargs['full_checkpoint'] = dict(path=str(extra.relative_to(root)), sha256=run._file_sha(extra))
+                return publish(request, protocol, expected, **kwargs)
+
+            with patch.object(deferred, 'publish_dispatch', side_effect=publish_stale):
+                first = Harness().execute(root, plan, fixture.FakeBackend(), fixture.FakeTraining(), None)
+            self.assertEqual(first['steps'], 6)
+            path = root / 'artifacts' / 'cpu-panels' / '4' / 'request.json'
+            original = path.read_bytes()
+            reference = evaluation.Artifact(str(path), run._file_sha(path))
+            request = deferred.read_milestone(reference)
+            recovered = deferred.MilestoneDispatch(root, policy, {1: 4}, request.declaration_sha256)
+            self.assertTrue(recovered.request_missing(request.snapshot))
+            self.assertIsNone(deferred.read_eval_void(path, 4))
+            write = deferred._publish_equal
+
+            def unavailable(path, document):
+                if path.name == 'evaluation-void.json':
+                    raise OSError('injected VOID log write failure')
+                return write(path, document)
+
+            backend = fixture.FakeBackend()
+            with patch.object(deferred, '_publish_equal', side_effect=unavailable):
+                failed_log = Harness().execute(root, plan, backend, fixture.FakeTraining(), None, resume=True)
+            self.assertEqual((failed_log['steps'], backend.collect_calls), (6, []))
+            self.assertIsNone(deferred.read_eval_void(path, 4))
+            self.assertEqual(path.read_bytes(), original)
+            errors = run.Store(root, plan, resume=True).matching('EVALUATION_REQUEST_ERROR')
+            self.assertTrue(any('EVALUATION_VOID_LOG_ERROR' in e['reason'] for e in errors))
+
+            backend = fixture.FakeBackend()
+            again = Harness().execute(root, plan, backend, fixture.FakeTraining(), None, resume=True)
+            self.assertEqual((again['steps'], backend.collect_calls), (6, []))
+            self.assertEqual(path.read_bytes(), original)
+            receipt = deferred.read_eval_void(path, 4)
+            self.assertEqual(receipt['status'], 'VOID')
+            self.assertNotEqual(receipt['existing_request_sha256'], receipt['proposed_request_sha256'])
+            self.assertIn('full_checkpoint', receipt['diff'])
+
+    def test_void_revokes_live_and_resumed_dispatch_consumers(self):
+        from pokezero import v5_progress_evaluation as progress
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'run'
+            profile = dict(schema=progress.SCHEMA, banks=dict.fromkeys(progress.OPPONENTS))
+            protocol = artifact(Path(directory) / 'protocol.json', profile)
+            policy = run.EvaluationProtocol(protocol.sha256, 2, 'deferred')
+            plan = replace(fixture.plan(), evaluation=policy)
+            Harness().execute(root, plan, fixture.FakeBackend(), fixture.FakeTraining(), None)
+            path = root / 'artifacts' / 'cpu-panels' / '2' / 'request.json'
+            reference = evaluation.Artifact(str(path), run._file_sha(path))
+            request = deferred.read_milestone(reference)
+            dispatch = deferred.MilestoneDispatch(root, policy, {0: 2}, request.declaration_sha256)
+
+            def finish(actual):
+                self.assertIsNone(deferred.read_eval_void(path, 2))
+                dispatch.publish_committed(request.snapshot, report_error=lambda _: None,
+                    full_checkpoint=dict(path='artifacts/different.pt', sha256='f'*64))
+                return Harness().result(actual)
+
+            with patch.dict(os.environ, {'CUDA_VISIBLE_DEVICES': '', 'JAX_PLATFORMS': 'cpu'}), \
+                    patch.object(evaluation, 'EvaluationHook', return_value=finish) as hook:
+                outcome = deferred.execute_dispatch(reference, protocol=protocol, enable_cpu_panel=True)
+                self.assertEqual(outcome.status, 'UNKNOWN')
+                self.assertIn('VOID milestone', outcome.reason)
+                self.assertIsNone(outcome.report)
+                with self.assertRaises(deferred.VoidEvaluation):
+                    deferred.execute_dispatch(reference, protocol=protocol, enable_cpu_panel=True, resume=True)
+                hook.assert_called_once()
+            for read in (
+                lambda: deferred.read_milestone(reference),
+                lambda: deferred.read_dispatched_result(reference, protocol=protocol),
+                lambda: deferred.execute_assay(reference, protocol, 'external_fp_greedy', resume=True),
+                lambda: progress.summarize(reference, protocol, root/'registry'),
+            ):
+                with self.assertRaises(deferred.VoidEvaluation):
+                    read()
+            self.assertEqual(run._file_sha(path), reference.sha256)
+
+    def test_assay_discarded_if_request_is_voided_while_child_runs(self):
+        from types import SimpleNamespace
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace/'run'
+            entry = artifact(workspace/'entry.json', {})
+            inputs = artifact(workspace/'inputs.json', {})
+            assay = 'external_fp_greedy'
+            protocol = artifact(workspace/'protocol.json', dict(schema=deferred.ASSAY_PROTOCOL,
+                milestones={'2': {assay: dict(entry=entry.__dict__, input_manifest=inputs.__dict__, deadline_seconds=10)}}))
+            policy = run.EvaluationProtocol(protocol.sha256, 2, 'deferred')
+            Harness().execute(root, replace(fixture.plan(), evaluation=policy), fixture.FakeBackend(), fixture.FakeTraining(), None)
+            path = root/'artifacts/cpu-panels/2/request.json'
+            reference = evaluation.Artifact(str(path), run._file_sha(path))
+            request = deferred.read_milestone(reference)
+            dispatch = deferred.MilestoneDispatch(root, policy, {0: 2}, request.declaration_sha256)
+
+            def finish(command, **kwargs):
+                dispatch.publish_committed(request.snapshot, report_error=lambda _: None,
+                    full_checkpoint=dict(path='artifacts/different.pt', sha256='f'*64))
+                output = Path(command[command.index('--output') + 1])
+                output.write_text(json.dumps(dict(status='RESULT', assay=assay, dispatch_sha256=reference.sha256)))
+                return SimpleNamespace(returncode=0)
+
+            with patch.dict(os.environ, {'CUDA_VISIBLE_DEVICES': '', 'JAX_PLATFORMS': 'cpu'}), \
+                    patch('subprocess.run', side_effect=finish):
+                outcome = deferred.execute_assay(reference, protocol, assay)
+            self.assertEqual(outcome['status'], 'UNKNOWN')
+            self.assertIn('VOID milestone', outcome['reason'])
+            self.assertNotIn('result', outcome)
+
     def test_assay_attempts_require_separate_device_and_preserve_failure_on_resume(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

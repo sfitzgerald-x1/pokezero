@@ -165,7 +165,7 @@ def read_shared_start(registry, identity):
     return value
 
 
-def run_shared_cell(registry, identity, evaluate, *, retry_unknown=False):
+def run_shared_cell(registry, identity, evaluate, *, retry_unknown=False, require_live=None):
     """Coordinate exact-cell reuse with route consumers using the same registry."""
     digest = run._sha(identity)
     directory = Path(registry) / digest[:2] / digest
@@ -175,6 +175,8 @@ def run_shared_cell(registry, identity, evaluate, *, retry_unknown=False):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return None
+        if require_live is not None:
+            require_live()
         result_path = directory / 'result.json'
         if result_path.exists():
             return _result_from_row(json.loads(result_path.read_bytes()), identity)
@@ -204,12 +206,16 @@ def run_shared_cell(registry, identity, evaluate, *, retry_unknown=False):
                     value = dict(first, status='UNKNOWN', win=None,
                                  reason=type(error).__name__ + ': ' + str(error)[:1024])
                 value['finished_unix'] = time.time()
+                if require_live is not None:
+                    require_live()
                 deferred._publish_equal(outcome, value)
             if first_start is None:
                 first_start = value['started_unix']
             if value['status'] == 'COMPLETE':
                 break
         value = dict(value, started_unix=first_start, prior_unknown_attempts=attempt)
+        if require_live is not None:
+            require_live()
         deferred._publish_equal(result_path, value)
         return value
 
@@ -317,6 +323,11 @@ def _evaluate_lane(dispatch, protocol, name, registry, selected, cores):
 
     os.sched_setaffinity(0, set(cores))
     request, profile, banks = load_profile(dispatch, protocol)
+    published_root = dispatch.document()['request']['run_directory']
+
+    def require_live():
+        deferred.require_live_milestone(request, published_root=published_root)
+
     if profile['opponent_sha256s']['champion_9375'] != ActorContract.champion().checkpoint_sha256:
         raise ValueError('original 9375 checkpoint identity required')
     shared_pairs = _ref(profile['inventory']).document().get('registered_s0_pairs', {})
@@ -378,7 +389,7 @@ def _evaluate_lane(dispatch, protocol, name, registry, selected, cores):
                     return play()
                 # A registered S0 cell follows its original no-replay rule.
                 result = run_shared_cell(registry, identity, attempt,
-                    retry_unknown=f'{name}:{row["seed"]}' not in shared_pairs)
+                    retry_unknown=f'{name}:{row["seed"]}' not in shared_pairs, require_live=require_live)
                 field = 'active_shared_cells' if result is None else result['status'].lower()
                 counts[field] += 1
     finally:
@@ -516,6 +527,10 @@ def summarize(dispatch, protocol, registry, *, output=None):
                   panel=panel, published_unix=published, observed_unix=time.time(), complete=terminal,
                   work_started=bool(starts), queue_wait_seconds=max(0, first-published),
                   eval_lag_seconds=max(0, finished-published))
+    if profile.get('staged_run_root') is not None:
+        deferred.require_live_milestone(request, published_root=document['request']['run_directory'])
+    else:
+        deferred.require_live_milestone(request)
     if output is not None:
         deferred._publish_equal(output, result)
     return result
