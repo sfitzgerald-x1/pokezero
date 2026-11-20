@@ -45,11 +45,14 @@ jobs:
             showdown: true
             selectors: |
               tests.test_gpu_engine_device_observation
-              tests.test_gpu_engine_device_observation_boundary_parity
               tests.test_gpu_engine_device_trackers
               tests.test_gpu_engine_device_public_hooks
               tests.test_gpu_engine_transition_batch
               tests.test_gpu_engine_device_self_moves
+          - lane: encode-parity
+            showdown: true
+            selectors: |
+              tests.test_gpu_engine_device_observation_boundary_parity
           - lane: search
             showdown: false
             selectors: |
