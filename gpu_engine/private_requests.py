@@ -11,6 +11,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero.showdown import _request_kind
@@ -152,6 +153,6 @@ def action_inputs(request: ActionRequest, *, observer_side) -> ActionInputs:
     legal_switch = ready[..., None] & switching[..., None] & target_valid & ~target_fainted & ~target_active
     legal_move = ready[..., None] & ~request.force_switch[..., None] & request.move_present & ~request.move_disabled
     denominator = jnp.where(request.max_pp != 0, request.max_pp, 1)
-    pp = jnp.where(request.pp_known & (request.max_pp != 0), jnp.clip(request.pp / denominator, 0, 1), 1)
+    pp = jnp.where(request.pp_known & (request.max_pp != 0), en.ratio(request.pp, denominator, limit=64), 1)
     return ActionInputs(jnp.concatenate((legal_move, legal_switch), axis=-1), targets,
                          jnp.where(owner[..., None] & request.move_present, pp, 0), ready)

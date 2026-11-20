@@ -605,8 +605,8 @@ def battle_spec_from_payload(
     # LAST of the three retype arms, deliberately. Precedence, from sim source:
     #
     #   * `_apply_transform` (above) mirrors Transform, which copies the donor's types.
-    #   * `_apply_forecast_types` (above) DERIVES Castform's type from public weather,
-    #     mirroring Forecast's `onUpdate`.
+    #   * `_apply_forecast_types` (above) DERIVES untransformed Castform's type from
+    #     public weather, mirroring Forecast's `onUpdate`.
     #   * this arm applies an OBSERVED `|-start|...|typechange|<type>|` -- Color Change's
     #     `onAfterMoveSecondary` calling `setType(type)` (data/abilities.ts:554-562).
     #
@@ -912,6 +912,9 @@ def _copied_move_spec(
     """
 
     move_id = normalize_id(move.id)
+    # Four-slot specs include padding; Transform gives PP only to real moves.
+    if move_id == "none":
+        return move
     # Request rows report Hidden Power as plain `hiddenpower`; the spec id is the
     # engine's typed+BP form. Same tolerance `_move_specs` applies on the
     # non-transformed path, and gen3 has at most one Hidden Power slot.
@@ -1050,9 +1053,9 @@ def _apply_live_typechange(
 def _apply_forecast_types(sides: Mapping[str, SideSpec], *, weather: str) -> dict[str, SideSpec]:
     """Latch Castform's current type into the engine root state.
 
-    Poke-engine updates Forecast after weather changes inside a searched line,
-    but the initial world is reconstructed from base Pokédex types. Apply the
-    current public weather here so root and leaf evaluations agree.
+    Apply public weather to untransformed Castform so root and leaf agree.
+    Transformed holders retain their copied types. Forecast does not update
+    them when weather changes inside a searched line.
     """
 
     result = dict(sides)
@@ -1070,7 +1073,7 @@ def _apply_forecast_types(sides: Mapping[str, SideSpec], *, weather: str) -> dic
 
     for slot, side in tuple(result.items()):
         mon = side.pokemon[side.active_index]
-        if mon.id != "castform" or mon.ability != "forecast":
+        if mon.pre_transform is not None or mon.id != "castform" or mon.ability != "forecast":
             continue
         party = list(side.pokemon)
         party[side.active_index] = replace(mon, types=(forecast_type,))

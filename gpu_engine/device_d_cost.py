@@ -67,6 +67,8 @@ def actor(path,*,snapshot,plan):
         expected_checkpoint_sha256=snapshot.checkpoint_sha256,expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
         expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256,enable_v5=True)
     if config!=plan.model:raise ValueError('actual D actor configuration differs')
+    from .private_self_moves import check_run_actor   # V2 self_moves: the archive's declaration against the plan's
+    check_run_actor(metadata,plan_self_moves=plan.self_moves,iteration=snapshot.iteration,context='D cost actor')
     return params,metadata
 
 

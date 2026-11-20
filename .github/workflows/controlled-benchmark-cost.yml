@@ -1,19 +1,7 @@
 name: Controlled benchmark cost contracts
 
 on:
-  pull_request:
-    paths:
-      - 'src/pokezero/controlled_benchmark_cost.py'
-      - 'tests/test_controlled_benchmark_cost.py'
-      - 'tests/_controlled_benchmark_cost_fixture.py'
-      - '.github/workflows/controlled-benchmark-cost.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'src/pokezero/controlled_benchmark_cost.py'
-      - 'tests/test_controlled_benchmark_cost.py'
-      - 'tests/_controlled_benchmark_cost_fixture.py'
-      - '.github/workflows/controlled-benchmark-cost.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read

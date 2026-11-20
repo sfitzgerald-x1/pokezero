@@ -467,6 +467,7 @@ class _Local(_Worker):
                         from . import world_split
                         with world_split.split(backend):
                             item = cw.prepare_roots(self.constructor, [request], device=device, **redaction)[0]
+                            backend.check_result(item)
                     else:
                         item = cw.prepare_roots(self.constructor, [request], device=device, **redaction)[0]
                     labels = live.classify_prepared(self.constructor, request, item)

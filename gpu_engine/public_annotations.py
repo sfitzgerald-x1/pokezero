@@ -14,6 +14,14 @@ import re
 TURN_500_WARNING = ("|bigerror|You will auto-tie if the battle doesn't end in "
                     "500 turns (on turn 1000).")
 
+# Pinned Gen3 Custom Game with the single Sleep Clause Mod override emits
+# these literal setup announcements before installing the initial active slots.
+GEN3_CUSTOM_SETUP = (
+    '|tier|[Gen 3] Custom Game',
+    '|raw|<div class="infobox"><details class="readmore" open><summary><strong>'
+    '1 custom rule:</strong></summary> sleepclausemod</details></div>',
+)
+
 
 def attract_idents(line):
     """Closed singles before-move announcement, including its explicit source."""
@@ -37,6 +45,28 @@ def classify(line):
     if len(parts)<2 or parts[0]:return None
     kind=parts[1]
     if line==TURN_500_WARNING:return 'text'
+    # Showdown f76228a1 emits these exact diagnostics in battle-actions.ts:1331
+    # and abilities.ts:4185. Keep the raw line and its shared consumers, with
+    # no failure, ability reveal or secondary-effect event inferred from it.
+    if line in ('|debug|move failed because it did nothing', '|debug|Shield Dust prevent secondary'):
+        return 'text'
+    # Pinned f76228a1 pokemon.ts:1714,2257, battle.ts:2114, and the Gen 4
+    # Serene Grace handler inherited by Gen 3 (abilities.ts:377). These carry
+    # no literal recipient, status, HP delta, or ability reveal.
+    if line in ('|debug|natural status immunity', '|debug|weather immunity',
+                '|debug|immune to status', '|debug|doubling secondary chance'):
+        return 'text'
+    # Frozen Gen 3 owner streams report the Protect roll and sunlight scaling.
+    if line in ('|debug|Success chance: 50%', '|debug|Sunny Day water suppress'):
+        return 'text'
+    if line in (
+        '|debug|Wonder Guard immunity: hiddenpower',
+        '|debug|Sand Veil - decreasing accuracy',
+        '|debug|Negating (sp)atk boost/penalty.',
+        '|debug|Torrent boost',
+    ):
+        # These pinned owner-stream diagnostics do not write V4 facts.
+        return 'text'
     if attract_idents(line) is not None:return 'attract'
     # Incidental proc tags retain their existing consumers; text cannot
     # manufacture a source ability/item reveal under this annotation contract.
@@ -64,9 +94,33 @@ def classify(line):
         # Deliberate Gen3 admission restriction; the source parser's integer
         # decoder is broader. Unsupported counts refuse rather than coerce.
         return 'target' if len(parts)==4 and ident and parts[3] in ('1','2','3','4','5') else None
+    # These are exact diagnostics from the pinned Native damage calculation.
+    # The Gen 3 Reversal callback emits BP: 20 on the frozen root 29 prefix.
+    if line in ('|debug|BP: 20', '|debug|BP: 70', '|debug|Negating (sp)def boost/penalty.'):
+        return 'text'
+    # These pinned diagnostics describe a modifier or refused status attempt.
+    if line in ('|debug|rain water boost', '|debug|set status [tox] interrupted'):
+        return 'text'
+    if line == '|debug|before turn callback: mirrorcoat':
+        return 'text'
+    if line == '|debug|rain fire suppress':
+        return 'text'
+    if line == '|debug|artificial status immunity':
+        return 'text'
+    if line == '|debug|compoundeyes - enhancing accuracy':
+        return 'text'
+    if line in ('|debug|Wonder Guard immunity: return', '|debug|Wonder Guard immunity: dragonclaw'):
+        return 'text'
     if kind in ('-hint','-message'):
         return 'text' if len(parts)==3 and parts[2].strip() else None
+    # The frozen owner streams include the Focus Punch callback and Reversal power.
+    if line in ('|debug|before turn callback: focuspunch', '|debug|BP: 40'):
+        return 'text'
     if line=='|-fieldactivate|move: Perish Song':return 'perish_announcement'
+    # The pinned Native damage and sleep handlers emit these literal diagnostics.
+    if line in ('|debug|damage event failed', '|debug|set status [slp] interrupted'):
+        return 'text'
+    if line in GEN3_CUSTOM_SETUP:return 'setup'
     if kind=='start':return 'setup' if line=='|start' else None
     if kind=='gametype':return 'setup' if line=='|gametype|singles' else None
     if kind=='gen':return 'setup' if line=='|gen|3' else None

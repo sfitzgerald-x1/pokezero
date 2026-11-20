@@ -45,6 +45,8 @@ def publish(path,value):
 def bank_manifest(config,schema):
     """Validate original complete bank, before original runtime/model work."""
     decl,batches,games,labels=schema.declaration(config['declaration'])
+    if decl.get('self_moves', False):
+        raise ValueError('rollout truth does not support a self_moves ON bank')
     ph,positions=schema._records(config['positions'],schema.POSITIONS)
     sh,groups=schema._records(config['siblings'],schema.SIBLINGS)
     protocol=dict(positions=config['positions'],siblings=config['siblings'],label_vocabulary_sha256=labels.sha256)
@@ -96,7 +98,7 @@ def prepare_original(worker,decl,runtime_ref):
     from gpu_engine import source_provenance,public_belief,v4_encoder,v5_device_backend
     source=load_gen3_randbat_source_cached(runtime['showdown']['root']);dex=load_showdown_dex_cached(runtime['showdown']['root'])
     contract=ActorContract.champion();vocabulary=CategoryVocabulary(tuple(v['tokens']),v['oov_buckets'],v['aliases'])
-    catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),dex,vocabulary,checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+    catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),dex,vocabulary,checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
     pool=source_provenance.load_constructor_pool(runtime['constructor_pool']['path'])
     prepared=v5_device_backend.prepare(catalog,source,pool,source_commit=runtime['source_commit'])
     if prepared.source_sha256!=decl['source_sha256']or prepared.pool_sha256!=decl['pool_sha256']or prepared.category_sha256!=decl['category_vocabulary_sha256']:
@@ -125,7 +127,8 @@ def reconstruct(prepared,pool,gender,decl,batches,positions,index,directory,bank
     from gpu_engine.v5_device_rollout import RootContext
     params=[];config=None
     for actor in decl['actors']:
-        p,c,_=v5_model.load(actor['archive']['path'],expected_archive_sha256=actor['archive']['sha256'],expected_checkpoint_sha256=actor['checkpoint_sha256'],expected_category_vocabulary_sha256=decl['category_vocabulary_sha256'],expected_label_vocabulary_sha256=label_vocabulary_sha256(decl['label_vocabulary']),enable_v5=True)
+        p,c,meta=v5_model.load(actor['archive']['path'],expected_archive_sha256=actor['archive']['sha256'],expected_checkpoint_sha256=actor['checkpoint_sha256'],expected_category_vocabulary_sha256=decl['category_vocabulary_sha256'],expected_label_vocabulary_sha256=label_vocabulary_sha256(decl['label_vocabulary']),enable_v5=True)
+        from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta,context='device rollout truth')   # V2 self_moves
         if config is not None and config!=c:raise ValueError('original actor geometry differs')
         config=c;params.append(p)
     executor=bank.make_executor(prepared,config)
@@ -251,8 +254,8 @@ def child_step(executor,root,fields,group,action,reply):
     owner=group['selector']['owner'];s,p=root.state,root.public
     # The appended effect stream (fidelity R) may be absent from a capsule saved before it; the
     # transition then derives it from the keys exactly as sample_chance_inputs does.
-    fields=set(transition.ChanceInputs._fields)
-    if not fields-{'effect'}<=set(group['chance'])<=fields:raise ValueError('complete original chance capsule required')
+    chance_fields=set(transition.ChanceInputs._fields)
+    if not chance_fields-{'effect','shed_skin'}<=set(group['chance'])<=chance_fields:raise ValueError('complete original chance capsule required')
     chance=transition.ChanceInputs(**{k:j.asarray(group['chance'][k],j.int32)for k in transition.ChanceInputs._fields if k in group['chance']})
     choices=fields['actions'].at[0,owner].set(action).at[0,1-owner].set(reply)
     physical=j.stack([obs.map_actions(fields['observations'][side],s,j.asarray([side],j.int32),choices[:,side])for side in (0,1)],axis=1)

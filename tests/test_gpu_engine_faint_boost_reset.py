@@ -26,20 +26,31 @@ class FaintBoostResetTests(unittest.TestCase):
         cls.old=types.ModuleType('gpu_engine._original_faint_boost_fixture')
         cls.old.__package__='gpu_engine';sys.modules[cls.old.__name__]=cls.old
         exec(compile(cls.old_source,'<original546-transition>','exec'),vars(cls.old))
+        # This transition predates the Toxic SwitchIn callback and still calls
+        # the sleep-only helper. Restore it only in the historical fixture.
+        old_entry = subprocess.check_output(['git', 'show', BASE + ':gpu_engine/entry.py'], text=True)
+        restore_sleep = next(node for node in ast.parse(old_entry).body
+                             if isinstance(node, ast.FunctionDef) and node.name == 'restore_sleep')
+        arrival = dict(vars(cls.old.arrival))
+        exec(compile(ast.Module(body=[restore_sleep], type_ignores=[]), '<original546-entry>', 'exec'), arrival)
+        cls.old.arrival = types.SimpleNamespace(**arrival)
 
     def chance(self,b):
         z=j.zeros((b,2),j.int32)
-        return tr.ChanceInputs(draws=j.zeros((b,2,12),j.int32),phazing=z,secondary=z,sleep_talk=z,entry_ties=z,initial_tie=j.zeros(b,j.int32))
+        return tr.ChanceInputs(draws=j.zeros((b,2,12),j.int32),phazing=z,secondary=z,sleep_talk=z,entry_ties=z,initial_tie=j.zeros(b,j.int32),
+            shed_skin=j.broadcast_to(j.array([32,99],j.int32),(b,2)))
 
     def compare_original(self,before,table,actions):
         chance=self.chance(len(actions))
         actual=tr.step_with_chance(before,actions,table,chance)
-        # The original predates the appended effect stream (fidelity R): its own six-field ChanceInputs, and
-        # effect_draws (the block a deferring step saves) is outside the comparison.
+        # The original uses six-field ChanceInputs and predates the saved effect/cure banks.
+        # Preserve the existing effect exclusion; verify the cure bank save rule separately.
         old=self.old.step_with_chance(before,actions,table,self.old.ChanceInputs(*chance[:6]))
         for name in actual.state._fields:
-            if name not in ('boosts','effect_draws'):
+            if name not in ('boosts','effect_draws','shed_skin_draws'):
                 np.testing.assert_array_equal(getattr(actual.state,name),getattr(old.state,name),err_msg=name)
+        np.testing.assert_array_equal(actual.state.shed_skin_draws,
+            j.where(actual.state.pending_residual[:,None],chance.shed_skin,0))
         np.testing.assert_array_equal(actual.invalid_actions,old.invalid_actions)
         return actual.state,old.state
 

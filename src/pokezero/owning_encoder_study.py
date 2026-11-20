@@ -4,7 +4,6 @@ Only the explicit async runner invokes the existing controlled benchmark.
 Missing, failed and capped cells remain unknown on the original denominator.
 No result from this module automatically qualifies B3 or an equivalence claim.
 """
-from dataclasses import asdict
 from collections import deque
 from functools import lru_cache
 import hashlib
@@ -142,7 +141,7 @@ def make_prespec(*, study_id, runtime, admission, max_decision_rounds=250,
     admission = dict(admission, comparison=_reference(admission['comparison']),
                      scientific_review=_reference(admission['scientific_review']))
     return dict(schema=SPEC_SCHEMA, study_id=study_id, runtime=dict(runtime), admission=admission,
-        champion_contract=json.loads(canonical(asdict(ActorContract.champion()))),
+        champion_contract=json.loads(canonical(ActorContract.champion().identity())),
         seed_start=seed_start, foulplay_seed_start=foulplay_seed_start, seed_count=COUNT,
         invocations=[dict(ordinal=i, encoder_kind=k, seat=s, games=COUNT) for i, (k, s) in enumerate(ORDER)],
         seed_audit=seed_audit(seed_start, foulplay_seed_start), max_decision_rounds=max_decision_rounds,

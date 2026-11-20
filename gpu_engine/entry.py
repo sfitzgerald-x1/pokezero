@@ -36,6 +36,7 @@ class EntryTable(NamedTuple):
     spikes_type_count: jax.Array | None = None
     spikes_item_count: jax.Array | None = None
     spikes_boots_item: jax.Array | None = None
+    shed_skin: jax.Array | None = None
 
 
 def from_metadata(metadata):
@@ -52,7 +53,7 @@ def from_metadata(metadata):
         flag({"trace"}),jnp.asarray([[status in cures.get(name,set()) for status in range(7)]
             for name in vocab["abilities"]]),flag({"owntempo"}),flag({"pressure"}),flag({"sturdy","naturalcure","oblivious"}),
         jnp.asarray(len(vocab['types']),jnp.int32),jnp.asarray(len(vocab.get('items',[])),jnp.int32),
-        jnp.asarray(next((i for i,name in enumerate(vocab.get('items',[])) if name=='heavydutyboots'),0),jnp.int32))
+        jnp.asarray(next((i for i,name in enumerate(vocab.get('items',[])) if name=='heavydutyboots'),0),jnp.int32),flag({'shedskin'}))
 
 
 def speed_modifier(table,ability,effective_weather,speed):
@@ -67,6 +68,8 @@ def depart(state,side,table,*,eligible):
     Baton copies its supported fields before calling this. This does not run
     BeforeSwitchOut/Pursuit, which does not apply to a drag or direct Baton.
     """
+    from . import infatuation
+    state=infatuation.source_departed(state,side,eligible=eligible)
     rows=jnp.arange(state.hp.shape[0]);active=state.active[rows,side]
     hp=state.hp[rows,side,active];status=state.status[rows,side,active]
     cure=hp<=0
@@ -96,7 +99,7 @@ def depart(state,side,table,*,eligible):
     state=state._replace(status=state.status.at[rows,side,active].set(
         jnp.where(eligible & cure,m.NONE,status)),
         status_counter=state.status_counter.at[rows,side,active].set(
-            jnp.where(eligible & (cure | (status==m.TOX)),0,counter)),
+            jnp.where(eligible & cure,0,counter)),
         sleep_skipped=state.sleep_skipped.at[rows,side,active].set(jnp.where(
             eligible & (cure | (status!=m.SLP)),0,state.sleep_skipped[rows,side,active])),
         rest_origin=state.rest_origin.at[rows,side,active].set(jnp.where(
@@ -155,7 +158,7 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
     if _weather_trace is not None:
         _weather_trace=entry_spikes_callbacks.finish(_weather_trace,_entry_spikes_pending,state.hp[rows,side,active])
     # Gen3 runs status SwitchIn even after a hazard KO, before faintMessages.
-    state=restore_sleep(state,side,eligible=eligible)
+    state=switch_in_status(state,side,eligible=eligible)
     starts = eligible & (next_hp > 0)
     if _weather_trace is not None:
         from . import engine_weather_callbacks as callbacks
@@ -260,14 +263,17 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False,_weather_trace=
     return state._replace(boosts=boosts),knocked_out
 
 
-def restore_sleep(state,side,*,eligible):
+def switch_in_status(state,side,*,eligible):
     """Gen3 status SwitchIn after hazards, before Ability Start."""
     rows=jnp.arange(state.hp.shape[0]);active=state.active[rows,side]
     skipped=state.sleep_skipped[rows,side,active]
-    sleeping=state.status[rows,side,active]==m.SLP
+    status=state.status[rows,side,active]
     counter=state.status_counter[rows,side,active]
     refunded=counter+skipped
     refunded=jnp.where(state.rest_origin[rows,side,active],jnp.minimum(3,refunded),refunded)
+    # A forced entrant can be installed without running this callback when
+    # the other entrant faints to Spikes. Its retained Toxic stage then ticks.
+    updated=jnp.where(status==m.TOX,0,jnp.where(status==m.SLP,refunded,counter))
     return state._replace(status_counter=state.status_counter.at[rows,side,active].set(
-        jnp.where(eligible & sleeping,refunded,counter)),
+        jnp.where(eligible,updated,counter)),
         sleep_skipped=state.sleep_skipped.at[rows,side,active].set(jnp.where(eligible,0,skipped)))

@@ -125,7 +125,7 @@ def _physical_toxic_counter(upcoming_stage):
     return max(0, min(15, stage - 1))
 
 
-def _exact_own(request, state, catalog, source, metadata, owner, *, defer_sleep=False, protocol_facts=None):
+def _exact_own(request, state, catalog, source, metadata, owner, *, defer_sleep=False, protocol_facts=None, transform_base=None):
     """Copy literal request fields, checking static latent IVs against own stats.
 
     The original public set source is used as a static format rule, never as a
@@ -179,6 +179,10 @@ def _exact_own(request, state, catalog, source, metadata, owner, *, defer_sleep=
         if type(stats) is not dict or any(type(stats.get(k)) is not int or stats[k] <= 0 for k in ('atk','def','spa','spd','spe')):
             raise Refusal('OWN_EXACT_STATS_UNAVAILABLE')
         moves = tuple(mon.get('moves', ()))
+        saved = None if transform_base is None else transform_base[slot]
+        if saved is not None:
+            if slot!=active[0]:raise Refusal('OWN_TRANSFORM_EVIDENCE_DISAGREES')
+            moves=tuple(key for key,pp in saved)
         if not 1 <= len(moves) <= 4 or any(type(m) is not str for m in moves):
             raise Refusal('OWN_MOVES_UNAVAILABLE')
         base_ability = mon.get('baseAbility') or mon.get('ability')
@@ -186,7 +190,7 @@ def _exact_own(request, state, catalog, source, metadata, owner, *, defer_sleep=
             raise Refusal('OWN_ABILITY_OR_ITEM_UNAVAILABLE')
         possible = []
         from .phase_d_constructor_rules import literal_hidden_power_agrees
-        typed_hp=tuple(normalize_id(x)for x in moves if normalize_id(x).startswith('hiddenpower')and normalize_id(x)!='hiddenpower')
+        typed_hp=() if saved is not None else tuple(normalize_id(x)for x in moves if normalize_id(x).startswith('hiddenpower')and normalize_id(x)!='hiddenpower')
         for variant in universe.variants:
             if (variant.level != level or sorted(map(_source_move, variant.moves)) != sorted(map(_source_move, moves))
                     or normalize_id(variant.ability) != normalize_id(base_ability)):
@@ -233,6 +237,8 @@ def _exact_own(request, state, catalog, source, metadata, owner, *, defer_sleep=
         if len(matches) > 1:
             raise Refusal('OWN_PUBLIC_IDENTITY_AMBIGUOUS')
         public_slot = matches[0] if matches else None
+        marked=public_slot is not None and bool(_host(state.context.abilities.transformed)[0,owner,public_slot])
+        if marked!=(saved is not None):raise Refusal('OWN_TRANSFORM_EVIDENCE_DISAGREES')
         if public_slot is not None:
             joined[slot] = public_slot
         for k, name in enumerate(moves):
@@ -247,18 +253,32 @@ def _exact_own(request, state, catalog, source, metadata, owner, *, defer_sleep=
                 uses = _host(state.context.moves.uses)[0,owner,public_slot]
                 used = sum(int(n) for m,n in zip(ids,uses) if m and _source_move(catalog.moves.names[int(m)]) == _source_move(name))
             own['pp'][slot,k] = max(0, pp*8//5-used)
-            if slot == active[0] and not replacement:
+            if slot == active[0] and not replacement and saved is None:
                 rows = [m for m in current.get('moves', ()) if _source_move(m.get('id','')) == _source_move(name)]
                 if len(rows) != 1 or type(rows[0].get('pp')) is not int:
                     raise Refusal('OWN_ACTIVE_PP_UNAVAILABLE')
                 own['pp'][slot,k] = rows[0]['pp']
                 own['disabled'][slot,k] = bool(rows[0].get('disabled',False))
+        if saved is not None:
+            own['transformed'][()]=True
+            donor=int(_host(state.context.abilities.transform_species)[0,owner,public_slot])
+            own['transform_species'][()]=_lookup(v['species'],catalog.species.names[donor])
+            own['transform_stats'][:]=computed
+            own['transform_moves'][:]=own['moves'][slot]
+            own['transform_pp'][:]=[pp for _,pp in saved]+[0]*(4-len(saved))
+            own['transform_hidden_power'][:]=[own['hidden_power_type'][slot],own['hidden_power_power'][slot]]
+            from .phase_d_transform import copied_request
+            ids,pp,disabled,hp_type,hp_power=copied_request(current,mon['moves'],v)
+            own['moves'][slot]=ids;own['pp'][slot]=pp;own['disabled'][slot]=disabled
+            own['hidden_power_type'][slot]=hp_type;own['hidden_power_power'][slot]=hp_power
+            info=source.original.species_metadata[_normalize_species_id(catalog.species.names[donor])]
+            own['types'][slot]=[_lookup(v['types'],t) for t in info['types']]+[0]*(2-len(info['types']))
     if active[0] not in joined:
         raise Refusal('OWN_ACTIVE_PUBLIC_IDENTITY_UNAVAILABLE')
     return own, joined
 
 
-def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, protocol_facts=None):
+def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, protocol_facts=None, lines=()):
     """One original owning fold plus own request; no engine donor accepted."""
     from pokezero.recorded_encoder_runner import JaxRecordedAdapter
     from . import v4_encoder
@@ -272,15 +292,23 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     # ONLY request and reads original public fold, never another owner's packet.
     expected_inputs = adapter.encode(request, owner_side=owner)
     if type(defer_sleep)is not bool:raise Refusal('EXPLICIT_PROTOCOL_SLEEP_DEFER_REQUIRED')
-    own, joined = _exact_own(request,state,catalog,source,metadata,owner,defer_sleep=defer_sleep,protocol_facts=protocol_facts)
+    saved=None
+    if np.any(_host(state.context.abilities.transformed)[0,owner]):
+        if not lines:raise Refusal('OWN_TRANSFORM_HISTORY_UNAVAILABLE')
+        from .phase_d_constructor_rules import own_pp_carry
+        maximum={_source_move(n):int(m['pp'])*8//5 for n,m in zip(source.vocabulary['moves'],metadata['moves']) if m and m.get('pp')}
+        _,saved=own_pp_carry(lines,request,maximum,transform_base=True)
+    own, joined = _exact_own(request,state,catalog,source,metadata,owner,defer_sleep=defer_sleep,protocol_facts=protocol_facts,transform_base=saved)
     from . import public_context
     ctx,beliefs,ok=public_context.observation_boundary_copy(state.context,state.beliefs,state.mons,
         catalog.source.device,catalog.context,valid=j.ones(1,bool))
     if not bool(_host(ok).all()):raise Refusal('B2_OBSERVATION_BOUNDARY_COPY_REFUSED')
     state=state._replace(context=ctx,beliefs=beliefs)
     mons,v=state.mons,source.vocabulary
+    from . import phase_d_transform as transform
+    transform_facts=transform.history(lines)
     if np.any(_host(ctx.abilities.transformed)):
-        raise Refusal('PUBLIC_TRANSFORM_NOT_MATERIALIZED')
+        transform.check_evidence(state,catalog,transform_facts)
     if np.any(_host(ctx.types.overridden)):
         raise Refusal('PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED')
     z = np.zeros((1,2,6),np.int32)
@@ -347,6 +375,7 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     # from the protocol world (map_spec held_volatiles, _write_held_counts, _write_encores, _write_wraps), so they are
     # admitted only on that route (protocol_facts); elsewhere they still refuse.
     allowed = {'', 'leechseed', 'ingrain', 'trapped', 'destinybond'}
+    if bool(own['transformed']):allowed |= {'transform','transformed'}
     if protocol_facts is not None:allowed |= {'perish1', 'perish2', 'perish3', 'yawn', 'encore', 'partiallytrapped'}   # encore, partiallytrapped: a drawn count
     if fresh.get('p'+str(owner+1))==own_species:
         allowed.add('substitute');hp_slot=own_slot
@@ -374,10 +403,13 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     if own_last > 0:
         names = [_source_move(v['moves'][int(m)]) for m in own['moves'][own_slot] if m]
         key = _source_move(v['moves'][own_last])
-        if names.count(key) != 1:raise Refusal('OWN_LAST_MOVE_SLOT_UNAVAILABLE')
-        k=names.index(key);own['last_move'][own_slot]=own['moves'][own_slot,k]
+        if bool(own['transformed']) and key=='transform':
+            k=-1;own['last_move'][own_slot]=own_last
+        else:
+            if names.count(key) != 1:raise Refusal('OWN_LAST_MOVE_SLOT_UNAVAILABLE')
+            k=names.index(key);own['last_move'][own_slot]=own['moves'][own_slot,k]
         own['last_action_kind'][()]=2;own['last_action_index'][()]=k
-        if normalize_id(v['items'][int(own['item'][own_slot])]) == 'choiceband':
+        if key in names and normalize_id(v['items'][int(own['item'][own_slot])]) == 'choiceband':
             own['choice_move'][own_slot]=own['last_move'][own_slot]
     elif own_last == -1:
         own['last_action_kind'][()]=1;own['last_action_index'][()]=own_slot
@@ -434,18 +466,19 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
         known=ctx.active.truant_known,loaf=ctx.active.truant_loaf,traced=ctx.active.traced_truant,
         skip_flip=ctx.active.truant_skip_flip,post_upkeep=ctx.active.post_upkeep,
         hazards=hazards,blocked=ctx.tendency.blocked,pursuit=ctx.tendency.pursuits,weather=ctx.tendency.weather)
+    transform_leaves=transform.tracker_leaves(state,catalog,v,owner,transform_facts,own,running)
     t=trackers.Trackers(j.asarray(mapping),j.asarray(physical),j.asarray(active_slots),j.asarray(present.sum(-1),j.int32),j.asarray(order),
         j.asarray(species),mons.level,mons.gender,j.asarray(percent),j.asarray(status),j.asarray(boosts),j.asarray(present),mons.fainted,
         field.turn,j.asarray([weather],j.int32),field.spikes,j.zeros(1,j.int32),
         observed_moves=visible_moves,pp_used=j.asarray(used),last_moves=j.asarray(last),belief_mask=state.beliefs.hard[:,::-1],
         shown_ability=j.asarray(original_ability),original_ability=j.asarray(original_ability),shown_item=j.asarray(shown_item),
-        shown_types=j.zeros((1,2,6,2),j.int32),borrowed_ability=j.asarray(running),
+        shown_types=j.zeros((1,2,6,2),j.int32),borrowed_ability=j.asarray(running),type_changed=ctx.types.type_changed,
         mon_features={k:j.asarray(x) for k,x in mon_features.items()},public_volatiles=j.asarray(vol),
         item_removed=ctx.items.removed,damage_exact_dealt=exact_dealt,damage_exact_taken=exact_taken,tendency=tendency,
         field_features=dict(weather_upkeeps=field.weather_upkeeps,weather_permanent=field.weather_ability,
             self_items_removed_credit=ctx.damage.items_removed[:,owner],opp_items_removed_credit=ctx.damage.items_removed[:,foe],
             wish_set_turn=field.wish_set_turn,wish_turns=j.zeros((1,2),j.int32),wish_pending=j.zeros((1,2),bool)),
-        public_port=public_port)
+        public_port=public_port,**transform_leaves)
     # Current ongoing damage history has exact data only for our own HP. The
     # peer's exact own history remains explicitly unavailable to reply policy.
     hist=damage.History(j.zeros((1,2),j.int32).at[0,owner].set(own['hp'][own_slot]),
@@ -485,7 +518,8 @@ def _materialize_phase_d(root, start, tables, recipe):
     Keep the shared D materializer and every public tracker/feature untouched.
     The owner's detached physical counters were converted in from_b2 already.
     """
-    world = materializer.materialize(root, start, tables, recipe)
+    from .phase_d_transform import materialize_copy
+    world = materializer.materialize(root, start, tables, recipe,transform_mapper=materialize_copy)
     if world.state is None:
         return world
     try:

@@ -68,6 +68,14 @@ def payload_checks(request,payload,lines,*,owner,checks=None):
 
 
 def scan(adapter,request,public,source,metadata,*,lines,checks=None):
+    # V2 self_moves: every B2 encode in the scan (the owning observation and from_b2's) reads the root's literal history,
+    # cleared from the adapter on exit
+    from pokezero.recorded_encoder_runner import literal_history
+    with literal_history(adapter,lines):
+        return _scan(adapter,request,public,source,metadata,lines=lines,checks=checks)
+
+
+def _scan(adapter,request,public,source,metadata,*,lines,checks=None):
     import numpy as np
     from pokezero.dex import normalize_id
     from . import phase_d_live_worlds as w,public_context
@@ -85,10 +93,19 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
     own_names=[];joined={};own_moves={}
     public_names=[normalize_id(catalog.species.names[int(x)])for x in w._host(state.mons.species)[0,owner]]
     encounter=w._host(state.mons.encounter)[0,owner]
+    transform_base=[None]*len(party);transform_unavailable=False
+    if np.any(w._host(state.context.abilities.transformed)[0,owner]):
+        from .phase_d_constructor_rules import own_pp_carry
+        maximum_pp={w._source_move(n):int(m['pp'])*8//5 for n,m in zip(source.vocabulary['moves'],metadata['moves']) if m and m.get('pp')}
+        try:_,transform_base=own_pp_carry(lines,request,maximum_pp,transform_base=True)
+        except (ValueError,KeyError,TypeError,IndexError) as error:
+            transform_unavailable=True;c.add(str(error),True)
     for slot,mon in enumerate(party):
         if not isinstance(mon,dict):continue
         details=str(mon.get('details','')).split(',');name=normalize_id(details[0]);own_names.append(name)
         condition=str(mon.get('condition','')).split();moves=mon.get('moves',());stats=mon.get('stats');ability=mon.get('baseAbility')or mon.get('ability')
+        copied_moves=moves;saved=transform_base[slot]
+        if saved is not None:moves=tuple(name for name,_ in saved)
         hp=maximum=None
         try:
             if condition and condition[0]=='0'and'fnt'in condition:hp=0
@@ -105,7 +122,7 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
         c.add('OWN_PUBLIC_IDENTITY_AMBIGUOUS',len(matches)>1,slot=slot)
         if len(matches)==1:joined[slot]=matches[0]
         identities=set();typed=[];resolved=None
-        if universe is not None and stats_ok and moves_ok and ability:
+        if universe is not None and stats_ok and moves_ok and ability and not (transform_unavailable and mon.get('active')):
             try:
                 level=next((int(x.strip()[1:])for x in details[1:]if x.strip().startswith('L')),100)
                 gender=next((x.strip()for x in details[1:]if x.strip()in('M','F')),'N')
@@ -120,7 +137,7 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
                     move=next((x for x in fixture.moves if normalize_id(x).startswith('hiddenpower')),None)
                     hp_move=w.hidden_power_engine_id(normalize_id(move),fixture.ivs)if move else None
                     from .phase_d_constructor_rules import literal_hidden_power_agrees
-                    typed_literals=tuple(normalize_id(x) for x in moves if normalize_id(x).startswith('hiddenpower') and normalize_id(x)!='hiddenpower')
+                    typed_literals=() if saved is not None else tuple(normalize_id(x) for x in moves if normalize_id(x).startswith('hiddenpower') and normalize_id(x)!='hiddenpower')
                     if not literal_hidden_power_agrees(typed_literals,hp_move):continue
                     identities.add((mx,tuple(st),tuple(info['types']),hp_move))
                 typed=[normalize_id(x)for x in moves if normalize_id(x).startswith('hiddenpower')and normalize_id(x)!='hiddenpower']
@@ -140,9 +157,9 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
                     mid=w._own_move(source.vocabulary['moves'],move,resolved);ids.append(mid)
                     pp=metadata['moves'][mid].get('pp');c.add('OWN_MOVE_MAX_PP_UNAVAILABLE',type(pp)is not int or pp<=0,slot=slot,move=move)
                 except w.Refusal as error:c.add(error.kind if hasattr(error,'kind')else str(error).split(':')[0],True,slot=slot,move=move)
-            own_moves[slot]=tuple(moves)
+            own_moves[slot]=tuple(copied_moves)
             if mon.get('active')is True:
-                for move in moves:
+                for move in copied_moves:
                     rows=[r for r in current[0].get('moves',())if w._source_move(r.get('id',''))==w._source_move(move)]if len(current)==1 else []
                     c.add('OWN_ACTIVE_PP_UNAVAILABLE',len(rows)!=1 or type(rows[0].get('pp'))is not int if len(current)==1 else False if replacement else None,slot=slot,move=move,reason='Requires an ordinary active request')
     active=[i for i,m in enumerate(party)if isinstance(m,dict)and m.get('active')is True]
@@ -153,7 +170,7 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
     for slot in range(6):
         c.add('OPPONENT_LITERAL_PUBLIC_PERCENT_REQUIRED',bool(present[0,foe,slot] and ((num[0,foe,slot]!=0 or den[0,foe,slot]!=0) if w._host(mons.fainted)[0,foe,slot] else den[0,foe,slot]!=100)),slot=slot,numerator=int(num[0,foe,slot]),denominator=int(den[0,foe,slot]),bare_fainted=bool(num[0,foe,slot]==den[0,foe,slot]==0))
     if boundary_ok:
-        c.add('PUBLIC_TRANSFORM_NOT_MATERIALIZED',bool(np.any(w._host(ctx.abilities.transformed))))
+        c.add('PUBLIC_TRANSFORM_NOT_MATERIALIZED',False)
         c.add('PUBLIC_LIVE_RETYPE_NOT_MATERIALIZED',bool(np.any(w._host(ctx.types.overridden))))
         slots=w._host(mons.active)
         for seat,name in tail['fresh_substitutes'].items():
@@ -171,6 +188,7 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
         if 0<=own_public<6:
             vols=[hooks.VOLATILE_NAMES[i]for i in np.flatnonzero(w._host(ctx.active.volatiles)[0,owner])]
             allowed={'','leechseed','ingrain','trapped'}
+            if bool(w._host(ctx.abilities.transformed)[0,owner,own_public]):allowed|={'transform','transformed'}
             if tail['fresh_substitutes'].get('p'+str(owner+1))==normalize_id(public_names[own_public]):allowed.add('substitute')
             unsupported=[x for x in vols if x not in allowed]
             c.add('OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE',bool(unsupported),volatiles=unsupported)
@@ -185,7 +203,9 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
             if len(active)==1 and active[0]in own_moves:
                 kind=int(w._host(ctx.moves.last_kind)[0,owner]);mid=int(w._host(ctx.moves.last_id)[0,owner])
                 names=[w._source_move(x)for x in own_moves[active[0]]]
-                c.add('OWN_LAST_MOVE_SLOT_UNAVAILABLE',kind==2 and names.count(w._source_move(catalog.moves.names[mid]))!=1)
+                key=w._source_move(catalog.moves.names[mid])
+                copied_transform=key=='transform' and bool(w._host(ctx.abilities.transformed)[0,owner,own_public])
+                c.add('OWN_LAST_MOVE_SLOT_UNAVAILABLE',kind==2 and not copied_transform and names.count(key)!=1)
         c.add('MIDTURN_DAMAGE_WINDOW_NOT_MATERIALIZED',bool(np.any(w._host(ctx.damage.current_dealt))or np.any(w._host(ctx.damage.current_taken))) and not replacement)
         field=ctx.field;wish=w._host(field.wish_set_turn);turn=w._host(field.turn)[:,None]
         pending={'p'+str(side+1):int(start) for side,start in enumerate(wish[0]) if start>=0 and int(turn[0,0])-int(start)<=1}
@@ -198,7 +218,7 @@ def scan(adapter,request,public,source,metadata,*,lines,checks=None):
     from . import phase_d_protocol_world as protocol
     try:
         qualified=facts(public,request,lines)
-        detached=w.from_b2(adapter,request,source,metadata,address=public.address,defer_sleep=True,protocol_facts=qualified)
+        detached=w.from_b2(adapter,request,source,metadata,address=public.address,defer_sleep=True,protocol_facts=qualified,lines=lines)
     except (ValueError,KeyError,IndexError,TypeError,AttributeError) as error:
         c.add(getattr(error,'kind',None) or str(error).split(':',1)[0],True,original_refusal=str(error))
         c.add('PROTOCOL_INPUTS_DEPENDENT_CHECKS',None,reason='Original from_b2 refused; no detached surrogate made')

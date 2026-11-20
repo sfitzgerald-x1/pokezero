@@ -266,11 +266,11 @@ def materialize_host(root, start, tables, recipe, *, keys):
     return _materialize(root, start, tables, recipe, host_keys=keys)
 
 
-def materialize(root, start, tables, recipe):
-    return _materialize(root, start, tables, recipe)
+def materialize(root, start, tables, recipe, *, transform_mapper=None):
+    return _materialize(root, start, tables, recipe, transform_mapper=transform_mapper)
 
 
-def _materialize(root, start, tables, recipe, host_keys=None):
+def _materialize(root, start, tables, recipe, host_keys=None, transform_mapper=None):
     """One declared draw -> current tensor world or named refused world slot.
 
     Only ordinary boundaries are represented in this first current-state port.
@@ -463,7 +463,7 @@ def _materialize(root, start, tables, recipe, host_keys=None):
                 truant = tables.namespaces['abilities'].get('truant', 0)
                 if truant and arrays['ability'][address] == truant:
                     raise ValueError('public Truant phase not materialized')
-        _materialize_transform(root, tables, arrays, owner, foe, active, assignment)
+        (_materialize_transform if transform_mapper is None else transform_mapper)(root, tables, arrays, owner, foe, active, assignment)
         if arrays['hp'][0, foe, active] <= 0:
             raise ValueError('opposing faint/replacement boundary not materialized')
         fields = view.get('field_features')

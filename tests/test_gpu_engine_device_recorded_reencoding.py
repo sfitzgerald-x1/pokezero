@@ -40,8 +40,8 @@ def packet(s):
 
 
 def chance():
-    from gpu_engine.transition import ChanceInputs
-    return {key:np.zeros((1,2,12)if key=='draws'else(1,)if key=='initial_tie'else(1,2,4)if key=='effect'else(1,2),np.int32).tolist()
+    from gpu_engine.transition import ChanceInputs, EFFECT_BOUNDS
+    return {key:np.zeros((1,2,12)if key=='draws'else(1,)if key=='initial_tie'else(1,2,len(EFFECT_BOUNDS))if key=='effect'else(1,2),np.int32).tolist()
         for key in ChanceInputs._fields}
 
 
@@ -64,27 +64,42 @@ class Runtime:
         return NS(step=NS(state=after,invalid_actions=np.array([False])),trackers=t+1)
 
 
-def dataset(folder,*,reference_value=0,routing_mismatch=False):
+def dataset(folder,*,reference_value=0,routing_mismatch=False,legacy_suspended=False):
     root=Path(folder)/'old';writer=c.Evidence(root)
+    legacy=json.loads((Path(__file__).parent/'fixtures/state_schemas/pre_shed_skin_6caf071b.json').read_text()) if legacy_suspended else None
+    source_commit=legacy['source_commit'] if legacy else LEGACY_SOURCE_COMMIT
+    def saved(root_id,step=0):
+        value=packet(state(root_id,step))
+        if legacy:
+            value['state']={name:value['state'][name] for name in legacy['packet']}
+            value['state']['effect_draws']=[[[0, 0, 0, 0]] * 2]
+            value['state']['pending_residual']=[root_id==0 and step==1]
+        return value
+    def saved_chance():
+        value=chance()
+        if legacy:
+            value.pop('shed_skin')
+            value['effect']=[[[0, 0, 0, 1], [15, 0, 3, 0]]]
+        return value
     cells=[dict(stream_id=10+n,root_id=20+n,native_seed=30+n,team_indices=[2*n,2*n+1])for n in range(2)]
     refdoc=dict(path='/not-loaded',sha256='a'*64)
-    plan=dict(schema=c.SCHEMA,source_commit=LEGACY_SOURCE_COMMIT,pool=refdoc,vocabulary=refdoc,labels=refdoc,gender_policy=refdoc,
+    plan=dict(schema=c.SCHEMA,source_commit=source_commit,pool=refdoc,vocabulary=refdoc,labels=refdoc,gender_policy=refdoc,
         showdown_root='/not-loaded',node='/not-loaded',node_sha256='b'*64,constructor_seed=1,sampling_seed=2,
         gender_seed=3,gender_domain=4,max_requests=2,max_turns=100,cells=cells,
         policy='PCG64_SEEDSEQUENCE_UNIFORM_PHYSICAL_LEGAL_V1')
-    oldsource=subprocess.check_output(['git','show',LEGACY_SOURCE_COMMIT+':gpu_engine/device_observation_parity.py'],cwd=c.ROOT)
+    oldsource=subprocess.check_output(['git','show',source_commit+':gpu_engine/device_observation_parity.py'],cwd=c.ROOT)
     (root/'original-reducer.py').write_bytes(oldsource)
     bindings={'test':'original','source_commit':plan['source_commit'],
         'source_files':{'gpu_engine/device_observation_parity.py':hashlib.sha256(oldsource).hexdigest()}}
     old=r._frozen_reducer(bindings)(source_bindings=bindings);final=[]
-    flags=[[True,None],[False,True]]
+    flags=[[True,True],[False,True]] if legacy else [[True,None],[False,True]]
     for n,cell in enumerate(cells):
         writer.event(dict(kind='START',**cell,status='ATTEMPTED'))
-        writer.boundary(dict(kind='CONSTRUCTOR',stream_id=cell['stream_id'],raw=packet(state(n)),initialized=packet(state(n))))
+        writer.boundary(dict(kind='CONSTRUCTOR',stream_id=cell['stream_id'],raw=saved(n),initialized=saved(n)))
         for step in range(2):
             record=dict(kind='STEP',stream_id=cell['stream_id'],request=step,
-                before=packet(state(n,step)),after=packet(state(n,step+1)),
-                pre_agreement=flags[n][step],actions=[[0,1]],chance=chance())
+                before=saved(n,step),after=saved(n,step+1),
+                pre_agreement=flags[n][step],actions=[[0,1]],chance=saved_chance())
             sha=writer.boundary(record)
             for side in (0,1):
                 row=dict(decision_id=f"{cell['stream_id']}-{step}-{side}",stream_id=cell['stream_id'],
@@ -129,6 +144,35 @@ class DeviceRecordedReencodingTests(unittest.TestCase):
                     self.assertEqual(arrays['candidate__numeric_features'][0,0],0)
                 self.assertEqual(row['original_tensor_sha256'],c.digest(row['original_tensor_path']))
 
+    def test_legacy_suspension_refuses_one_root_and_completes_the_stored_report(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root,plan,summary,bindings=dataset(folder,legacy_suspended=True)
+            writer=c.Evidence(Path(folder)/'new');runtime=Runtime()
+            try:result=r.reencode_records(runtime,root,plan,summary,bindings,root/'physical.jsonl',root/'decisions.jsonl',writer)
+            finally:writer.close()
+            self.assertTrue(result['original_report_recomputed_exact'])
+            self.assertEqual(result['new_games'],0)
+            self.assertEqual(result['counts']['agreement'],6)
+            self.assertEqual(result['counts']['compared'],4)
+            self.assertEqual(result['counts']['comparison_refused'],2)
+            stopped=result['reencoding_cells'][0]['reencoding_stopped']
+            self.assertIn('legacy suspended state lacks saved Shed Skin draws',stopped['reason'])
+            self.assertIsNone(result['reencoding_cells'][1]['reencoding_stopped'])
+            self.assertEqual(result['replay_integrity_failed_roots'],1)
+            self.assertFalse(result['full_B4_pass'])
+            oldrows=[x for x,_ in r._records(root/'decisions.jsonl')]
+            newrows=[x for x,_ in r._records(Path(folder)/'new'/'decisions.jsonl')]
+            self.assertEqual(len(newrows),8)
+            self.assertEqual([x['original_metadata'] for x in newrows],oldrows)
+            advances = [call for call in runtime.calls if call[0] == 'advance']
+            self.assertEqual([call[1] for call in advances], [101, 100])
+            for call in advances:
+                np.testing.assert_array_equal(call[2].effect, [[[0, 0, 0, 1], [15, 0, 3, 0]]])
+            invalid = chance()
+            invalid['effect'] = [[[0, 0, 0, 2], [0, 0, 0, 0]]]
+            with self.assertRaisesRegex(ValueError, 'saved chance shape/range differs: effect'):
+                r.decode_chance(invalid)
+
     def test_numeric_mismatch_stops_root_refuses_but_keeps_original_agreement(self):
         with tempfile.TemporaryDirectory()as folder:
             result,runtime,old,new=self.run_stored(folder,runtime=Runtime(bad_after=True))
@@ -161,6 +205,40 @@ class DeviceRecordedReencodingTests(unittest.TestCase):
         candidates,bits,pre,post=replay.step(record)
         self.assertIsNotNone(candidates[0]);self.assertIsNone(pre);self.assertIn('NO_NEW_OUTCOME',post['reason'])
         self.assertFalse(any(x[0]=='advance'for x in runtime.calls))
+
+    def test_actual_base_schema_promotes_only_closed_turns_without_inventing_saved_draws(self):
+        from gpu_engine.finite_gameplay_comparison import decode_state
+        fixture=json.loads((Path(__file__).parent/'fixtures/state_schemas/pre_shed_skin_6caf071b.json').read_text())
+        source=subprocess.check_output(['git','show',fixture['source_commit']+':gpu_engine/state.py'],cwd=c.ROOT)
+        self.assertEqual(hashlib.sha256(source).hexdigest(),fixture['source_sha256'])
+        cls=next(n for n in ast.parse(source).body if isinstance(n,ast.ClassDef) and n.name=='BattleState')
+        fields={n.target.id for n in cls.body if isinstance(n,ast.AnnAssign)}
+        self.assertEqual(set(fixture['packet']),fields)
+        self.assertNotIn('shed_skin_draws',fields)
+        for layout in (fixture['layout'],r._state_layout()):
+            decoded=decode_state(fixture['packet'],layout)
+            for name in fields:
+                actual = getattr(decoded, name)
+                if name == 'effect_draws':
+                    np.testing.assert_array_equal(actual[..., 4], np.zeros((1, 2), np.int32))
+                    actual = actual[..., :4]
+                np.testing.assert_array_equal(actual,fixture['packet'][name],err_msg=name)
+                self.assertEqual(str(actual.dtype),fixture['layout'][name]['dtype'])
+            self.assertFalse(decoded.transformed.any())
+            np.testing.assert_array_equal(decoded.shed_skin_draws,np.zeros((1,2),np.int32))
+        invalid=copy.deepcopy(fixture['packet']);invalid['effect_draws'][0][0][0]=1
+        with self.assertRaisesRegex(ValueError,'legacy closed state has an invalid saved effect block'):
+            decode_state(invalid,fixture['layout'])
+        boundary=dict(state=fixture['packet'],requested=[not fixture['packet']['done'][0]]*2)
+        replay=r.Replay(Runtime())
+        self.assertIsNone(replay.constructor(dict(raw=boundary,initialized=boundary)))
+        suspended=copy.deepcopy(fixture['packet']);suspended.update(done=[False],pending_residual=[True])
+        for layout in (fixture['layout'],r._state_layout()):
+            with self.assertRaisesRegex(ValueError,'legacy suspended state lacks saved Shed Skin draws'):
+                decode_state(suspended,layout)
+        missing=copy.deepcopy(fixture['packet']);del missing['hp']
+        with self.assertRaisesRegex(ValueError,'literal complete actual state packet required'):
+            decode_state(missing,fixture['layout'])
 
     def test_final_owner_manifest_and_dataset_hash_guards(self):
         with tempfile.TemporaryDirectory()as folder:

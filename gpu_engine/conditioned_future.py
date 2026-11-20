@@ -26,13 +26,24 @@ _DRAW_BOUNDS = (2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2)
 # successor still suspended keeps the block its resumed step replayed; any other carries 0). Two suspended
 # futures that differ only in the saved block therefore never compare equal.
 SAVED_BLOCK = "effect_draws"
-_EFFECT_BOUNDS = (16, 16, 4, 2)
-_NO_BLOCK = ((0, 0, 0, 0), (0, 0, 0, 0))
+SAVED_CURE = "shed_skin_draws"
+
+
+def _saved_cure(data):
+    if data.get("pending_residual") and SAVED_CURE not in data:
+        raise ValueError("MISSING_SAVED_SHED_SKIN_BLOCK")
+    value=mapping._freeze(data.get(SAVED_CURE,(0,0)))
+    if mapping._shape(value)!=(2,) or any(type(v) is not int or not 0<=v<100 for v in value):
+        raise ValueError("INVALID_SAVED_SHED_SKIN_BLOCK")
+    return value
+
+_EFFECT_BOUNDS = (16, 16, 4, 2, 2)
+_NO_BLOCK = ((0, 0, 0, 0, 0), (0, 0, 0, 0, 0))
 
 
 def _saved_block(data):
     value = mapping._freeze(data[SAVED_BLOCK]) if SAVED_BLOCK in data else _NO_BLOCK
-    if (mapping._shape(value) != (2, 4) or any(type(v) is not int for v in _leaves(value))
+    if (mapping._shape(value) != (2, 5) or any(type(v) is not int for v in _leaves(value))
             or any(not 0 <= v < bound for row in value for v, bound in zip(row, _EFFECT_BOUNDS, strict=True))):
         raise ValueError("INVALID_SAVED_EFFECT_BLOCK")
     return value
@@ -60,6 +71,7 @@ def _binding_digest(raw_native, raw_jax, capsule, certificate, source_certificat
 
 
 def _check_binding(value):
+    _saved_cure(dict(value.raw_jax))
     if (value.integrity_sha256 != _binding_digest(value.raw_native, value.raw_jax,
             value.capsule, value.certificate, value.source_certificate)
             or value.certificate.input_fields != value.raw_jax
@@ -125,6 +137,7 @@ def suspended_input_from_jax(state, index, metadata, *, certificate, module=None
     try:
         data = mapping._sample(state, index)
         raw = mapping._freeze(data)
+        _saved_cure(data)
         if not isinstance(certificate, mapping.Certificate):
             raise ValueError("SUSPENSION_PROVENANCE_REQUIRED")
         required_static = {f"{side}.pokemon[{p}]" for side in mapping.SIDE_NAMES for p in range(6)}
@@ -169,7 +182,7 @@ def suspended_input_from_jax(state, index, metadata, *, certificate, module=None
             static_native=static, inactive_addresses=())
         if native_successor is not None:
             complete = _complete_key(mapping.CanonicalFuture(tuple(mapping._flat(expected)),
-                bound_certificate, raw, native_wire), capsule, _saved_block(data))
+                bound_certificate, raw, native_wire), capsule, _saved_block(data), _saved_cure(data))
             if complete.key != native_successor.key:
                 raise ValueError("NATIVE_SUCCESSOR_KEY_MISMATCH")
         digest = _binding_digest(native_wire, raw, capsule, bound_certificate, certificate)
@@ -178,13 +191,13 @@ def suspended_input_from_jax(state, index, metadata, *, certificate, module=None
         return mapping.Refused((mapping.Gap("suspension", "SUSPENSION_INPUT_REFUSED", str(error)),), raw, native_wire)
 
 
-def _complete_key(physical, capsule, saved_block):
+def _complete_key(physical, capsule, saved_block, saved_cure):
     if isinstance(physical, mapping.Refused):
         return physical
     # Complete physical state and all future-reused/external carry participate.
     # No capsule field can disappear merely because physical HP agrees.
     return ConditionedFuture(tuple(sorted((*physical.key,
-        *mapping._flat({"capsule": dict(capsule), "saved": {SAVED_BLOCK: saved_block}})))), physical.certificate,
+        *mapping._flat({"capsule": dict(capsule), "saved": {SAVED_BLOCK: saved_block,SAVED_CURE: saved_cure}})))), physical.certificate,
         physical.raw_jax, physical.raw_native, capsule)
 
 
@@ -245,7 +258,7 @@ def canonical_resumed_jax(state, index, metadata, *, native_input):
         physical = mapping.canonical_jax_future(state, index, metadata, certificate=native_input.certificate)
     try:
         sampled = mapping._sample(state, index)
-        return _complete_key(physical, _from_data(sampled), _saved_block(sampled))
+        return _complete_key(physical, _from_data(sampled), _saved_block(sampled), _saved_cure(sampled))
     except (ValueError, TypeError, KeyError, IndexError) as error:
         return mapping.Refused((mapping.Gap("capsule", "INVALID_SUCCESSOR_CAPSULE", str(error)),),
             physical.raw_jax)
@@ -315,7 +328,8 @@ def native_successors(native_input, replacement, entry_ties, *, module=None):
             if any(dict(carry)["baton_pass"]) and not dict(carry)["pending_residual"]:
                 return refuse("UNSUPPORTED_POSITIVE_SUCCESSOR", "Successor is still suspended")
             results.append((mass / 100, _complete_key(physical, carry,
-                resumed_block if dict(carry)["pending_residual"] else _NO_BLOCK)))
+                resumed_block if dict(carry)["pending_residual"] else _NO_BLOCK,
+                _saved_cure(dict(native_input.raw_jax)) if dict(carry)["pending_residual"] else (0,0))))
         if not results or abs(math.fsum(mass for mass, _ in results) - 1) > 1e-6:
             raise ValueError("CONDITIONAL_MASS_NOT_ONE")
         return tuple(results)

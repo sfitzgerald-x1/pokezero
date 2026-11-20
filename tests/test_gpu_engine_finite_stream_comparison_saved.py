@@ -151,6 +151,36 @@ class SavedConstructorComparisonTests(unittest.TestCase):
                 saved.compare_saved(packet,None,None,showdown_root='/not-read',node='not-run',native_seed_start=700)
             collect.assert_not_called()
 
+    def test_legacy_constructor_capture_preserves_roots_and_refuses_only_missing_pending_bank(self):
+        fixture=json.loads((Path(__file__).parent/'fixtures/state_schemas/pre_shed_skin_6caf071b.json').read_text())
+        packet=self.packet()
+        packet['initial_engine_state']={name:np.repeat(np.asarray(value),2,axis=0).tolist()
+            for name,value in fixture['packet'].items()}
+        self.assertNotIn('shed_skin_draws',packet['initial_engine_state'])
+        for pending in ([False,False],[True,False],[False,True],[True,True]):
+            packet['initial_engine_state']['pending_residual']=pending
+            original=copy.deepcopy(packet);calls=[]
+            def collect(pool,teams,state,captured,catalog,**kwargs):
+                index=kwargs['root_ids'][0]-101;calls.append(index)
+                self.assertFalse(pending[index])
+                self.assertEqual(kwargs['native_seed_start'],700+index)
+                self.assertEqual(state.hp.shape,(1,2,6))
+                np.testing.assert_array_equal(state.shed_skin_draws,np.zeros((1,2),np.int32))
+                for name,value in packet['initial_engine_state'].items():
+                    actual = getattr(state, name)
+                    if name == 'effect_draws':
+                        np.testing.assert_array_equal(actual[..., 4], np.zeros((1, 2), np.int32))
+                        actual = actual[..., :4]
+                    np.testing.assert_array_equal(actual,np.asarray(value)[index:index+1])
+                return dict(rows=[dict(root_id=101+index,state_status='UNKNOWN',owners=[])])
+            with patch.object(saved.comparison,'collect_constructors',side_effect=collect):
+                result=saved.compare_saved(packet,None,None,showdown_root='/not-read',node='not-run',native_seed_start=700)
+            self.assertEqual(calls,[i for i,p in enumerate(pending) if not p])
+            self.assertEqual([row['root_id'] for row in result['rows']],[101,102])
+            for index,row in enumerate(result['rows']):
+                if pending[index]:self.assertEqual(row['error']['type'],'MISSING_SAVED_SHED_SKIN_BLOCK')
+            self.assertEqual(packet,original)
+
 
 if __name__=='__main__':
     unittest.main()

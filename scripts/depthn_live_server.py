@@ -393,11 +393,20 @@ def parser():
         'world-range seam): a lone in-process decision of W >= --split-min-worlds builds its worlds across up to this many idle workers '
         '(default 0: off)')
     p.add_argument('--split-min-worlds',type=int,default=32,help='the smallest W --split-worlds splits (default 32)')
-    p.add_argument('--reply-forward',choices=('reduce','device'),default='reduce',help='batched serving: the reply prior\'s forward per root '
-        'on the reduce thread (default; as the serial search) or once per batch on the device thread. device is NOT bitwise the per-root '
+    p.add_argument('--reply-forward',choices=('reduce','device','root'),default='reduce',help='batched serving: the reply prior\'s forward per root '
+        'on the reduce thread (default; as the serial search), per root dispatched by the device thread right after the price and fetched '
+        'by reduce (root, --reply-views jit only: the same program on the same inputs, bitwise the default), or once per batch on the '
+        'device thread (device). device is NOT bitwise the per-root '
         'forward: the batch\'s forward has another batch shape, and the backend may pick another matmul (CPU: 0 of 194 roots equal, max '
         '|logit difference| 0.052); never on a served config until shown batch-invariant on its GPU')
     p.add_argument('--block-lanes',type=int,default=2187);p.add_argument('--blocks-per-call',type=int,default=16)
+    p.add_argument('--leaf-layout',choices=('blocks','wide'),default='blocks',help='the DepthN leaf program (device_depthn_pricer.LEAF_LAYOUTS): '
+        'blocks (default, the programs as before) or wide (one iteration of --blocks-per-call forward chunks of the blocks\' B*K rows per call, '
+        'only enumerated lanes packed). Placement and digest are the blocks layout\'s by construction, and so are leaf status and error '
+        'except the forward-usability code (error 4); that code and the leaf values match only while the forward is row-position invariant: '
+        'gated on GB300 under the pinned stack, not on CPU, so a run serving wide passes scripts/depthn_wide_leaf_frame_gate.py at bind time. '
+        'The pricer identity records the layout when not blocks')
+    p.add_argument('--wide-nodes',type=int,help='node slots per wide leaf call (default its lanes // 16; only with --leaf-layout wide)')
     p.add_argument('--warmup-requests',required=True,help='JSONL of saved Showdown requests, one object per line with the eight address keys of '
         'Codex\'s ladder request (battle_id, owner, stream_id, decision_index, generation, prefix_sha256, lines, own_request_line)')
     p.add_argument('--prepare-warm-in',help='JSONL of saved requests (the eight address keys, as --warmup-requests) that prepare runs once '
@@ -449,6 +458,11 @@ def check_reply_view(meta,args):
 
 def options(argv=None):
     p=parser();args=p.parse_args(argv);evaluators.check_arguments(p,args);check_precision_environment(p,args)
+    # V2 self_moves: the server encodes what its champion contract declares (the contract's masks carry no self_moves, so
+    # False); an OBS_SELF_MOVES override is for measurement tools and refuses a serving start.
+    from pokezero.observation import require_declared_self_moves
+    try:require_declared_self_moves(False,context='depthn live server')
+    except ValueError as error:p.error(str(error))
     if not args.champion_archive:p.error('--champion-archive with its two sha256 flags is required: the champion prices every root and leaf')
     check_reply_arguments(p,args)
     if getattr(args,'eager_peer_fold',False)and not(args.redact_private_reveals or args.peer_view_b):
@@ -460,6 +474,8 @@ def options(argv=None):
         p.error('--split-worlds (measurement only) goes with --prepare-workers and --local-battles')
     if bool(getattr(args,'prepare_warm_in',None))!=bool(getattr(args,'prepare_warm_in_sha256',None)):
         p.error('--prepare-warm-in and --prepare-warm-in-sha256 go together')
+    if args.wide_nodes is not None and(args.leaf_layout!='wide'or args.wide_nodes<=0):
+        p.error('--wide-nodes is a positive node capacity of --leaf-layout wide')
     if args.prepare_cpus:
         try:prepare_cpu_sets(args.prepare_cpus,args.prepare_workers)
         except ValueError as error:p.error(f'--prepare-cpus: {error}')
@@ -522,17 +538,21 @@ def build(args):
     from gpu_engine import constructor_worlds as cw
     constructor=build_constructor(args);catalog,source,metadata=constructor.catalog,constructor.source,constructor.metadata
     evaluator=evaluators.load_from_arguments(args);W=live.RUNGS[args.rung]
+    from gpu_engine.private_self_moves import refuse_search_serving   # V2 self_moves: fail closed until the search threading lands
+    refuse_search_serving(catalog=catalog,meta=getattr(evaluator,'meta',None),context='depthn live server')
     executor=cw.live_executor(metadata,catalog)   # the constructor's own engine metadata and catalog (the depth-N gate's CONSTRUCTOR_ROOTS uses the same)
     params=(evaluator.params,)
     from gpu_engine import depthn_guard_inputs as guard_inputs
     pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call,
-        labels=guard_inputs.ability_labels if getattr(args,'ability_guard',False)else guard_inputs.child_labels)
+        labels=guard_inputs.ability_labels if getattr(args,'ability_guard',False)else guard_inputs.child_labels,
+        leaf_layout=getattr(args,'leaf_layout','blocks'),wide_nodes=getattr(args,'wide_nodes',None))
     reply=None
     if getattr(args,'reply_archive',None):   # br_fp: the reply model at the champion's precision, on the same executor's views
         from gpu_engine.depthn_reply_prior import ReplyPrior
         model=evaluators.load(args.reply_archive,expected_archive_sha256=args.reply_archive_sha256,
             expected_checkpoint_sha256=args.reply_checkpoint_sha256,precision=evaluators.PRECISIONS[args.champion_precision])
         check_reply_view(getattr(model,'meta',None),args)
+        refuse_search_serving(meta=getattr(model,'meta',None),context='depthn live server reply model')
         reply=ReplyPrior(executor,model,mode=args.reply_views,identity=dict(archive_sha256=args.reply_archive_sha256,
             checkpoint_sha256=args.reply_checkpoint_sha256,view=reply_view(getattr(model,'meta',None))))
     return live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=cw.binding(source,metadata,catalog),

@@ -232,7 +232,11 @@ class StepSourceTests(unittest.TestCase):
             form('heal'),                                   # the status gate's elif: the heal-only HP write
             form('heal', every), form('status', every),     # the device observe (heal) and hp_line (status)
             form('heal', every), form('status', every), form('heal', every), form('seed', every),
-            form('wrap'), form('yawn'), form('encore', '_lifecycle_trace')])
+            form('wrap'), form('yawn'), form('encore', '_lifecycle_trace'),
+            "order in residual_order.POSITIONS['seed'] | residual_order.POSITIONS['status'] | residual_order.POSITIONS['wrap']"])
+        # Forecast observes a suppressor faint at each lethal callback boundary, before a later handler can faint
+        # its recipient. It adds no handler or ordering key to the residual list.
+        self.assertEqual([ast.unparse(n.func) for n in ast.walk(found[-1]) if isinstance(n, ast.Call)],['_forecast'])
         self.assertTrue(same(self.assignment('_all_positions'), '_all_positions = _lifecycle_trace and table.entry is None'))
         self.assertIn(self.assignment('_all_positions'), self.before)
         for block, kind in zip(found, kinds):

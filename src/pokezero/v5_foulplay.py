@@ -67,7 +67,9 @@ def _recipe(config,factory):
     if _checkpoint_sha(config.checkpoint)!=factory.contract.checkpoint_sha256:
         raise ValueError('original explicit v5 checkpoint path differs from archived source')
     resolved=json.loads(json.dumps(asdict(config),default=_json_default,allow_nan=False))
-    return dict(schema=SCHEMA,actor_version='v5',config=resolved,actor_namespace=factory.contract.namespace,
+    # V2 self_moves: an on factory (an archive declaring it) records it; off recipes are byte-identical.
+    declared=dict(self_moves=True) if getattr(factory.contract,'self_moves',False) else {}
+    return dict(schema=SCHEMA,actor_version='v5',config=resolved,actor_namespace=factory.contract.namespace,**declared,
         archive_sha256=json.loads(factory.metadata)['weights_archive_sha256'],
         checkpoint_sha256=factory.contract.checkpoint_sha256,
         category_vocabulary_sha256=factory.config.category_vocabulary_sha256,
@@ -82,7 +84,7 @@ async def load_and_run(config,archive,*,catalog,contract,expected_archive_sha256
     """Actual explicit archive load -> owning actor -> original FP game body."""
     if enable_v5 is not True:raise ValueError('explicit v5 FP enablement required')
     import jax
-    from gpu_engine.v5_live_protocol import load_factory
+    from gpu_engine.v5_live_protocol import load_factory   # V2 self_moves: it serves the archive as declared
     # Own matched main-thread setup, restoring it when this explicit call ends.
     with jax.default_matmul_precision('highest'),jax.enable_x64(False):
         factory=load_factory(archive,catalog=catalog,contract=contract,
@@ -94,7 +96,7 @@ async def load_and_run(config,archive,*,catalog,contract,expected_archive_sha256
 
 
 async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None,progress_callback=None,
-        trajectory_callback=None,progress_path=None,enable_v5=False,game_offsets=None):
+        trajectory_callback=None,progress_path=None,enable_v5=False,game_offsets=None,packed_starts=None):
     """One original finite declared panel; exceptions remain unknown cells.
 
     The original low-level runner receives explicit offsets of the ORIGINAL
@@ -114,6 +116,10 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
             raise ValueError('ordered original panel offsets required')
         recipe['game_offsets']=list(game_offsets)
     offsets=tuple(range(config.games)) if game_offsets is None else game_offsets
+    if packed_starts is not None:
+        if set(packed_starts) != set(offsets):
+            raise ValueError('one immutable packed start per original offset required')
+        recipe['packed_starts'] = [[i, _sha(asdict(packed_starts[i]))] for i in offsets]
     namespace=_sha(recipe)
     fp=(old._per_seed_foulplay_random_seed_schedule(config,count=config.games) if game_offsets is None
         else old._per_seed_foulplay_random_seed_schedule_for_offsets(config,offsets=offsets))
@@ -142,7 +148,7 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
             if status!='COMPLETE' and actual.get('score') is not None:raise ValueError('unknown panel outcome cannot carry a score')
             if status=='RUNNING':expected.update(status='FAILED',score=None,reason='interrupted-original-root-not-replayed')
         started=previous['started_unix']
-    masks=dict(factory.contract.feature_masks);masks['opponent_tendency_stats_block']=masks.pop('stats_block')
+    masks=factory.contract.encoder_masks();masks['opponent_tendency_stats_block']=masks.pop('stats_block')
     masks=ObservationFeatureMasks(**masks)
     path=None if progress_path is None else Path(progress_path)
     if path is not None and path.exists() and (previous is None or _sha(json.loads(path.read_bytes()))!=expected_previous_sha256):
@@ -177,7 +183,8 @@ async def run_panel(config,factory,*,previous=None,expected_previous_sha256=None
                 policy_id='v5-raw-'+recipe['archive_sha256'][:12],vocab=factory.catalog.vocabulary,
                 dex=factory.catalog.dex,observation_spec=V4_REPLAY_OBSERVATION_SPEC,feature_masks=masks,
                 checkpoint_sha256=factory.contract.checkpoint_sha256,trajectory_callback=trajectory_callback,
-                owning_actor_factory=factory,actor_runtime=factory,actor_version='v5',game_offsets=(row['offset'],))
+                owning_actor_factory=factory,actor_runtime=factory,actor_version='v5',game_offsets=(row['offset'],),
+                **(dict(packed_starts={row['offset']: packed_starts[row['offset']]}) if packed_starts is not None else {}))
             if (len(result.games)!=1 or result.games[0].seed!=row['seed']
                     or result.foulplay_random_seed_schedule!=(row['fp_seed'],)):
                 raise ValueError('actual original FP game cell/seed differs')
