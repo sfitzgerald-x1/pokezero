@@ -1895,6 +1895,34 @@ async function submitChoices(battle, choices, receivedAt, submissionId = undefin
   }
 }
 
+function attemptMaybeTrappedSwitch(command) {
+  const battle = requireBattle(command);
+  const {player, choice} = command;
+  const submissionId = choiceSubmissionId(command);
+  const request = battle.boundaryRequests[player];
+  const active = request?.active?.[0];
+  if (!["p1", "p2"].includes(player) || typeof choice !== "string" || !/^switch [1-6]$/.test(choice) ||
+      submissionId === undefined || request?.wait || request?.forceSwitch?.some(Boolean) ||
+      active?.maybeTrapped !== true || active.trapped === true) {
+    throw new Error("A current maybe-trapped move request and one switch are required.");
+  }
+  invalidateBoundaryRequests(battle, process.hrtime.bigint());
+  const native = battle.battleStream.battle;
+  const accepted = native.choose(player, choice);
+  const result = {type: "choice_ack", battleId: battle.battleId, player, choice, submissionId};
+  if (!accepted) {
+    if (native.getSide(player).choice.error !== "Can't switch: The active Pokémon is trapped") {
+      throw new Error("Showdown rejected a guarded switch for a reason other than trapping.");
+    }
+    result.type = "choice_rejected";
+    result.reason = "trapped";
+  }
+  // Send the synchronous choice result before draining corrected requests or
+  // post-choice streams. No opponent input has been submitted by this command.
+  emit(result);
+  native.sendUpdates();
+}
+
 async function sendChoices(command) {
   const battle = requireBattle(command);
   await submitChoices(battle, command.choices, process.hrtime.bigint(), choiceSubmissionId(command));
@@ -1929,6 +1957,9 @@ async function handleCommand(command) {
       break;
     case "choices":
       await sendChoices(command);
+      break;
+    case "attempt_maybe_trapped_switch":
+      attemptMaybeTrappedSwitch(command);
       break;
     case "snapshot":
       snapshotBattle(command);

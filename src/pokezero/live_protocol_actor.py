@@ -7,7 +7,7 @@ actor game leaves player-wire, full-encoder and B3 qualification false.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import threading
@@ -244,6 +244,16 @@ class RawPolicy(OwnedProvider):
         decision = self._select_action(observation, rng=rng)
         self._validate()
         return decision
+
+    def reselect(self, original, observation, *, rng):
+        """Replace the first inference's history entry on a rejected attempt."""
+        self._validate()
+        if self._transformer_policy is not None:
+            from .neural_policy import _observation_player_key
+            history = self._history[_observation_player_key(original)]
+            _require(history and history[-1] is original, 'rejected choice is not the latest raw inference')
+            history.pop()
+        return self.select_action(observation, rng=rng)
 
     def claim(self, contract):
         super().claim(contract)
@@ -514,9 +524,11 @@ class NoAction(ValueError):
 
 
 class LiveProtocolActor:
-    def __init__(self, contract, *, backend_factory, policy_factory):
+    def __init__(self, contract, *, backend_factory, policy_factory, allow_maybe_trapped_switches=False):
         _require(type(contract) is ActorContract and callable(backend_factory)
             and callable(policy_factory), 'contract and fresh providers required')
+        _require(type(allow_maybe_trapped_switches) is bool, 'typed maybe-trapped serving flag required')
+        self.allow_maybe_trapped_switches = allow_maybe_trapped_switches
         self.contract, self.backend_factory, self.policy_factory = contract, backend_factory, policy_factory
         self.status, self._seen_battles, self._seen_streams = 'IDLE', set(), set()
         self._backend = self._policy = None
@@ -623,11 +635,12 @@ class LiveProtocolActor:
             encoded, targets = self._backend.encode(snapshot)
             observation = self._observation(encoded,snapshot)
             from .showdown import _legal_action_mask
-            _require(observation.legal_action_mask == _legal_action_mask(_packet(snapshot.own_request_line,self.owner)),
-                     'encoded own legal mask differs')
+            request = _packet(snapshot.own_request_line, self.owner)
+            _require(observation.legal_action_mask == _legal_action_mask(request), 'encoded own legal mask differs')
             targets = tuple(targets)
-            _require(targets == _request_targets(_packet(snapshot.own_request_line,self.owner)),
-                     'encoded own switch targets differ')
+            _require(targets == _request_targets(request), 'encoded own switch targets differ')
+            if self.allow_maybe_trapped_switches:
+                observation = replace(observation, legal_action_mask=_legal_action_mask(request, allow_maybe_trapped=True))
             decision = self._policy.select_action(observation,rng=rng)
             self._active()
             _require(type(decision) is PolicyDecision and type(decision.action_index) is int
@@ -638,6 +651,34 @@ class LiveProtocolActor:
             self._decision_generation = self.generation
             self._decision_request_count = self._request_count
             self._decision_observation, self._decision_snapshot = observation, snapshot
+            return decision
+        except BaseException as error:
+            self._poison(error); raise
+
+    def tentative_switch(self, snapshot):
+        self._current(snapshot)
+        if not self.allow_maybe_trapped_switches or not self.choice(snapshot).startswith('switch '):
+            return False
+        from .showdown import _active_request, _request_kind
+        request = _packet(snapshot.own_request_line, self.owner)
+        active = _active_request(request)
+        return (_request_kind(request) == 'move' and active is not None
+                and active.get('maybeTrapped') is True and active.get('trapped') is not True)
+
+    def retry_trapped_switch(self, snapshot, *, rng):
+        original = self.decision_observation(snapshot)
+        _require(self.tentative_switch(snapshot), 'expected a rejected maybe-trapped switch')
+        moves = original.legal_action_mask[:4]
+        _require(any(moves), 'trapped request has no legal move fallback')
+        observation = replace(original, legal_action_mask=moves + (False,) * 5)
+        try:
+            decision = self._policy.reselect(original, observation, rng=rng)
+            self._active()
+            action = decision.action_index
+            _require(type(decision) is PolicyDecision and type(action) is int and 0 <= action < 4
+                     and moves[action], 'illegal trapped fallback')
+            self._choice = f'move {action + 1}'
+            self._decision_observation = observation
             return decision
         except BaseException as error:
             self._poison(error); raise

@@ -204,7 +204,8 @@ def champion_actor_factory(config):
             checkpoint_path=checkpoint, weights_sha256=contract.checkpoint_sha256)
         return RawPolicy.from_transformer(c, raw)
 
-    factory = OwningActorFactory(kind, contract, backend, policy)
+    factory = OwningActorFactory(kind, contract, backend, policy,
+                                 getattr(config, 'owning_allow_maybe_trapped_switches', False))
     from .owning_worker_runtime import register_factory
     register_factory(factory, lambda: {} if 'functions' not in bound else {
         'fold': bound['functions'].step, 'encode': bound['functions'].encode_step})
