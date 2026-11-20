@@ -2,7 +2,7 @@
 
 from .fresh200_native_initial import Vocabulary, _boolean, _field, _integer, _layout, _need, _typed_projection
 from .fresh200_native_identity import to_id
-from .fresh200_native_ledger import fields, items, member, pokemon
+from .fresh200_native_ledger import fields, items, member, pokemon, retired_trap_actives
 from .fresh200_native_material import MATERIAL_FIELDS, _last_move
 from .fresh200_native_projector import bound_boundary
 
@@ -364,6 +364,43 @@ def _fainted_magnet_pull(cause, boundary, observed, side, original):
     fainted = member(observed, (foe, source['original']))
     return (live['hp'] > 0 and live['fainted'] is False and live['trapped'] == 'hidden'
             and fainted['hp'] == 0 and fainted['fainted'] is True)
+def _retired_fainted_arena_trap(cause, boundary, observed, side, original):
+    writer = cause.get('arena_trap_writer')
+    departure = cause.get('arena_trap_departure')
+    witness = cause.get('arena_trap_retired_faint')
+    effect = cause.get('effect')
+    phase, history = boundary.phase, boundary.history
+    foe = 1 - side
+    if (not writer or writer.get('hidden_argument') is not True or not departure
+            or departure.get('choice') != 'switch' or not witness
+            or 'arena_trap_double_faint' in cause
+            or not effect or (effect['id'], effect['effect_type']) != ('arenatrap', 'Ability')
+            or phase.kind != 'replacement-before-residual' or phase.pending_residual is not True
+            or phase.queued_actor != -1 or phase.queued_actions != (0, 0) or phase.queued_stall != (0, 0)
+            or phase.requested[side] is not True or phase.requested[foe] is not False
+            or boundary.relations[side]['kind'] != 'forced-replacement'
+            or boundary.relations[foe]['kind'] != 'inactive'):
+        return False
+    sequence, installs = cause['sequence'], history['last_active_install']
+    if (writer['epoch'] + 1 != departure['epoch'] or departure['epoch'] != witness['epoch']
+            or witness['epoch'] != history['phase_epoch']
+            or not sequence < departure['enter'] < departure['end'] < witness['faint_enter'] < witness['faint_end']
+                   < witness['flush_start'] < witness['clear_enter'] < witness['clear_end']
+                   < witness['flush_end'] <= phase.snapshot_sequence
+            or max(departure['installs_before']) >= sequence or installs[side] >= sequence
+            or installs[foe] != departure['end'] or history['last_trap_refresh'] >= sequence):
+        return False
+    victim, source, replacement = writer['victim'], writer['source'], departure['replacement']
+    if ((victim['side'], victim['original']) != (side, original)
+            or source['side'] != foe or replacement['side'] != foe
+            or source['original'] == replacement['original'] or source['object'] == replacement['object']
+            or not retired_trap_actives(observed, victim, replacement)
+            or not any(row['actor'] == [side, original] and row['call_id'] == witness['faint_call_id']
+                       and row['sequence'] == witness['faint_end'] for row in history['retained_status'])):
+        return False
+    fainted = member(observed, (side, original))
+    return (fainted['hp'] == 0 and fainted.get('fainted') is True and fainted.get('faintQueued') is False
+            and fainted['trapped'] == 'hidden' and fainted.get('maybeTrapped') is True)
 
 
 def project_trapped(boundary, *, original_species, conditions):
@@ -378,7 +415,8 @@ def project_trapped(boundary, *, original_species, conditions):
         _need(type(cache) is bool or cache == 'hidden', 'literal Native trap cache required')
         represented = _represented_traps(party, side, original, conditions)
         if cache:
-            rows = [*boundary.history['trap_causes'], *boundary.history.get('double_faint_trap_proofs', ())]
+            rows = [*boundary.history['trap_causes'], *boundary.history.get('double_faint_trap_proofs', ()),
+                    *boundary.history.get('retired_fainted_trap_proofs', ())]
             recorded = [cause for row in rows if row['actor'] == actor for cause in row['causes']]
             _need((represented or recorded) and all(
                       (cause['effect'] and cause['effect']['id'] in represented
@@ -386,7 +424,9 @@ def project_trapped(boundary, *, original_species, conditions):
                       or _retired_arena_trap(cause, boundary, observed, side, original)
                       or _double_faint_arena_trap(cause, boundary, observed, side, original)
                       or _retired_shadow_tag(cause, boundary, observed, side, original)
-                      or _fainted_magnet_pull(cause, boundary, observed, side, original) for cause in recorded),
+                      or _fainted_magnet_pull(cause, boundary, observed, side, original)
+                      or (not represented and _retired_fainted_arena_trap(cause, boundary, observed, side, original))
+                      for cause in recorded),
                   f'Native trap has an unexplained contribution for p{side+1} original slot {original}')
             # Shadow Tag writes the cache directly. The two hard-lock paths
             # are bound to the actual lock return. Other true writes require
