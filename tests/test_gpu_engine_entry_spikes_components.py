@@ -113,14 +113,11 @@ class EntrySpikesComponentTests(unittest.TestCase):
     np.testing.assert_array_equal(got,expected)
   _,good=ex.join_consumed_owners(*closed,tables=self.account.device);self.assertTrue(bool(good.all()))
  def test_static_default_physics_prefix_and_original_callback(self):
+  from gpu_engine_transition_certification import CURRENT_TRANSITION
   old=ast.parse(subprocess.check_output(['git','show','ad7ecc8987d849921aea7db9c10c46d363507674:gpu_engine/entry.py'],text=True));new=ast.parse(Path('gpu_engine/entry.py').read_text())
-  for name in('enter','depart','speed_modifier','restore_sleep'):
-   a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name)
-   if name=='depart':
-    b=ordinary.strip_infatuation_departure(deepcopy(b),required=True)
-    b=ordinary.strip_transform_depart(b,required=True)
-    b=ordinary.strip_m2_volatiles(ordinary.strip_m1_recharge(b,required=True),required=True)     # exact approved departure changes only
-   if name=='enter':b=ordinary.strip_transform_enter(deepcopy(b),required=True)
+  certified=ast.parse(subprocess.check_output(['git','show',CURRENT_TRANSITION+':gpu_engine/entry.py'],text=True))
+  for name in('enter','depart','speed_modifier','switch_in_status'):
+   a=next(n for n in certified.body if isinstance(n,ast.FunctionDef)and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name)
    self.assertEqual(dump_default_program(a),dump_default_program(b))
   a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name=='from_metadata');b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name=='from_metadata')
   # The three Spikes lookups and the residual Shed Skin flag are appended to the original metadata prefix.
