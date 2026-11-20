@@ -42,6 +42,7 @@ PHAZING_SALT=271828
 EFFECT_SALT=1732050
 EFFECT_BOUNDS=(16,16,4,2,2)
 INFATUATION_SALT=2236067
+SHED_SKIN_SALT=2449489
 # The first 50000..50199 panel is immutable historical evidence. Following
 # its authored adapter correction, use one disjoint fixed panel, not a replay.
 FIRST_GAME=50200
@@ -121,17 +122,20 @@ def chance_tape(state,game,index,saved_effect=None):
     sleep=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,1414213),(2,),0,60))(split)
     phazing=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,PHAZING_SALT),(2,),0,60))(split)
     effect=np.asarray(effect_draws(split))[0].tolist()
+    shed_skin=jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,SHED_SKIN_SALT),(2,),0,100))(split)
     entry=jax.vmap(lambda key,count:jax.random.randint(jax.random.fold_in(
         key,j.uint32(982451653)+count.astype(j.uint32)),(2,),0,2))(state.keys,state.replacement_count)
     resuming=bool(np.asarray(state.pending_residual)[0])
     if resuming:
         draws=state.residual_draws;secondary=state.secondary_draws;sleep=state.sleep_talk_draws
         phazing=state.phazing_draws
+        if hasattr(state,'shed_skin_draws'):shed_skin=state.shed_skin_draws
         if hasattr(state,'effect_draws'):effect=np.asarray(state.effect_draws)[0].tolist()
         elif saved_effect is not None:effect=[list(row) for row in saved_effect]
     return dict(schema=TAPE_SCHEMA,nonce=f'{game}:{index}',draws=np.asarray(draws)[0].tolist(),
         secondary=np.asarray(secondary)[0].tolist(),sleep_talk=np.asarray(sleep)[0].tolist(),effect=effect,
-        phazing=np.asarray(phazing)[0].tolist(),entry_ties=np.asarray(entry)[0].tolist(),resuming=resuming)
+        phazing=np.asarray(phazing)[0].tolist(),entry_ties=np.asarray(entry)[0].tolist(),resuming=resuming,
+        shed_skin=np.asarray(shed_skin)[0].tolist())
 
 
 def initial_chance(state, *, allow_inert_gender):

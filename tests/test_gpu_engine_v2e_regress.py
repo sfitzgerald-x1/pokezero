@@ -607,6 +607,45 @@ class TwoPassTests(unittest.TestCase):
             step_override=step, prepared=(self.context, template or self.template))
         return code, json.loads((out / 'report.json').read_text()), [json.loads(x) for x in (out / 'changed.jsonl').read_text().splitlines()]
 
+    def test_shed_skin_cure_cannot_clear_an_unrelated_benched_member(self):
+        import jax
+        import jax.numpy as j
+        from gpu_engine import v2e_regress as r
+        from gpu_engine.v2e_capture import leaf_paths
+        root=self.tmp/'ss-members';shards=root/'cap'/'shards';shards.mkdir(parents=True)
+        state=lanes_state(self.LANES,154)
+        names=('status','status_counter','sleep_skipped','rest_origin')
+        state=state._replace(**{name:j.ones_like(getattr(state,name)) for name in names})
+        tree=(state,j.zeros((self.LANES,2),j.int32),trackers(self.LANES))
+        template=jax.tree.map(lambda x:x[:1],tree)
+        np.savez_compressed(shards/'shard-000000.npz',tick=np.int64(0),level=np.int64(0),
+            **{f'l{i:03d}':np.asarray(x) for i,x in enumerate(jax.tree.leaves(tree))})
+        (shards.parent/'capture.json').write_text(json.dumps(dict(shards=1,paths=leaf_paths(template))))
+        vocab={**VOCAB,'abilities':['shedskin',*VOCAB['abilities'][1:]]}
+        context={**self.context,'pool':SimpleNamespace(metadata=lambda:dict(vocabulary=vocab))}
+        base=root/'base'
+        self.assertEqual(r.base_pass(self.args(out=base,shards=str(shards),pad_lanes=self.LANES),
+            step_override=base_step,prepared=(context,template)),0)
+        def cure(s,a,t,*,wide):
+            out=base_step(s,a,t);changes={}
+            for name in names:
+                value=getattr(out.step.state,name)
+                for member in ((0,1) if wide else (0,)):
+                    value=value.at[:,0,member].set(j.where(s.done,value[:,0,member],j.zeros_like(value[:,0,member])))
+                changes[name]=value
+            return result(out.step.state._replace(**changes),out.trackers)
+        for wide in (False,True):
+            out=root/('bench-mutant' if wide else 'holder-only')
+            code=r.patched_pass(self.args(out=out,base=str(base),shards=str(shards),pr='SS',faint_clear=False),
+                step_override=lambda s,a,t:cure(s,a,t,wide=wide),prepared=(context,template))
+            report=json.loads((out/'report.json').read_text())
+            self.assertEqual(code,int(wide),report['counts'])
+            self.assertEqual(report['counts']['changed_but_uninvolved'],0)
+            if wide:
+                self.assertGreater(report['counts']['changed_involved_unexpected_fields'],0)
+                self.assertEqual(set(report['by_effect']['shedskin']['unexpected_fields']),
+                    {'state.'+name+'@user' for name in names})
+
     def test_base_pass_manifest(self):
         m = self.manifest
         self.assertEqual(m['lane_steps'], 2 * self.LANES + self.LANES // 2);self.assertEqual(m['live_lane_steps'], m['lane_steps'] - 3)
@@ -814,6 +853,16 @@ def saved_block(state, post):
     return j.where(post.pending_residual[:, None, None], block, 0)
 
 
+def saved_cure_block(state, post):
+    """Synthetic steps preserve the independently saved residual cure input too."""
+    import jax
+    import jax.numpy as j
+    from gpu_engine import transition
+    fresh=transition.shed_skin_chance(jax.vmap(lambda k:jax.random.split(k,2))(state.keys)[:,1])
+    used=j.where(state.pending_residual[:,None],state.shed_skin_draws,fresh)
+    return j.where(post.pending_residual[:,None],used,0)
+
+
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
 class EffectAndResidualRuleTests(unittest.TestCase):
     """R: a capture predating state.effect_draws, the saved effect block checked against the design derivation;
@@ -827,7 +876,7 @@ class EffectAndResidualRuleTests(unittest.TestCase):
         from gpu_engine.state import BattleState
         from gpu_engine.v2e_capture import leaf_paths
         cls.tmp = Path(tempfile.mkdtemp(prefix='v2e-regress-r-test-'))
-        legacy_type = NamedTuple('LegacyState', [(n, object) for n in BattleState._fields if n != 'effect_draws'])
+        legacy_type = NamedTuple('LegacyState', [(n, object) for n in BattleState._fields if n not in ('effect_draws','shed_skin_draws')])
         legacy = lambda s: legacy_type(**{n: getattr(s, n) for n in legacy_type._fields})
         shards = cls.tmp / 'cap' / 'shards';shards.mkdir(parents=True)
         first = lambda tree: jax.tree.map(lambda x: x[:1], tree)
@@ -881,7 +930,8 @@ class EffectAndResidualRuleTests(unittest.TestCase):
             out = pending_step(state, actions, t);s = out.step.state
             block = transition.effect_chance(jax.vmap(lambda k: jax.random.split(k, 2))(state.keys)[:, 1])
             block = (block + 1) % 2 if wrong else block
-            return result(s._replace(effect_draws=j.where(s.pending_residual[:, None, None], block, 0)), out.trackers)
+            return result(s._replace(effect_draws=j.where(s.pending_residual[:, None, None], block, 0),
+                shed_skin_draws=saved_cure_block(state,s)), out.trackers)
         np.testing.assert_array_equal(np.asarray(saving(*self.inputs())[0].state.effect_draws),
             np.asarray(saved_block(self.inputs()[0], saving(*self.inputs())[0].state)))
         code, report, listing = self.patched('effect', clocked(saving, even))
@@ -909,7 +959,7 @@ class EffectAndResidualRuleTests(unittest.TestCase):
             if wrong_column is not None:
                 column=block[:,:,wrong_column]
                 block=block.at[:,:,wrong_column].set(j.where(uses[:,None],(column+1)%2,column))
-            return result(s._replace(effect_draws=block), out.trackers)
+            return result(s._replace(effect_draws=block,shed_skin_draws=saved_cure_block(state,s)), out.trackers)
         args = lambda **extra: TwoPassTests.args.__func__(type(self), **extra)
         base = self.tmp / 'base-with-effect'
         code = v2e_regress.base_pass(args(out=base, pad_lanes=self.LANES), step_override=clocked(saving, even),
@@ -945,6 +995,29 @@ class EffectAndResidualRuleTests(unittest.TestCase):
                     self.assertEqual(code,1)
                     self.assertEqual(set(report['by_effect'][effect]['unexpected_fields']),
                         {'state.effect_draws@user','state.effect_draws@target'})
+
+    def test_bad_cure_bank_fails_even_when_an_effect_allows_every_leaf(self):
+        import jax.numpy as j
+        from gpu_engine import v2e_regress as r
+        def saving(state,actions,t,wrong=False):
+            out=pending_step(state,actions,t);post=out.step.state
+            block=saved_cure_block(state,post)
+            if wrong:block=j.where((curse_users(state,actions)&post.pending_residual)[:,None],(block+1)%100,block)
+            return result(post._replace(effect_draws=saved_block(state,post),shed_skin_draws=block),out.trackers)
+        args=lambda **kw:TwoPassTests.args.__func__(type(self),**kw)
+        base=self.tmp/'base-with-cure'
+        self.assertEqual(r.base_pass(args(out=base,pad_lanes=self.LANES),step_override=clocked(saving,even),
+            prepared=(self.context,self.new)),0)
+        for suffix,base_dir in [('new-leaf',self.base),('existing-leaf',base)]:
+            out=self.tmp/('bad-cure-'+suffix)
+            with mock.patch.dict(r.ALLOWED,{'curse':r.ALL}):
+                code=r.patched_pass(args(out=out,base=str(base_dir),pr='A1',faint_clear=False),
+                    step_override=clocked(lambda s,a,t:saving(s,a,t,True),even),prepared=(self.context,self.new))
+            report=json.loads((out/'report.json').read_text())
+            self.assertEqual(code,1)
+            self.assertGreater(report['counts']['shed_skin_integrity_failures'],0)
+            self.assertEqual(report['counts']['changed_but_uninvolved'],0)
+            self.assertEqual(report['counts']['changed_involved_unexpected_fields'],0)
 
     def test_a_moved_ko_retypes_only_a_color_change_holder(self):
         """M1 GPU pass (shard 176 lane 1687: a Trick-given Choice Band KOs Kecleon in the action phase, so Color Change
@@ -1001,7 +1074,7 @@ class EffectAndResidualRuleTests(unittest.TestCase):
             s = s._replace(done=s.done | uses,
                 truant_loaf=s.truant_loaf.at[:, 1, 0].set(j.where(uses, ~s.truant_loaf[:, 1, 0], s.truant_loaf[:, 1, 0])))
             if item:s = s._replace(item=s.item.at[:, 1, 0].set(j.where(uses, 2, s.item[:, 1, 0])))
-            return result(s._replace(effect_draws=saved_block(state, s)), out.trackers)
+            return result(s._replace(effect_draws=saved_block(state, s),shed_skin_draws=saved_cure_block(state,s)), out.trackers)
         code, report, listing = self.patched('terminal-same', clocked(ending, even))
         curse = [x for x in listing if 'curse' in x['involved']]
         self.assertTrue(curse);self.assertTrue(all(x['terminal'] and not x['terminal_residual'] for x in curse))

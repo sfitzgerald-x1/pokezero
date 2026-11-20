@@ -155,14 +155,16 @@ def decode_chance(packet):
     from .transition import ChanceInputs, EFFECT_BOUNDS
     # The appended effect stream (fidelity R) is optional: a packet saved before it omits it, and the
     # transition then derives it from the state's keys exactly as sample_chance_inputs does.
-    required=set(ChanceInputs._fields)-{'effect'}
+    required=set(ChanceInputs._fields)-{'effect','shed_skin'}
     if type(packet)is not dict or not required<=set(packet)<=set(ChanceInputs._fields):raise ValueError('all saved ChanceInputs required')
     arrays={}
     for key in ChanceInputs._fields:
         if key not in packet:continue
-        a=np.asarray(packet[key]);shape=(1,2,12)if key=='draws'else(1,)if key=='initial_tie'else(1,2,len(EFFECT_BOUNDS))if key=='effect'else(1,2)
-        bound=(np.array([2,100,100,100,16,16,100,4,8,2,2,2]) if key=='draws' else np.array(EFFECT_BOUNDS) if key=='effect'
-            else 100 if key=='secondary' else 2 if key in ('entry_ties','initial_tie') else 60)
+        a=np.asarray(packet[key])
+        effect_width = 4 if a.shape == (1, 2, 4) else len(EFFECT_BOUNDS)
+        shape=(1,2,12)if key=='draws'else(1,)if key=='initial_tie'else(1,2,effect_width)if key=='effect'else(1,2)
+        bound=(np.array([2,100,100,100,16,16,100,4,8,2,2,2]) if key=='draws' else np.array(EFFECT_BOUNDS[:effect_width]) if key=='effect'
+            else 100 if key in ('secondary','shed_skin') else 2 if key in ('entry_ties','initial_tie') else 60)
         if a.shape!=shape or a.dtype.kind not in 'iu' or np.any(a<0) or np.any(a>=bound):
             raise ValueError('saved chance shape/range differs: '+key)
         arrays[key]=a.astype(np.int32)
@@ -182,11 +184,17 @@ def differences(actual,expected):
         or not np.array_equal(np.asarray(getattr(actual,key)),np.asarray(getattr(expected,key)))]
 
 
-def _boundary(packet):
+def _requested(packet):
+    # Decision addressing remains readable when a numeric state is refused.
     if type(packet)is not dict or set(packet)!={'state','requested'}:
         raise ValueError('complete recorded device boundary required')
     requested=np.asarray(packet['requested'])
     if requested.shape!=(2,)or requested.dtype!=np.bool_:raise ValueError('literal requested seats required')
+    return requested
+
+
+def _boundary(packet):
+    requested=_requested(packet)
     return decode_state(packet['state']),requested
 
 
@@ -280,7 +288,7 @@ def reencode_records(runtime,root,plan,summary,old_bindings,physical_path,decisi
                 if record.get('request')!=steps:raise ValueError('original STEP order differs')
                 if not constructor:replay.stop=_refusal('MISSING_STORED_CONSTRUCTOR')
                 candidates,bits,pre_error,post_error=replay.step(record)
-                _,requested=_boundary(record['before'])
+                requested=_requested(record['before'])
                 owners=list(np.flatnonzero(requested))
                 for side in owners:
                     if next_decision is None:raise ValueError('original decision missing')
