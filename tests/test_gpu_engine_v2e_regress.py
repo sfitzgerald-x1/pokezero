@@ -773,8 +773,13 @@ class TwoPassTests(unittest.TestCase):
         code, report, _ = self.patched('partial', base_step, pr='A1,A2', limit=1)
         self.assertEqual(code, 2);self.assertTrue(report['partial']);self.assertIsNone(report['passed'])
         self.assertTrue(report['warnings']);self.assertEqual(report['plug_ins'], ['A1', 'A2'])
-        with self.assertRaises(SystemExit):self.patched('undeclared', base_step, pr='C')   # the PR's own plug-in must declare
         from gpu_engine import v2e_regress
+        for index, pr in enumerate(('C', 'A1,C', 'ENC,C')):
+            with self.subTest(pr=pr), mock.patch.object(v2e_regress, 'context_and_template',
+                    side_effect=AssertionError('undeclared effects reached preparation')), \
+                    self.assertRaisesRegex(SystemExit, 'psychoboost'):
+                v2e_regress.patched_pass(self.args(out=self.tmp / ('undeclared-%d' % index),
+                    base=str(self.base), pr=pr, faint_clear=False), step_override=base_step)
         with self.assertRaises(SystemExit):         # a base pass that is not this PR's merge base
             v2e_regress.patched_pass(self.args(out=self.tmp / 'nobase', base=str(self.base), pr='A1', faint_clear=False,
                 allow_base_mismatch=False), step_override=base_step, prepared=(self.context, self.template))

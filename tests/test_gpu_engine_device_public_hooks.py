@@ -88,11 +88,14 @@ class PublicHooksTests(unittest.TestCase):
   entry=NS(weather_ability=j.zeros(10,j.int32),intimidate=flag,attack_drop_immune=flag,trace=flag.at[3].set(True),own_tempo=flag)
   after=s._replace(ability=s.ability.at[:,0,0].set(7))
   h.entry(c,s,after,0,entry,yes)
-  self.assertEqual(c.trackers.original_ability[:,0,0].tolist(),[3,3]);self.assertEqual(c.trackers.shown_ability[:,0,0].tolist(),[7,7])
+  # Frozen root 9: the Trace announcement reveals the donor's Huge Power
+  # and the running copy, without revealing the tracer's original ability.
+  self.assertEqual(c.trackers.original_ability[:,0,0].tolist(),[0,0]);self.assertEqual(c.trackers.shown_ability[:,0,0].tolist(),[7,7])
+  self.assertEqual(c.trackers.original_ability[:,1,0].tolist(),[7,7])
   view=tr.readout(c.trackers,j.ones(2,j.int32))
-  self.assertEqual(view.ability[:,0].tolist(),[3,3]);self.assertEqual(view.borrowed_ability[:,0].tolist(),[7,7])
+  self.assertEqual(view.ability[:,0].tolist(),[0,0]);self.assertEqual(view.borrowed_ability[:,0].tolist(),[7,7])
   self.assertEqual(view.borrowed_ability.dtype,j.int32)
-  self.assertEqual(c.trackers.borrowed_ability[:,0,0].tolist(),[7,7]);self.assertEqual(c.trackers.belief_mask[:,0,0,0].tolist(),[5,5])
+  self.assertEqual(c.trackers.borrowed_ability[:,0,0].tolist(),[7,7]);self.assertEqual(c.trackers.belief_mask[:,0,0,0].tolist(),[15,15])
   h.volatile(c,after,0,'substitute',yes,yes);h.feature(c,0,after.active[:,0],'sub_present',j.ones(2,j.int32),yes)
   nextstate=after._replace(active=after.active.at[:,0].set(3))
   h.install(c,nextstate,0,yes);h.baton_copy(c,nextstate,0,j.zeros(2,j.int32),yes);h.withdraw(c,nextstate,0,j.zeros(2,j.int32),yes)

@@ -11,6 +11,164 @@ ANNOTATIONS=('|-miss|p1a: Nick|p2a: Absol','|-crit|p2a: Absol','|-supereffective
 
 
 class AnnotationLexicalTests(unittest.TestCase):
+    def test_literal_gen3_custom_game_setup_messages(self):
+        from gpu_engine.public_annotations import classify
+
+        tier = '|tier|[Gen 3] Custom Game'
+        rules = ('|raw|<div class="infobox"><details class="readmore" open><summary><strong>'
+                 '1 custom rule:</strong></summary> sleepclausemod</details></div>')
+        self.assertEqual(classify(tier), 'setup')
+        self.assertEqual(classify(rules), 'setup')
+        for line in (tier + '|extra', '|tier|[Gen 3] Doubles Custom Game', tier.lower(),
+                     rules + '|extra', rules.replace('sleepclausemod', 'other'), '|raw|<b>arbitrary</b>'):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
+    def test_frozen_roots30_and32_owner_diagnostics(self):
+        from gpu_engine.public_annotations import classify
+
+        for line in ('|debug|Success chance: 50%', '|debug|Sunny Day water suppress'):
+            with self.subTest(line=line):
+                self.assertEqual(classify(line), 'text')
+                self.assertIsNone(classify(line + '|extra'))
+        for line in ('|debug|Success chance: 25%', '|debug|Success chance: 050%',
+                     '|debug|Sunny Day fire boost', '|debug|Sunny Day water suppress '):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
+    def test_frozen_roots29_and43_dispatch_diagnostics(self):
+        from gpu_engine.public_annotations import classify
+
+        for line in ('|debug|before turn callback: focuspunch', '|debug|BP: 40'):
+            with self.subTest(line=line):
+                self.assertEqual(classify(line), 'text')
+                self.assertIsNone(classify(line + '|extra'))
+        for line in ('|debug|before turn callback: Focus Punch', '|debug|before turn callback: shelltrap',
+                     '|debug|BP: 040', '|debug|BP: 41'):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
+    def test_literal_gen3_damage_debug_messages(self):
+        from gpu_engine.public_annotations import classify
+
+        for line in ('|debug|BP: 70', '|debug|Negating (sp)def boost/penalty.'):
+            self.assertEqual(classify(line), 'text')
+            self.assertIsNone(classify(line + '|extra'))
+        for line in ('|debug|BP: 070', '|debug|BP: 71', '|debug|Negating (sp)atk boost/penalty',
+                     '|debug|unrecognized diagnostic'):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
+    def test_frozen_root2_diagnostics_admit_only_exact_annotation_text(self):
+        from gpu_engine.public_annotations import classify
+
+        lines = ('|debug|move failed because it did nothing', '|debug|Shield Dust prevent secondary')
+        for line in lines:
+            with self.subTest(line=line):
+                self.assertEqual(classify(line), 'text')
+                self.assertIsNone(classify(line + '|p2a: Dustox'))
+                self.assertIsNone(classify(line + '\n'))
+        self.assertIsNone(classify('|debug|Shield Dust prevent primary'))
+        self.assertIsNone(classify('|debug|move failed because it did something'))
+
+    def test_exact_immunity_and_secondary_chance_diagnostics(self):
+        from gpu_engine.public_annotations import classify
+
+        diagnostics = ('|debug|natural status immunity', '|debug|weather immunity',
+                       '|debug|immune to status', '|debug|doubling secondary chance')
+        for line in diagnostics:
+            with self.subTest(line=line):
+                self.assertEqual(classify(line), 'text')
+                self.assertIsNone(classify(line + '|p2a: Vileplume'))
+                self.assertIsNone(classify(line + ' 2'))
+        self.assertIsNone(classify('|debug|tripling secondary chance'))
+
+    def test_frozen_root29_reversal_diagnostic(self):
+        from gpu_engine.public_annotations import classify
+
+        self.assertEqual(classify('|debug|BP: 20'), 'text')
+        for line in ('|debug|BP: 020', '|debug|BP: 21', '|debug|BP: 20|extra', '|debug|BP: 42'):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
+    def test_frozen_roots55_and57_damage_and_sleep_diagnostics(self):
+        from gpu_engine.public_annotations import classify
+
+        for line in ('|debug|damage event failed', '|debug|set status [slp] interrupted'):
+            with self.subTest(line=line):
+                self.assertEqual(classify(line), 'text')
+                self.assertIsNone(classify(line + '|extra'))
+        for line in ('|debug|damage event succeeded', '|debug|set status [par] interrupted',
+                     '|debug|set status [slp] succeeded', '|debug|set status [slp] interrupted '):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
+    def test_witnessed_rain_and_interrupted_toxic_diagnostics(self):
+        from gpu_engine.public_annotations import classify
+
+        for line in ('|debug|rain water boost', '|debug|set status [tox] interrupted'):
+            with self.subTest(line=line):
+                self.assertEqual(classify(line), 'text')
+                self.assertIsNone(classify(line + '|extra'))
+        for line in ('|debug|rain water boosted', '|debug|set status [psn] interrupted',
+                     '|debug|set status [tox] succeeded'):
+            with self.subTest(line=line):
+                self.assertIsNone(classify(line))
+
+    def test_literal_mirror_coat_before_turn_diagnostic(self):
+        from gpu_engine.public_annotations import classify
+
+        line = '|debug|before turn callback: mirrorcoat'
+        self.assertEqual(classify(line), 'text')
+        for altered in (line + '|extra', line + ' ', line.replace('mirrorcoat', 'counter')):
+            with self.subTest(line=altered):
+                self.assertIsNone(classify(altered))
+
+    def test_literal_rain_fire_suppression_diagnostic(self):
+        from gpu_engine.public_annotations import classify
+
+        line = '|debug|rain fire suppress'
+        self.assertEqual(classify(line), 'text')
+        for altered in (line + '|extra', line + ' ', line.replace('fire', 'electric')):
+            with self.subTest(line=altered):
+                self.assertIsNone(classify(altered))
+
+    def test_literal_artificial_status_immunity_diagnostic(self):
+        from gpu_engine.public_annotations import classify
+
+        line = '|debug|artificial status immunity'
+        self.assertEqual(classify(line), 'text')
+        for altered in (line + '|extra', line + ' ', line.replace('status', 'move')):
+            with self.subTest(line=altered):
+                self.assertIsNone(classify(altered))
+
+    def test_literal_compound_eyes_accuracy_diagnostic(self):
+        from gpu_engine.public_annotations import classify
+
+        line = '|debug|compoundeyes - enhancing accuracy'
+        self.assertEqual(classify(line), 'text')
+        for altered in (line + '|extra', line + ' ', line.replace('compoundeyes', 'hustle')):
+            with self.subTest(line=altered):
+                self.assertIsNone(classify(altered))
+
+    def test_literal_wonder_guard_return_diagnostic(self):
+        from gpu_engine.public_annotations import classify
+
+        line = '|debug|Wonder Guard immunity: return'
+        self.assertEqual(classify(line), 'text')
+        for altered in (line + '|extra', line + ' ', line.replace('return', 'frustration')):
+            with self.subTest(line=altered):
+                self.assertIsNone(classify(altered))
+
+    def test_literal_wonder_guard_dragon_claw_diagnostic(self):
+        from gpu_engine.public_annotations import classify
+
+        line = '|debug|Wonder Guard immunity: dragonclaw'
+        self.assertEqual(classify(line), 'text')
+        for altered in (line + '|extra', line + ' ', line.replace('dragonclaw', 'dragonbreath')):
+            with self.subTest(line=altered):
+                self.assertIsNone(classify(altered))
+
     def test_bounded_canonical_shapes_and_refusals(self):
         from gpu_engine.public_annotations import classify
         for line in (*SETUP,*ANNOTATIONS):self.assertIsNotNone(classify(line),line)

@@ -1061,22 +1061,29 @@ class ReportMathTests(unittest.TestCase):
             self.assertTrue(np.isnan(P.load_captures([earlier])[3]['env_opp_hazard_credit']).all())   # an earlier capture: no recomputation
 
     def test_the_recomputation_is_the_views_fill(self):
-        from gpu_engine import constructor_worlds as cw, engine_device_public_port as port, engine_device_trackers as tr
+        from gpu_engine import constructor_worlds as cw, engine_device_features as features
+        from gpu_engine import engine_device_public_port as port, engine_device_trackers as tr
         lines = ['|switch|p1a: Alpha|Alpha, L80|300/300', '|switch|p2a: Beta|Beta, L80|100/100', '|turn|1', '|switch|p1a: Gamma|Gamma, L80|299/300',
             '|-damage|p1a: Gamma|262/300|[from] Spikes', '|switch|p1a: Alpha|Alpha, L80|300/300', '|-damage|p1a: Alpha|263/300|[from] Spikes',
             '|switch|p1a: Eta|Eta, L80|10/300', '|-damage|p1a: Eta|0 fnt|[from] Spikes']
         z = jnp.zeros((1, 2, 6), jnp.int32);base = tr.Trackers(*([z] * 5), z, z, z, z, z, jnp.zeros((1, 2, 6, 7), jnp.int32), z > 0, z > 0, jnp.ones(1, jnp.int32),
             jnp.zeros(1, jnp.int32), jnp.zeros((1, 2), jnp.int32), jnp.zeros(1, jnp.int32), public_port=port.initialize(1))
-        filled = cw.fill_owner_spikes(base, 0, cw.line_facts(lines, 0));pair = np.asarray(filled.public_port.hazards)[0, 0, 0]
-        view = np.float32(np.clip(np.float32(np.float32(pair[0] + pair[1]) * np.float32(1 / 6)), 0, 1))   # the encoder's field 116 (x * float32(1/6))
+        def view_credit(lines):
+            filled = cw.fill_owner_spikes(base, 0, cw.line_facts(lines, 0))
+            pair = filled.public_port.hazards[:, 0, 0]
+            numeric, bad = features.project_field(jnp.zeros((1, P.OPP_HAZARD_CREDIT + 1), jnp.float32),
+                dict(opp_hazard_credit=pair.sum(axis=-1), opp_hazard_credit_pair=pair))
+            self.assertFalse(bool(bad[0]))
+            return np.asarray(numeric)[0, P.OPP_HAZARD_CREDIT]
+
+        view = view_credit(lines)
         self.assertGreater(view, 0);self.assertEqual(P.recompute_opp_hazard_credit(lines, 0), view)
-        # Drops of 3, 16 and 11 points: the compensated sum's low-order term moves the column (a plain float32 sum gives 0.05 / 6 rounded
-        # differently), so the recomputation must carry the device's compensation to match the fill.
+        # Drops of 3, 16 and 11 points distinguish the compensated readout
+        # from adding already rounded float32 reciprocal products.
         long = ['|switch|p1a: Alpha|Alpha, L80|100/100', '|switch|p2a: Beta|Beta, L80|100/100', '|turn|1']
         for name, after in (('Gamma', 97), ('Delta', 84), ('Eta', 89)):
             long += [f'|switch|p1a: {name}|{name}, L80|100/100', f'|-damage|p1a: {name}|{after}/100|[from] Spikes']
-        filled = cw.fill_owner_spikes(base, 0, cw.line_facts(long, 0));pair = np.asarray(filled.public_port.hazards)[0, 0, 0]
-        view = np.float32(np.clip(np.float32(np.float32(pair[0] + pair[1]) * np.float32(1 / 6)), 0, 1))
+        view = view_credit(long)
         plain = np.float32(0)
         for drop in (3, 16, 11):plain = np.float32(plain + np.float32(np.float32(drop) * np.float32(1 / 100)))
         self.assertNotEqual(np.float32(np.clip(np.float32(plain * np.float32(1 / 6)), 0, 1)), view)   # the case does tell the two sums apart
@@ -1085,20 +1092,18 @@ class ReportMathTests(unittest.TestCase):
         self.assertTrue(np.isnan(P.recompute_opp_hazard_credit(['|-damage|p1a: Gamma|262/300|[from] Spikes'], 0)))   # no previous HP
         self.assertEqual((P.showdown_percent(299, 300), P.showdown_percent(300, 300), P.showdown_percent(1, 300), P.showdown_percent(0, 300)), (99, 100, 1, 0))
 
-    def test_the_recomputation_multiplies_by_float32_reciprocals_as_xla_does(self):
-        """The measurement session's one-ulp rows: XLA compiles the device's x / 100 per hit and the readout's x / 6 to float32
-        reciprocal multiplies; the recomputation does the same (a 5-point drop and a 1-point drop, where the two differ)."""
+    def test_the_recomputation_rounds_once_after_normalization(self):
+        """The encoder matches Python-rounded rates for hits with one-ULP drift."""
         f = np.float32
         def one_hit(points):
             return ['|switch|p1a: Alpha|Alpha, L80|100/100', '|switch|p2a: Beta|Beta, L80|100/100', '|turn|1', '|switch|p1a: Gamma|Gamma, L80|100/100',
                 f'|-damage|p1a: Gamma|{100 - points}/100|[from] Spikes']
-        for points in (5, 1):
+        for points in (5, 27):
             with self.subTest(points=points):
-                xla = f(f(f(points) * f(1 / 100)) * f(1 / 6));divided = f(f(f(points) / f(100)) / f(6))
-                self.assertNotEqual(xla, divided)   # the case tells the two apart (by one ulp)
-                self.assertEqual(P.recompute_opp_hazard_credit(one_hit(points), 0), xla)
-        self.assertNotEqual(f(f(5) / f(100)), f(f(5) * f(1 / 100)))   # the per-hit term alone differs at 5 points
-        self.assertNotEqual(f(f(1) * f(1 / 100) / f(6)), f(f(f(1) * f(1 / 100)) * f(1 / 6)))   # and the readout at 1 point
+                reciprocal = f(f(f(points) * f(1 / 100)) * f(1 / 6))
+                expected = f(points / 100 / 6)
+                self.assertNotEqual(reciprocal, expected)
+                self.assertEqual(P.recompute_opp_hazard_credit(one_hit(points), 0), expected)
 
     def test_empty_kind(self):
         env, view = toy(0)

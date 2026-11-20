@@ -11,6 +11,7 @@ from typing import NamedTuple, Mapping
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -207,7 +208,7 @@ def project(state, tables, request, *, observer_side, expected_vocabulary, exact
         turns=jnp.where((start>=0)&(remaining>=1)&(remaining<=2),remaining,0)
         return pending,turns
     own_pending,own_wish=wish(own);opp_pending,opp_wish=wish(opp)
-    values=jnp.stack((jnp.ones_like(state.turn),jnp.minimum(1.,state.turn/1000.),
+    values=jnp.stack((jnp.ones_like(state.turn),en.normalized(state.turn, 1000),
         state.spikes[row,own]/3.,state.spikes[row,opp]/3.,
         jnp.where(exact&weather,duration/5.,0),exact&weather&state.weather_ability,
         exact&own_pending,exact&opp_pending,own_wish/2.,opp_wish/2.),axis=-1).astype(jnp.float32)

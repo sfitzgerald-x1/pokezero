@@ -704,23 +704,19 @@ def showdown_percent(hp, maximum):
 
 
 def recompute_opp_hazard_credit(lines, owner):
-    """Field 116 (the opponent's OPP_HAZARD_CREDIT) recomputed from the decision's own lines the way
-    constructor_worlds.fill_owner_spikes builds the view's: each of our Spikes hits (constructor_worlds.line_facts' owner_spikes:
-    the exact HP before and after) at Showdown's public percent drop times float32(1/100) (XLA compiles the device's division
-    by 100 to that reciprocal multiply), accumulated by the device's compensated float32 sum (engine_device_damage_history._add,
-    here in numpy), then the encoder's column value min(1, max(0, sum * float32(1/6))), the readout's own reciprocal multiply.
-    NaN when a hit's previous HP is not on the lines; 0 without a hit. It shares line_facts with the fill, so the report's use
-    of it is a self-consistency check (the percent rule and the summation are this function's own), not Foul Play's value."""
+    """Recompute field 116 from the decision's own lines.
+
+    Add the shown-percent Spikes losses in binary64 and round once after
+    normalizing the total by six. The device carries the quotient residuals
+    in compensated pairs through the encoder readout. Use NaN for an unknown
+    previous HP and zero when there were no hits.
+    """
     from gpu_engine import constructor_worlds as cw
     hits = cw.line_facts(lines, owner).owner_spikes
     if hits is None:return np.float32(np.nan)
-    f = np.float32;high, low = f(0), f(0)
-    for before, after, maximum in hits:
-        value = f(f(max(0, showdown_percent(before, maximum) - showdown_percent(after, maximum))) * f(1 / 100))   # XLA's reciprocal multiply
-        if not value > 0:continue
-        total = f(high + value);recovered = f(total - high);error = f(f(high - f(total - recovered)) + f(value - recovered))
-        correction = f(low + error);new_high = f(total + correction);low = f(correction - f(new_high - total));high = new_high
-    return f(np.clip(f(f(high + low) * f(1 / 6)), 0, 1))   # the readout's float32 reciprocal multiply, as XLA compiles x / 6
+    total = sum(max(0, showdown_percent(before, maximum) - showdown_percent(after, maximum)) / 100
+                for before, after, maximum in hits)
+    return np.float32(min(total / 6, 1.0))
 
 
 # The sampler wrapper --------------------------------------------------------------------------------------------------------------
