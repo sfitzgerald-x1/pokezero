@@ -193,6 +193,7 @@ jobs:
             tests.test_foulplay_paired_eval \
             tests.test_foulplay_budget_calibration \
             tests.test_battle_bridge_boundary_requests
+          python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
 
       - name: Synthetic Struggle on the model wheel
         run: |
