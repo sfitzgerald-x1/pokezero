@@ -54,7 +54,7 @@ class AnnotationLexicalTests(unittest.TestCase):
         for line in ('|debug|BP: 70', '|debug|Negating (sp)def boost/penalty.'):
             self.assertEqual(classify(line), 'text')
             self.assertIsNone(classify(line + '|extra'))
-        for line in ('|debug|BP: 070', '|debug|BP: 71', '|debug|Negating (sp)atk boost/penalty.',
+        for line in ('|debug|BP: 070', '|debug|BP: 71', '|debug|Negating (sp)atk boost/penalty',
                      '|debug|unrecognized diagnostic'):
             with self.subTest(line=line):
                 self.assertIsNone(classify(line))
