@@ -302,6 +302,36 @@ class ConditionedResumeTests(unittest.TestCase):
                     self.assertIsInstance(actual,self.f.CanonicalFuture,actual)
                     self.assertEqual(self.f.field_differences(actual,branches[0][1]),())
 
+    def test_suspended_cure_bank_cannot_be_missing_or_replaced_with_zero(self):
+        from dataclasses import replace
+        from types import SimpleNamespace
+        from gpu_engine import conditioned_future as c
+        paused,_,certificate,_,_=self.fixture(0,9)
+        bound=c.suspended_input_from_jax(paused,0,self.meta,certificate=certificate,module=self.engine)
+        self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
+        missing=paused._asdict();del missing['shed_skin_draws']
+        refused=c.suspended_input_from_jax(missing,0,self.meta,certificate=certificate,module=self.engine)
+        self.assertIsInstance(refused,self.f.Refused,refused)
+        self.assertIn('MISSING_SAVED_SHED_SKIN_BLOCK',repr(refused.gaps))
+        refused=c.canonical_resumed_jax(missing,0,self.meta,native_input=bound)
+        self.assertIsInstance(refused,self.f.Refused,refused)
+        self.assertIn('MISSING_SAVED_SHED_SKIN_BLOCK',repr(refused.gaps))
+        explicit=c.canonical_resumed_jax(paused._replace(shed_skin_draws=self.j.zeros((1,2),self.j.int32)),
+            0,self.meta,native_input=bound)
+        self.assertIsInstance(explicit,c.ConditionedFuture,explicit)
+        # Even a consistently sealed legacy input must refuse before native execution.
+        raw=tuple((k,v) for k,v in bound.raw_jax if k!='shed_skin_draws')
+        legacy=replace(bound,raw_jax=raw,certificate=replace(bound.certificate,input_fields=raw))
+        legacy=replace(legacy,integrity_sha256=c._binding_digest(legacy.raw_native,raw,
+            legacy.capsule,legacy.certificate,legacy.source_certificate))
+        calls=[]
+        never=SimpleNamespace(CONDITIONED_ORACLE_ENABLED=True,conditioned_resume=lambda *args:calls.append(args))
+        refused=c.native_successors(legacy,1,[0,1],module=never)
+        self.assertIsInstance(refused,self.f.Refused,refused)
+        self.assertIn('MISSING_SAVED_SHED_SKIN_BLOCK',repr(refused.gaps))
+        self.assertEqual(calls,[])
+        self.assertEqual(c._saved_cure({'pending_residual':False}),(0,0))
+
     def test_bridge_refuses_missing_provenance_gaps_and_unsupported_native_domain(self):
         from dataclasses import replace
         from gpu_engine import conditioned_future as c

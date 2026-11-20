@@ -45,6 +45,10 @@ class LayoutTests(unittest.TestCase):
         batch._chance(good._replace(effect=effect.at[0,1,4].set(1)))
         with self.assertRaises(ValueError):batch._chance(good._replace(effect=effect.at[0,1,4].set(2)))
         with self.assertRaises(ValueError):batch._chance(good._replace(effect=effect[...,:4]))
+        batch._chance(good._replace(shed_skin=j.array([[0,99]],j.int32)))
+        for bad in (j.array([[-1,99]],j.int32),j.array([[0,100]],j.int32),
+                    j.zeros((1,2,1),j.int32),j.zeros((1,2),j.float32)):
+            with self.subTest(shed_skin=bad),self.assertRaises(ValueError):batch._chance(good._replace(shed_skin=bad))
         with self.assertRaises(ValueError):batch._chance(good._replace(draws=good.draws.at[0,0,0].set(2)))
         with self.assertRaises(ValueError):jax.jit(lambda dummy:batch._host() or dummy)(j.array(0))
 

@@ -36,6 +36,7 @@ class EntryTable(NamedTuple):
     spikes_type_count: jax.Array | None = None
     spikes_item_count: jax.Array | None = None
     spikes_boots_item: jax.Array | None = None
+    shed_skin: jax.Array | None = None
 
 
 def from_metadata(metadata):
@@ -52,7 +53,7 @@ def from_metadata(metadata):
         flag({"trace"}),jnp.asarray([[status in cures.get(name,set()) for status in range(7)]
             for name in vocab["abilities"]]),flag({"owntempo"}),flag({"pressure"}),flag({"sturdy","naturalcure","oblivious"}),
         jnp.asarray(len(vocab['types']),jnp.int32),jnp.asarray(len(vocab.get('items',[])),jnp.int32),
-        jnp.asarray(next((i for i,name in enumerate(vocab.get('items',[])) if name=='heavydutyboots'),0),jnp.int32))
+        jnp.asarray(next((i for i,name in enumerate(vocab.get('items',[])) if name=='heavydutyboots'),0),jnp.int32),flag({'shedskin'}))
 
 
 def speed_modifier(table,ability,effective_weather,speed):

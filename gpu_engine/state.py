@@ -100,6 +100,7 @@ class BattleState(NamedTuple):
     transform_moves: jax.Array         # [B,2,4], saved original move ids (baseMoveSlots)
     transform_pp: jax.Array            # [B,2,4], saved base PP, Transform's own cost already paid
     transform_hidden_power: jax.Array  # [B,2,2], saved original Hidden Power type and power
+    shed_skin_draws: jax.Array     # [B,2], independent residual cure rolls saved across suspended turns
 
 
 def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
@@ -147,7 +148,8 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         partial_trap_source=jnp.full((b,2,6),-1,jnp.int32),
         transformed=jnp.zeros((b,2),jnp.bool_),transform_species=side(),
         transform_stats=jnp.zeros((b,2,5),jnp.int32),transform_moves=jnp.zeros((b,2,4),jnp.int32),
-        transform_pp=jnp.zeros((b,2,4),jnp.int32),transform_hidden_power=jnp.zeros((b,2,2),jnp.int32))
+        transform_pp=jnp.zeros((b,2,4),jnp.int32),transform_hidden_power=jnp.zeros((b,2,2),jnp.int32),
+        shed_skin_draws=side())
 
 
 def bench_indices(active: jax.Array) -> jax.Array:

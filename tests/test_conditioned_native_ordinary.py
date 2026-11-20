@@ -99,6 +99,11 @@ class OrdinaryCarryTests(unittest.TestCase):
             request=dict(version=1,schema='pokezero.ordinary-step',actions=a,chance=chance,address=dict(plan.address))
             raw=json.loads(pokezero_search.conditioned_step(native_input.raw_native,json.dumps(request)))['branches'][0]
             native=law._native_output(raw,native_input.certificate,v)
+            for extra in ('effect_draws','shed_skin_draws','unexpected'):
+                with self.subTest(unexpected_native_field=extra):
+                    malformed={**raw,'capsule':{**raw['capsule'],extra:None}}
+                    with self.assertRaisesRegex(ValueError,'^ORDINARY_CAPSULE_FIELDS$'):
+                        law._native_output(malformed,native_input.certificate,v)
             self.assertEqual(reference.capsule,native.capsule)
             self.assertEqual(self.f.field_differences(reference.physical,native.physical),
                 (('side_one.side_conditions.protect',0,2),('side_two.side_conditions.protect',0,1)))
