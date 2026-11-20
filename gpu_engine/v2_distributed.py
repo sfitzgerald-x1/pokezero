@@ -186,7 +186,7 @@ def _bench(distribution, device, *, floats):
     return results
 
 
-def _probe(args, rank, world_size, distribution):
+def _probe(args, fused_args, rank, world_size, distribution):
     """Collective smoke used by the CPU/gloo launch tests and the GPU pre-flight: every rank sees every other rank."""
     import torch
     import torch.distributed as dist
@@ -198,7 +198,7 @@ def _probe(args, rank, world_size, distribution):
         raise ValueError('probe collectives disagree with the declared world')
     bench = _bench(distribution, device, floats=10_000_000 if device == 'cuda' else 100_000) if world_size > 1 else None
     distribution.barrier()
-    out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
+    out = Path(fused_args[fused_args.index('--out') + 1]); out.mkdir(parents=True, exist_ok=True)
     (out / f'probe-rank-{rank}.json').write_text(json.dumps(dict(ranks=ranks, bench=bench, **distribution.topology())) + '\n')
     return 0
 
@@ -219,7 +219,7 @@ def _worker(args, fused_args):
     distribution = Distribution(rank, world_size, group, nodes=args.nodes, ranks_per_node=args.ranks, store=store)
     try:
         if args.probe:
-            return _probe(args, rank, world_size, distribution)
+            return _probe(args, fused_args, rank, world_size, distribution)
         from gpu_engine import v2_fused
         from pokezero.v2_trainer import CheckpointWriteError
         try:
