@@ -16,7 +16,7 @@ from unittest import mock
 from scripts.run_gpu_component_shard import (
     partition_suite, run_suite, run_process_blocks, _valid_receipt, _digest, _resource_snapshot,
     _manifest, _isolation_units, _one_case_suite, _discover_modules, partition_tier, load_heavy_modules,
-    load_extended_modules, load_shard_weights, HEAVY_MANIFEST, EXTENDED_MANIFEST,
+    load_extended_modules, HEAVY_MANIFEST, EXTENDED_MANIFEST,
 )
 
 
@@ -711,10 +711,10 @@ class Case(unittest.TestCase):
             heavy = frozenset({'test_gpu_engine_beta', 'zz_shard_package'})
             # an extended module that fails to import is light too: its import failure must fail per pull request
             extended = frozenset({'test_gpu_engine_gamma', 'test_gpu_engine_broken'})
-            def tier(name, count, weights=None):
+            def tier(name, count):
                 out = []
                 for k in range(count):
-                    try:out += partition_tier(suite, modules, k, count, name, heavy, extended, weights=weights)[1]
+                    try:out += partition_tier(suite, modules, k, count, name, heavy, extended)[1]
                     except ValueError as error:self.assertIn('empty component shard', str(error))
                 return out
             for count in (1, 2, 3):
@@ -724,51 +724,12 @@ class Case(unittest.TestCase):
                                      dict(light=[0, 2, 4], heavy=[1, 5], extended=[3]))
                     every = [i for ix in got.values() for i in ix]   # each block in exactly one tier, none dropped
                     self.assertEqual(sorted(every), list(range(len(modules))))
-                    weights = {'test_gpu_engine_broken': 100, 'test_gpu_engine_alpha': 7}
-                    self.assertEqual(sorted(tier('light', count, weights)), [0, 2, 4])
-                    self.assertEqual(sorted(tier('extended', count, weights)), [3])
             # without an extended manifest the light tier is unchanged
             self.assertEqual(partition_tier(suite, modules, 0, 1, 'light', heavy)[1], [0, 2, 3, 4])
             with self.assertRaisesRegex(ValueError, 'both the heavy and extended'):
                 partition_tier(suite, modules, 0, 1, 'light', heavy, extended | {'test_gpu_engine_beta'})
             with self.assertRaisesRegex(ValueError, 'extended manifest names modules discovery does not have'):
                 partition_tier(suite, modules, 0, 1, 'extended', heavy, extended | {'test_gpu_engine_gone'})
-
-    def test_weights_require_positive_integer_estimates(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / 'weights.json'
-            for seconds in (0, -1, True, 1.5, '1'):
-                with self.subTest(seconds=seconds):
-                    path.write_text(json.dumps({'schema': 'gpu-component-weights.v1',
-                                               'light': {'test_gpu_engine_alpha': seconds}}))
-                    with self.assertRaisesRegex(ValueError, 'positive integer module weights'):
-                        load_shard_weights(path, 'light')
-            path.write_text(json.dumps({'schema': 'gpu-component-weights.v1',
-                                       'light': {'test_gpu_engine_alpha': 60}}))
-            self.assertEqual(load_shard_weights(path, 'light'), {'test_gpu_engine_alpha': 60})
-
-    def test_weighted_fresh_process_uses_new_shard_and_preserves_custom_suites(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            log = self.fixture(root)
-            code = """
-import sys, unittest
-from scripts.run_gpu_component_shard import run_process_blocks
-suite = unittest.TestLoader().discover(sys.argv[1], 'test_gpu_engine*.py')
-raise SystemExit(run_process_blocks(suite, 1, 2, start_dir=sys.argv[1], tier='light',
-    weights={'test_gpu_engine_beta': 50, 'test_gpu_engine_alpha': 40}))
-"""
-            result = subprocess.run([sys.executable, '-c', code, str(root)], cwd=ROOT,
-                                    text=True, capture_output=True, timeout=30)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            terminal = next(json.loads(line) for line in result.stdout.splitlines()
-                            if line.startswith('{') and 'process_blocks_terminal' in line)
-            self.assertEqual(terminal['selected_blocks'], [0, 2])
-            self.assertEqual(terminal['tests_run'], 4)
-            events = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertEqual([event['label'] for event in events],
-                             ['custom_reverse', 'alpha_b', 'alpha_a', 'custom_package', 'package', 'nested'])
-            self.assertNotEqual(events[0]['pid'], events[3]['pid'])
 
     def test_real_extended_process_blocks_run_only_their_tier(self):
         with tempfile.TemporaryDirectory() as tmp:

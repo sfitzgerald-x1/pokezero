@@ -4,12 +4,10 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import hashlib
-import heapq
 import json
 import math
 import os
 from pathlib import Path
-from statistics import median_low
 import subprocess
 import sys
 import tempfile
@@ -98,39 +96,12 @@ def _discover_modules(spec):
     return suite, modules
 
 
-def load_shard_weights(path, tier):
-    """Load positive whole-second estimates for one tier."""
-    data = json.loads(Path(path).read_text())
-    weights = data.get(tier) if isinstance(data, dict) and data.get("schema") == "gpu-component-weights.v1" else None
-    if (not isinstance(weights, dict) or not weights
-            or any(not name.startswith("test_gpu_engine") or not name.isidentifier()
-                   or type(seconds) is not int or seconds < 1 for name, seconds in weights.items())):
-        raise ValueError(f"{path}: {tier} requires positive integer module weights")
-    return weights
-
-
-def _weighted_shards(eligible, modules, count, weights):
-    """Pack whole discovery blocks, scheduling the longest estimates first."""
-    fallback = median_low(weights.values())
-    estimates = {offset: weights.get(modules[offset], fallback) for offset in eligible}
-    loads = [(0, index) for index in range(count)]
-    shards = [[] for _ in range(count)]
-    for offset in sorted(eligible, key=lambda offset: (-estimates[offset], offset)):
-        load, index = heapq.heappop(loads)
-        shards[index].append(offset)
-        heapq.heappush(loads, (load + estimates[offset], index))
-    return [sorted(shard) for shard in shards]
-
-
-def partition_tier(suite, modules, index: int, count: int, tier="all", heavy=frozenset(), extended=frozenset(), *, weights=None):
+def partition_tier(suite, modules, index: int, count: int, tier="all", heavy=frozenset(), extended=frozenset()):
     """partition_suite over one tier's blocks, keeping original top-level indices. Tier "all" is partition_suite itself;
     "light", "heavy" and "extended" split every block by its module's membership in `heavy` or `extended` (disjoint), so
-    the three tiers are disjoint and together are every block. Weights affect only assignment within a tier; each shard
-    retains discovery order. A block whose module
+    the three tiers are disjoint and together are every block (same tests, same blocks, same order). A block whose module
     failed to import (or skipped at import) is light whatever the manifests say: it costs nothing to run and a heavy or
     extended module's import failure must fail per PR."""
-    if weights is not None and tier not in ("light", "extended"):
-        raise ValueError("weighted sharding requires the light or extended tier")
     if tier == "all":
         return partition_suite(suite, index, count)
     if tier not in TIERS:
@@ -155,7 +126,7 @@ def partition_tier(suite, modules, index: int, count: int, tier="all", heavy=fro
             return "light"
         return "heavy" if name in heavy else "extended" if name in extended else "light"
     eligible = [offset for offset, (name, block) in enumerate(zip(modules, blocks)) if block_tier(name, block) == tier]
-    indices = eligible[index::count] if weights is None else _weighted_shards(eligible, modules, count, weights)[index]
+    indices = eligible[index::count]
     if not indices:
         raise ValueError("empty component shard")
     return unittest.TestSuite(blocks[offset] for offset in indices), indices, len(blocks)
@@ -411,8 +382,7 @@ def _child(plan_path, plan_sha256, block_index, receipt_path, case_index=None):
     discovered, modules = _discover_modules(plan["discovery"])
     blocks = list(discovered)
     _, indices, total = partition_tier(discovered, modules, plan["index"], plan["count"],
-        plan.get("tier", "all"), frozenset(plan.get("heavy_modules", ())), frozenset(plan.get("extended_modules", ())),
-        weights=plan.get("shard_weights"))
+        plan.get("tier", "all"), frozenset(plan.get("heavy_modules", ())), frozenset(plan.get("extended_modules", ())))
     if ([_manifest(block) for block in blocks] != plan["manifest"]
             or indices != plan["selected_blocks"] or total != len(plan["manifest"])
             or type(block_index) is not int or block_index not in indices):
@@ -445,7 +415,7 @@ def _child(plan_path, plan_sha256, block_index, receipt_path, case_index=None):
 def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engine*.py",
                        top_level_dir=None, stream=None, resource_interval_seconds=0,
                        isolate_standard_classes=(), tier="all", heavy=frozenset(), extended=frozenset(),
-                       low_optimization_cases=(), weights=None):
+                       low_optimization_cases=()):
     """Optional sequential fresh-exec blocks; default whole-suite API unchanged.
 
     Discovery is repeated and verified in each fresh sys.executable process.
@@ -464,15 +434,13 @@ def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engi
     if top_level_dir is not None:
         spec["top_level_dir"] = str(Path(top_level_dir).resolve())
     blocks = list(suite)
-    if weights is not None and tier not in ("light", "extended"):
-        raise ValueError("weighted sharding requires the light or extended tier")
     if tier == "all":
         _, indices, _ = partition_suite(suite, index, count)
     else:   # the block modules come from a recording rediscovery, which must describe the same blocks
         rediscovered, modules = _discover_modules(spec)
         if [_manifest(block) for block in rediscovered] != [_manifest(block) for block in blocks]:
             raise ValueError("tiered selection rediscovery differs from the given suite")
-        _, indices, _ = partition_tier(suite, modules, index, count, tier, frozenset(heavy), frozenset(extended), weights=weights)
+        _, indices, _ = partition_tier(suite, modules, index, count, tier, frozenset(heavy), frozenset(extended))
     if (type(low_optimization_cases) not in (tuple, list)
             or any(type(name) is not str or not name for name in low_optimization_cases)):
         raise ValueError('low optimization requires explicit original case identities')
@@ -489,8 +457,6 @@ def run_process_blocks(suite, index, count, *, start_dir, pattern="test_gpu_engi
         isolate_standard_classes=classes, execution_units=units, isolation_decisions=decisions)
     if tier != "all":
         plan.update(tier=tier, heavy_modules=sorted(heavy), extended_modules=sorted(extended))
-    if weights is not None:
-        plan["shard_weights"] = weights
     for unit in units:
         names = _identities(_unit_manifest(plan, unit['block_index'], unit['case_index']))
         if set(names).intersection(low_opt) and (unit['case_index'] is None or len(names) != 1):
@@ -571,7 +537,6 @@ def main() -> int:
              "manifest's (on push to integration and on demand)")
     parser.add_argument("--heavy-manifest", default=str(HEAVY_MANIFEST), help=argparse.SUPPRESS)
     parser.add_argument("--extended-manifest", default=str(EXTENDED_MANIFEST), help=argparse.SUPPRESS)
-    parser.add_argument("--weights", help="module timing estimates for light or extended shard placement")
     parser.add_argument('--low-optimization-case', action='append', default=[],
         help='original case identity to run alone with reduced compiler optimization; never changes test shapes')
     parser.add_argument("--_child-plan", help=argparse.SUPPRESS)
@@ -589,13 +554,10 @@ def main() -> int:
         parser.error("--index and --count are required")
     if args.low_optimization_case and not args.process_blocks:
         parser.error('--low-optimization-case requires --process-blocks')
-    if args.weights and args.tier not in ("light", "extended"):
-        parser.error("--weights requires the light or extended tier")
-    weights = load_shard_weights(args.weights, args.tier) if args.weights else None
     heavy = frozenset() if args.tier == "all" else load_heavy_modules(args.heavy_manifest)
     extended = frozenset() if args.tier == "all" else load_extended_modules(args.extended_manifest)
     discovered, modules = _discover_modules(dict(start_dir=str(ROOT / "tests"), pattern="test_gpu_engine*.py"))
-    selected, indices, total = partition_tier(discovered, modules, args.index, args.count, args.tier, heavy, extended, weights=weights)
+    selected, indices, total = partition_tier(discovered, modules, args.index, args.count, args.tier, heavy, extended)
     print(json.dumps({"shard": args.index, "count": args.count, "tier": args.tier,
         "discovery_blocks": total, "selected_blocks": indices,
         "test_cases": selected.countTestCases()}), flush=True)
@@ -603,7 +565,7 @@ def main() -> int:
         return run_process_blocks(discovered, args.index, args.count, start_dir=ROOT / "tests",
             resource_interval_seconds=args.resource_interval_seconds,
             isolate_standard_classes=args.isolate_standard_class, tier=args.tier, heavy=heavy, extended=extended,
-            low_optimization_cases=args.low_optimization_case, weights=weights)
+            low_optimization_cases=args.low_optimization_case)
     return run_suite(selected)
 
 
