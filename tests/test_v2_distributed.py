@@ -8,6 +8,7 @@ from dataclasses import replace
 import datetime
 import json
 from pathlib import Path
+import shutil
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -75,7 +76,9 @@ def rank_test(rank, world, directory, dropout):
         if rank == 0:
             torch.save(dict(state=expected, updates=prefix['updates'] + suffix['updates'],
                 steps=runtime.steps, rows=runtime.rows, counts=store.distributed_layout.counts,
-                outputs=fixture.eval_outputs(runtime.model, full.tensors)), Path(directory) / 'result.pt')
+                outputs=fixture.eval_outputs(runtime.model, full.tensors),
+                receipt=dict(sha256=receipt[0]['sha256'], encoding_sha256=receipt[0]['encoding_receipt']['sha256'])),
+                Path(directory) / 'result.pt')
     finally:
         dist.destroy_process_group()
 
@@ -148,17 +151,16 @@ class DistributedTests(unittest.TestCase):
     def setUp(self):
         torch.set_num_threads(1)
 
-    def run_ranks(self, world, dropout=0.):
+    def run_ranks(self, world, dropout=0., keep=None):
         import torch.multiprocessing as mp
         with tempfile.TemporaryDirectory() as directory:
             mp.spawn(rank_test, args=(world, directory, dropout), nprocs=world, join=True)
+            if keep is not None:   # the shared checkpoint and its writer receipt, for cross-topology resume checks
+                for name in ('resume.pt', 'resume.pt.encoding.json'):
+                    shutil.copy(Path(directory) / name, Path(keep) / name)
             return torch.load(Path(directory) / 'result.pt', weights_only=True)
 
-    def test_four_ranks_match_original_global_update_and_resume(self):
-        model, loss, train, store, _, _ = example()
-        runtime = v2.create(model, loss, train, v2.V2Config(mode='eager', optimizer='single'), enable_v5=True)
-        reference = v2.Trainer(runtime).train(store)
-        result = self.run_ranks(4)
+    def assert_matches_reference(self, result, reference, runtime, store):
         self.assertEqual(result['steps'], reference['steps'])
         self.assertEqual(result['rows'], 46)
         self.assertEqual(result['counts'], (5, 8, 3, 7))
@@ -172,6 +174,35 @@ class DistributedTests(unittest.TestCase):
         expected = fixture.eval_outputs(runtime.model, store.tensors)
         for actual, wanted in zip(result['outputs'], expected):
             torch.testing.assert_close(actual, wanted, atol=2e-4, rtol=2e-4)
+
+    def test_four_ranks_match_original_global_update_and_resume(self):
+        model, loss, train, store, _, _ = example()
+        runtime = v2.create(model, loss, train, v2.V2Config(mode='eager', optimizer='single'), enable_v5=True)
+        reference = v2.Trainer(runtime).train(store)
+        self.assert_matches_reference(self.run_ranks(4), reference, runtime, store)
+
+    def test_eight_ranks_match_original_global_update_and_resume(self):
+        # Two nodes x four ranks: the learner only sees the world size (local batch 1 of the global 8),
+        # so the same statistics tolerance as four ranks applies despite a different reduction order.
+        model, loss, train, store, _, _ = example()
+        runtime = v2.create(model, loss, train, v2.V2Config(mode='eager', optimizer='single'), enable_v5=True)
+        reference = v2.Trainer(runtime).train(store)
+        self.assert_matches_reference(self.run_ranks(8), reference, runtime, store)
+
+    def test_checkpoint_from_eight_ranks_refuses_a_four_rank_or_single_resume(self):
+        with tempfile.TemporaryDirectory() as keep:
+            result = self.run_ranks(8, keep=keep)
+            checkpoint = Path(keep) / 'resume.pt'
+            provenance = encoding.off_from_receipt(dict(path=str(checkpoint) + '.encoding.json',
+                                                        sha256=result['receipt']['encoding_sha256']))
+            binding = dict(enable_v5=True, expected_self_moves=False, off_provenance=provenance,
+                           expected_checkpoint_sha256=result['receipt']['sha256'],
+                           v2_config=v2.V2Config(mode='eager', optimizer='single', distributed_rows=True, check_interval=3))
+            for world in (1, 4):   # a single process and a four-rank group both differ from the recorded eight
+                with self.assertRaisesRegex(ValueError, 'original world size'):
+                    v2._restore_checkpoint(checkpoint, expected_model_config=None, expected_loss_config=None,
+                                           expected_train_config=None, device=None, process_group=None,
+                                           world_size=world, **binding)
 
     def test_one_rank_adapter_matches_original(self):
         model, loss, train, store, _, _ = example()

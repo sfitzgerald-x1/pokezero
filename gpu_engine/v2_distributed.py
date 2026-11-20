@@ -1,10 +1,16 @@
-"""Same-node V2 fused ranks, one visible CUDA device per child process.
+"""V2 fused ranks over one or more nodes, one visible CUDA device per child process.
 
-Example: python -m gpu_engine.v2_distributed --ranks 4 --timeout-seconds 3600
+Example (one node): python -m gpu_engine.v2_distributed --ranks 4 --timeout-seconds 3600
 followed by the original v2_fused declaration/runtime/reference/out arguments.
+Multi-node: every node runs the same command with --nodes N --node-index I and a
+shared --master HOST:PORT (the node-0 rendezvous address); global rank is
+node_index * ranks + local rank and the world size is nodes * ranks. All ranks
+must join within --rendezvous-timeout seconds, otherwise every node exits
+nonzero (all nodes or nothing). A node whose partner disappears later fails
+its next collective after --collective-timeout seconds and exits nonzero too.
 The parent has a finite deadline and terminates its remaining children if any
 rank fails outside a coordinated checkpoint write failure. A completed round
-commits one shared checkpoint/state manifest.
+commits one shared checkpoint/state manifest on the shared output directory.
 """
 from __future__ import annotations
 
@@ -15,9 +21,9 @@ import os
 from pathlib import Path
 import queue
 import signal
+import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from uuid import UUID
@@ -25,11 +31,15 @@ from uuid import UUID
 
 CHECKPOINT_WRITE_EXIT = 75
 CHECKPOINT_WRITE_EXIT_GRACE = 10
+RANKS_PER_NODE = (1, 2, 4)
 
 
 class Distribution:
-    def __init__(self, rank, world_size, process_group):
+    def __init__(self, rank, world_size, process_group, *, nodes=1, ranks_per_node=None, store=None):
         self.rank = rank; self.world_size = world_size; self.process_group = process_group
+        self.nodes = nodes; self.ranks_per_node = world_size // nodes if ranks_per_node is None else ranks_per_node
+        self.node_index = rank // self.ranks_per_node; self.local_rank = rank % self.ranks_per_node
+        self.store = store   # rendezvous key-value store shared by every rank (for cross-rank coordination)
         self.contract = None
 
     def gather(self, value):
@@ -48,6 +58,9 @@ class Distribution:
             import torch.distributed as dist
             dist.barrier(group=self.process_group)
 
+    def topology(self):
+        return dict(world_size=self.world_size, nodes=self.nodes, ranks_per_node=self.ranks_per_node)
+
     def bind(self, context, args):
         from pokezero.v2_distributed import shard_bounds
         plan = context['plan']
@@ -57,6 +70,9 @@ class Distribution:
             raise ValueError('global batch must divide into equal per-rank batches')
         for batches in plan.iterations:
             shard_bounds(sum(len(b.games) for b in batches), self.rank, self.world_size)
+        # The contract is placement-free on purpose: the same world size on a
+        # different node split (for example 1x8 against 2x4) trains identically,
+        # so only the world size decides a resume. Node topology is reported.
         self.contract = dict(schema='v2-fused-distributed.v1', world_size=self.world_size,
             global_batch_size=plan.train.batch_size, local_batch_size=plan.train.batch_size // self.world_size,
             lanes_per_rank=args.lanes, declared=context['declared'],
@@ -68,7 +84,12 @@ class Distribution:
             raise ValueError('ranks disagree about the declared training contract')
 
     def check_resume(self, saved):
-        if saved.get('distribution') != self.contract:
+        recorded = saved.get('distribution')
+        if type(recorded) is dict and recorded.get('world_size') != self.world_size:
+            raise ValueError(f'resume topology mismatch: the run was recorded with world size {recorded.get("world_size")} '
+                             f'and this attempt has world size {self.world_size} ({self.nodes} node(s) x {self.ranks_per_node}); '
+                             'restart with the original rank count')
+        if recorded != self.contract:
             raise ValueError('resume requires identical source/runtime/rank/game/batch contract')
 
     def shard(self, plan, iteration):
@@ -80,7 +101,7 @@ class Distribution:
         if any(r['snapshot'] != report['snapshot'] or r['training']['steps'] != report['training']['steps']
                 or r['training']['rows'] != report['training']['rows'] for r in reports):
             raise ValueError('rank snapshot/update accounting diverged')
-        combined = dict(reports[0], ranks=reports, world_size=self.world_size)
+        combined = dict(reports[0], ranks=reports, **self.topology())
         for key in ('games', 'rows'):
             combined[key] = sum(r[key] for r in reports)
         if combined['games'] != self.games_by_round[report['iteration']]:
@@ -101,22 +122,65 @@ class Distribution:
         return combined
 
 
+def parse_master(value):
+    host, _, port = str(value).rpartition(':')
+    if not host or not port.isdigit() or not 0 < int(port) < 65536:
+        raise ValueError('--master requires HOST:PORT')
+    return host, int(port)
+
+
+def rendezvous(args, rank, world_size):
+    """One TCP store hosted by global rank 0; every rank joins within the rendezvous deadline."""
+    import torch.distributed as dist
+    host, port = parse_master(args.master)
+    deadline = datetime.timedelta(seconds=args.rendezvous_timeout)
+    try:
+        store = dist.TCPStore(host, port, world_size, is_master=rank == 0, timeout=deadline,
+                              wait_for_workers=True)
+    except Exception as error:   # DistStoreError/DistNetworkError/TimeoutError depend on the torch version
+        raise RuntimeError(f'rank {rank} could not rendezvous with all {world_size} ranks at {host}:{port} '
+                           f'within {args.rendezvous_timeout} s: {type(error).__name__}: {error}') from error
+    dist.init_process_group(args.backend, store=store, rank=rank, world_size=world_size,
+                            timeout=datetime.timedelta(seconds=args.collective_timeout))
+    return store
+
+
+def _probe(args, rank, world_size, distribution):
+    """Collective smoke used by the CPU/gloo launch tests: every rank sees every other rank."""
+    import torch
+    import torch.distributed as dist
+    ranks = distribution.gather(dict(rank=rank, node=distribution.node_index, local=distribution.local_rank,
+                                     host=socket.gethostname()))
+    total = torch.tensor([float(rank)]); dist.all_reduce(total, group=distribution.process_group)
+    if [r['rank'] for r in ranks] != list(range(world_size)) or int(total.item()) != world_size * (world_size - 1) // 2:
+        raise ValueError('probe collectives disagree with the declared world')
+    distribution.barrier()
+    out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
+    (out / f'probe-rank-{rank}.json').write_text(json.dumps(dict(ranks=ranks, **distribution.topology())) + '\n')
+    return 0
+
+
 def _worker(args, fused_args):
     import torch
     import torch.distributed as dist
-    if torch.cuda.device_count() != 1:
-        raise ValueError('each rank must see exactly its one assigned CUDA device')
-    torch.cuda.set_device(0)
-    group = None
-    if args.ranks > 1:
-        dist.init_process_group('nccl', init_method='file://' + str(Path(args.rendezvous).resolve()),
-            rank=args.rank, world_size=args.ranks, timeout=datetime.timedelta(seconds=args.collective_timeout))
+    world_size = args.nodes * args.ranks
+    rank = args.node_index * args.ranks + args.rank
+    if args.backend == 'nccl':
+        if torch.cuda.device_count() != 1:
+            raise ValueError('each rank must see exactly its one assigned CUDA device')
+        torch.cuda.set_device(0)
+    group = store = None
+    if world_size > 1:
+        store = rendezvous(args, rank, world_size)
         group = dist.group.WORLD
+    distribution = Distribution(rank, world_size, group, nodes=args.nodes, ranks_per_node=args.ranks, store=store)
     try:
+        if args.probe:
+            return _probe(args, rank, world_size, distribution)
         from gpu_engine import v2_fused
         from pokezero.v2_trainer import CheckpointWriteError
         try:
-            return v2_fused.main(fused_args, distribution=Distribution(args.rank, args.ranks, group))
+            return v2_fused.main(fused_args, distribution=distribution)
         except CheckpointWriteError as error:
             print(str(error), file=sys.stderr, flush=True)
             return CHECKPOINT_WRITE_EXIT
@@ -159,23 +223,16 @@ def _wait_workers(completed, ranks, deadline):
     return codes
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--ranks', required=True, type=int, choices=(1, 2, 4))
-    parser.add_argument('--timeout-seconds', required=True, type=int)
-    parser.add_argument('--collective-timeout', type=int, default=1800)
-    parser.add_argument('--rank', type=int, default=None, help=argparse.SUPPRESS)
-    parser.add_argument('--rendezvous', default=None, help=argparse.SUPPRESS)
-    args, fused_args = parser.parse_known_args(argv)
-    if args.timeout_seconds <= 0 or args.collective_timeout <= 0:
-        raise ValueError('positive finite worker/collective deadlines required')
-    if args.rank is not None:
-        if not 0 <= args.rank < args.ranks or args.ranks > 1 and not args.rendezvous:
-            raise ValueError('valid rank and rendezvous required')
-        return _worker(args, fused_args)
-    if '--out' not in fused_args:
-        raise ValueError('explicit shared output directory required')
-    out = Path(fused_args[fused_args.index('--out') + 1]); out.mkdir(parents=True, exist_ok=True)
+def _free_port():
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        return probe.getsockname()[1]
+
+
+def _device_selectors(args):
+    """CUDA_VISIBLE_DEVICES per local rank from the container's allocated devices (none under gloo)."""
+    if args.backend != 'nccl':
+        return [''] * args.ranks
     # Respect the container's allocated GPU visibility. A parent allocation
     # larger than the declared rank count must not silently leave GPUs idle.
     import torch
@@ -187,30 +244,69 @@ def main(argv=None):
                    for i in range(count)]
     if len(set(identifiers)) != count:
         raise ValueError('distinct allocated GPU UUIDs required')
-    with tempfile.TemporaryDirectory(prefix='v2-rendezvous-') as temporary:
-        rendezvous = str(Path(temporary) / 'store')
-        processes = []; logs = []; completed = queue.Queue(); codes = {}
-        started = time.monotonic(); deadline = started + args.timeout_seconds
-        try:
-            for rank, identifier in enumerate(identifiers):
-                env = dict(os.environ, CUDA_VISIBLE_DEVICES=identifier, JAX_PLATFORMS='cuda',
-                    OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
-                command = [sys.executable, '-m', __name__ if __name__ != '__main__' else 'gpu_engine.v2_distributed',
-                    '--ranks', str(args.ranks), '--rank', str(rank), '--rendezvous', rendezvous,
-                    '--timeout-seconds', str(args.timeout_seconds), '--collective-timeout', str(args.collective_timeout), *fused_args]
-                log = (out / f'rank-{rank}.log').open('ab'); logs.append(log)
-                process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-                processes.append(process)
-                threading.Thread(target=lambda r=rank, p=process: completed.put((r, p.wait())), daemon=True).start()
-            codes = _wait_workers(completed, args.ranks, deadline)
-        finally:
-            _stop(processes)
-            for log in logs:
-                log.close()
-            for rank, process in enumerate(processes):
-                codes.setdefault(rank, process.returncode)
-            (out / 'rank-exit.json').write_text(json.dumps(dict(codes=codes,
-                wall_seconds=time.monotonic() - started, world_size=args.ranks), indent=2) + '\n')
+    return identifiers
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--ranks', required=True, type=int, choices=RANKS_PER_NODE, help='ranks (GPUs) on this node')
+    parser.add_argument('--nodes', type=int, default=1, help='nodes in the run; every node runs --ranks ranks')
+    parser.add_argument('--node-index', type=int, default=0, help='this node, 0 <= index < --nodes')
+    parser.add_argument('--master', default=None, help='HOST:PORT of the global rank-0 rendezvous (node 0); '
+                        'required when --nodes > 1, defaults to a loopback port on one node')
+    parser.add_argument('--timeout-seconds', required=True, type=int)
+    parser.add_argument('--collective-timeout', type=int, default=1800)
+    parser.add_argument('--rendezvous-timeout', type=int, default=1200,
+                        help='seconds for every rank of every node to join; a late or missing node fails all nodes')
+    parser.add_argument('--backend', choices=('nccl', 'gloo'), default='nccl', help=argparse.SUPPRESS)
+    parser.add_argument('--probe', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--rank', type=int, default=None, help=argparse.SUPPRESS)
+    args, fused_args = parser.parse_known_args(argv)
+    if args.timeout_seconds <= 0 or args.collective_timeout <= 0 or args.rendezvous_timeout <= 0:
+        raise ValueError('positive finite worker/collective/rendezvous deadlines required')
+    if args.nodes <= 0 or not 0 <= args.node_index < args.nodes:
+        raise ValueError('valid --nodes and --node-index required')
+    if args.nodes > 1 and not args.master:
+        raise ValueError('--master HOST:PORT required for a multi-node run')
+    if args.master:
+        parse_master(args.master)
+    world_size = args.nodes * args.ranks
+    if args.rank is not None:
+        if not 0 <= args.rank < args.ranks or world_size > 1 and not args.master:
+            raise ValueError('valid rank and rendezvous required')
+        return _worker(args, fused_args)
+    if '--out' not in fused_args:
+        raise ValueError('explicit shared output directory required')
+    out = Path(fused_args[fused_args.index('--out') + 1]); out.mkdir(parents=True, exist_ok=True)
+    identifiers = _device_selectors(args)
+    master = args.master or f'127.0.0.1:{_free_port()}'
+    processes = []; logs = []; completed = queue.Queue(); codes = {}
+    started = time.monotonic(); deadline = started + args.timeout_seconds
+    try:
+        for local, identifier in enumerate(identifiers):
+            rank = args.node_index * args.ranks + local
+            env = dict(os.environ, CUDA_VISIBLE_DEVICES=identifier, JAX_PLATFORMS='cuda' if args.backend == 'nccl' else 'cpu',
+                OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
+            command = [sys.executable, '-m', __name__ if __name__ != '__main__' else 'gpu_engine.v2_distributed',
+                '--ranks', str(args.ranks), '--nodes', str(args.nodes), '--node-index', str(args.node_index),
+                '--rank', str(local), '--master', master, '--backend', args.backend, *(['--probe'] if args.probe else []),
+                '--timeout-seconds', str(args.timeout_seconds), '--collective-timeout', str(args.collective_timeout),
+                '--rendezvous-timeout', str(args.rendezvous_timeout), *fused_args]
+            log = (out / f'rank-{rank}.log').open('ab'); logs.append(log)
+            process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            processes.append(process)
+            threading.Thread(target=lambda r=rank, p=process: completed.put((r, p.wait())), daemon=True).start()
+        codes = _wait_workers(completed, args.ranks, deadline)
+    finally:
+        _stop(processes)
+        for log in logs:
+            log.close()
+        for local, process in enumerate(processes):
+            codes.setdefault(args.node_index * args.ranks + local, process.returncode)
+        name = 'rank-exit.json' if args.nodes == 1 else f'rank-exit-node-{args.node_index}.json'
+        (out / name).write_text(json.dumps(dict(codes=codes, wall_seconds=time.monotonic() - started,
+            world_size=world_size, nodes=args.nodes, node_index=args.node_index, ranks_per_node=args.ranks,
+            master=master), indent=2) + '\n')
     return 0 if len(codes) == args.ranks and all(code == 0 for code in codes.values()) else 1
 
 
