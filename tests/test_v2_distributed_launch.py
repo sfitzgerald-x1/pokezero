@@ -118,7 +118,7 @@ class DistributedLaunchTests(unittest.TestCase):
         self.assertEqual((learner_node.learner_world, learner_node.is_learner, learner_node.exchange().learners), (4, False, 4))
         self.assertTrue(v2_distributed.Distribution(3, 8, None, nodes=2, topology='learner-node', learner_group=object()).is_learner)
         learner_node.contract = dict(schema='v2-fused-distributed.v1', world_size=8, topology='learner-node', learner_world=4)
-        with self.assertRaisesRegex(ValueError, 'topology mismatch.*\(ddp\).*learner-node'):
+        with self.assertRaisesRegex(ValueError, r'topology mismatch.*\(ddp\).*learner-node'):
             learner_node.check_resume(dict(distribution=dict(schema='v2-fused-distributed.v1', world_size=8)))
         with self.assertRaises(ValueError):
             v2_distributed.Distribution(0, 8, object(), nodes=2, topology='learner-node')   # learner group required
