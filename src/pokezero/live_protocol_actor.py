@@ -546,6 +546,7 @@ class LiveProtocolActor:
         self._decision_generation, self._choice, self.error, self.close_error = None, None, None, None
         self._decision_observation, self._decision_snapshot = None, None
         self._decision_request_count, self._terminal = None, False
+        self._trapped_rejection_pending = False
         self._terminal_lifecycle_line = None
         self._backend = self._policy = None
         self.status = 'ACTIVE'
@@ -597,12 +598,28 @@ class LiveProtocolActor:
             requests = [line for line in lines if line.startswith('|request|')]
             for line in requests:
                 _packet(line,self.owner)
-            self._backend.ingest(lines)
+            feature_lines = lines
+            if self._trapped_rejection_pending:
+                for index, line in enumerate(lines):
+                    if line.startswith('|request|'):
+                        break
+                    if line in (
+                        "|error|[Unavailable choice] Can't switch: The active Pokémon is trapped",
+                        "|error|[Invalid choice] Can't switch: The active Pokémon is trapped",
+                    ):
+                        # A matched private choice error is wire control only.
+                        # Its literal bytes remain in the owning prefix.
+                        feature_lines = lines[:index] + lines[index + 1:]
+                        self._trapped_rejection_pending = False
+                        break
+            if feature_lines:
+                self._backend.ingest(feature_lines)
             for line in lines:
                 self._prefix.update(line.encode()+b'\n')
             self._lines.extend(lines)
             self._request_count += len(requests)
             if requests:
+                self._trapped_rejection_pending = False
                 self._request_line = requests[-1]
             self._terminal = terminal_seen
             self._terminal_lifecycle_line = terminal_line
@@ -679,6 +696,7 @@ class LiveProtocolActor:
                      and moves[action], 'illegal trapped fallback')
             self._choice = f'move {action + 1}'
             self._decision_observation = observation
+            self._trapped_rejection_pending = True
             return decision
         except BaseException as error:
             self._poison(error); raise

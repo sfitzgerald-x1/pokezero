@@ -1908,10 +1908,21 @@ function attemptMaybeTrappedSwitch(command) {
   }
   invalidateBoundaryRequests(battle, process.hrtime.bigint());
   const native = battle.battleStream.battle;
-  const accepted = native.choose(player, choice);
+  const trapped = "Can't switch: The active Pokémon is trapped";
+  let accepted;
+  try {
+    accepted = native.choose(player, choice);
+  } catch (error) {
+    // The bridge runs strictChoices: Side emits its private error/request
+    // before throwing. Other simulator exceptions still fail closed.
+    if (native.getSide(player).choice.error !== trapped ||
+        !(error instanceof Error) ||
+        ![`[Unavailable choice] ${trapped}`, `[Invalid choice] ${trapped}`].includes(error.message)) throw error;
+    accepted = false;
+  }
   const result = {type: "choice_ack", battleId: battle.battleId, player, choice, submissionId};
   if (!accepted) {
-    if (native.getSide(player).choice.error !== "Can't switch: The active Pokémon is trapped") {
+    if (native.getSide(player).choice.error !== trapped) {
       throw new Error("Showdown rejected a guarded switch for a reason other than trapping.");
     }
     result.type = "choice_rejected";

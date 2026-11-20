@@ -32,9 +32,17 @@ class OwningChoiceAckTests(unittest.TestCase):
                 await super().send(value)
                 if value['type'] == 'attempt_maybe_trapped_switch':
                     reply = dict(value, type='choice_rejected' if reject else 'choice_ack')
+                    followup = [reply]
                     if reject:
                         reply['reason'] = 'trapped'
-                    self.events.insert(0, reply)
+                        corrected = json.loads(json.dumps(request))
+                        corrected['active'][0].pop('maybeTrapped')
+                        corrected['active'][0]['trapped'] = True
+                        followup.append(dict(type='stream', battleId=value['battleId'], stream=owner, lines=[
+                            "|error|[Unavailable choice] Can't switch: The active Pokémon is trapped",
+                            '|request|' + json.dumps(corrected),
+                        ]))
+                    self.events[:0] = followup
 
         # Replay the legal inputs of 50495 and 51312. The latter has a
         # fainted teammate at team index 3, which must remain unselectable.
@@ -65,7 +73,12 @@ class OwningChoiceAckTests(unittest.TestCase):
                             return PolicyDecision(4 if mask[4] else 1, 'authored-raw')
                         return RawPolicy(contract, choose, lambda: None)
 
-                    factory = replace(f.factory(kind='jax-owning', backend_factory=fixtures.FixtureJaxBackend),
+                    def backend(contract, **identity):
+                        instance = fixtures.FixtureJaxBackend(contract, **identity)
+                        f.backends.append(instance)
+                        return instance
+
+                    factory = replace(f.factory(kind='jax-owning', backend_factory=backend),
                                       policy_factory=policy, allow_maybe_trapped_switches=opt_in)
                     events = f.events(config, owner_lines=['|request|' + json.dumps(request)])
                     memory = GuardBridge(events)
@@ -84,6 +97,9 @@ class OwningChoiceAckTests(unittest.TestCase):
                     step, = f.trajectories[-1].steps
                     self.assertEqual(step.action_index, 4 if mode == 'accept' else 1)
                     self.assertEqual(result.encoder_provenance['choice_acknowledgements']['acknowledged'], 2)
+                    self.assertFalse(any(line.startswith('|error|') for line in f.backends[-1].lines))
+                    if reject:
+                        self.assertIn('"trapped": true', f.backends[-1].lines[1])
 
     def test_terminal_before_late_acks_and_stream_interleaving_never_enter_actor(self):
         for owner in ('p1','p2'):
@@ -216,9 +232,9 @@ const invalidateBoundaryRequests=()=>{};
 let battle;
 const requireBattle=()=>battle;
 """ + functions + """
-for (const trapped of [false,true]) {
+for (const strictChoices of [false,true]) for (const trapped of [false,true]) {
   events.length=0;
-  const native=new Battle({formatid:'gen3customgame',seed:[1,2,3,4]});
+  const native=new Battle({formatid:'gen3customgame',seed:[1,2,3,4],strictChoices});
   const mon=(species)=>({species,moves:['splash','protect'],level:80});
   native.setPlayer('p1',{name:'owner',team:[mon('Ditto'),mon('Murkrow')]});
   native.setPlayer('p2',{name:'peer',team:[mon('Nosepass'),mon('Abra')]});
