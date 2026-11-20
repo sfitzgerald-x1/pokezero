@@ -325,7 +325,8 @@ def main(argv=None, *, distribution=None):
     v2_config = v2t.V2Config(mode=args.mode, order=args.order, optimizer='fused', check_interval=args.check_interval,
         distributed_rows=distribution is not None, native_embedding_backward=args.native_embedding_backward,
         fallback_random=args.fallback_random)
-    placement = {} if distribution is None else dict(process_group=distribution.process_group)
+    placement = {} if distribution is None else dict(process_group=distribution.learner_group)
+    learner = distribution is None or distribution.is_learner   # learner-node: only node 0 holds a trainer runtime
     def read_resume_manifest():
         try:
             saved = json.loads(state_path.read_bytes())
@@ -364,8 +365,9 @@ def main(argv=None, *, distribution=None):
         runtime = v2t.load_checkpoint(checkpoint, enable_v5=True, v2_config=v2_config, expected_model_config=plan.model,
             expected_loss_config=plan.loss, expected_train_config=plan.train, device='cuda',
             expected_self_moves=plan.self_moves, expected_checkpoint_sha256=snapshots[-1].checkpoint_sha256,
-            off_provenance=off_provenance, **placement)
-        log('RESUMED', completed_iterations=len(reports), checkpoint=str(checkpoint), steps=runtime.steps, row_order=row_order)
+            off_provenance=off_provenance, **placement) if learner else None
+        log('RESUMED', completed_iterations=len(reports), checkpoint=str(checkpoint),
+            steps=None if runtime is None else runtime.steps, row_order=row_order)
     else:
         snapshots = [first];reports = [];row_order = args.row_order or 'file'
         encoding_receipts = {}
@@ -374,14 +376,18 @@ def main(argv=None, *, distribution=None):
             expected_checkpoint_sha256=first.checkpoint_sha256,expected_self_moves=plan.self_moves,
             off_provenance=proof,weights_only_initializer=initializer)
         if model != plan.model or loss != plan.loss or train != initial_train:raise ValueError('initial checkpoint recipe differs from plan')
-        runtime = v2t.create(plan.model, plan.loss, plan.train, v2_config, enable_v5=True, device='cuda',
-            self_moves=plan.self_moves, **placement)
-        runtime.model.load_state_dict(weights)
+        runtime = None
+        if learner:
+            runtime = v2t.create(plan.model, plan.loss, plan.train, v2_config, enable_v5=True, device='cuda',
+                self_moves=plan.self_moves, **placement)
+            runtime.model.load_state_dict(weights)
     if distribution is None:
         trainer = v2t.Trainer(runtime)
-    else:
+    elif learner:
         from pokezero.v2_distributed import DistributedTrainer
         trainer = DistributedTrainer(runtime)
+    else:
+        trainer = None
     params = {}
     def actor_params(digest):
         if digest not in params:
@@ -474,15 +480,23 @@ def main(argv=None, *, distribution=None):
             from pokezero.v2_distributed import distribute_store
             rows.arrays.clear()  # DLPack tensors own the buffers through exchange.
             batches = [tuple(g.stream_id for g in b.games) for b in plan.iterations[iteration]]
-            store = distribute_store(store, row_keys, batches, runtime)
+            store = distribute_store(store, row_keys, batches, runtime, exchange=distribution.exchange(),
+                configs=(plan.model, plan.loss, plan.train, v2_config))
         mark('handoff_validate')
-        train_report = trainer.train(store, window=runs.learning_rate_window(plan, iteration))
-        torch.cuda.synchronize();mark('train')
+        training = None
+        if learner:
+            train_report = trainer.train(store, window=runs.learning_rate_window(plan, iteration))
+            torch.cuda.synchronize()
+            training = dict(updates=len(train_report['updates']), steps=runtime.steps, rows=runtime.rows,
+                mode=trainer.mode_report(), **training_summary(train_report['updates']))
+        if distribution is not None and distribution.learner_world != distribution.world_size:
+            training = distribution.broadcast(training)   # collector-only ranks report the learners' round
+        mark('train')
         del store;gc.collect()
         # An attempt interrupted before the state commit owns its artifacts.
         suffix = _rank_zero(distribution, 'checkpoint attempt', lambda: f'-{uuid.uuid4().hex}') if deferred else ''
         checkpoint = out / 'artifacts' / f'train-{iteration}{suffix}.pt'
-        receipt = v2t.save_checkpoint(checkpoint, runtime)
+        receipt = v2t.save_checkpoint(checkpoint, runtime) if learner else None
         archive = out / 'artifacts' / f'actor-{iteration}{suffix}.npz'
 
         def export_checkpoint():
@@ -503,13 +517,12 @@ def main(argv=None, *, distribution=None):
         roots[snapshot.archive_sha256] = out;snapshots.append(snapshot);actor_params(snapshot.archive_sha256)
         mark('checkpoint_export_reload')
         games = roster.games;total = time.perf_counter() - start;steady = total - phase['collector_compile'] - phase['audit']
-        stats = result.stats;updates = train_report['updates']
+        stats = result.stats
         report = dict(iteration=iteration, games=games, rows=rows.n, dispositions=rows.stats['dispositions'], opponents=kinds,
             history=history, history_slots=v2c.history_slots(history), lane_groups=len(roster.groups), collector_reused=reused,
             compile_timings=compile_timings, phase_seconds=phase, iteration_seconds=total, steady_seconds=steady,
             games_per_second=games / total, games_per_second_steady=games / steady,
-            training=dict(updates=len(updates), steps=runtime.steps, rows=runtime.rows, mode=trainer.mode_report(),
-                **training_summary(updates)),
+            training=training,
             collector={k: v for k, v in stats.items() if isinstance(v, (int, float, str))},
             audit=audit_records, games_matching_reference=same, snapshot=asdict(snapshot))
         if distribution is not None:

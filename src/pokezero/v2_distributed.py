@@ -83,6 +83,15 @@ def canonical_layout(keys, batches, global_batch, world_size):
     return Layout(destinations, slots, tuple(counts), tuple(segments), digest, local)
 
 
+@dataclass(frozen=True)
+class Exchange:
+    """Who exchanges rows (the whole world) and who learns (the first ``learners`` ranks)."""
+    rank: int
+    world_size: int
+    process_group: object
+    learners: int
+
+
 def gather(value, runtime):
     if runtime.world_size == 1:
         return [value]
@@ -92,15 +101,31 @@ def gather(value, runtime):
     return values
 
 
-def distribute_store(store, keys, batches, runtime):
-    """All-to-all real rows, then pad each rank's slice of each global batch.
+def distribute_store(store, keys, batches, runtime, *, exchange=None, configs=None):
+    """All-to-all real rows, then pad each learner rank's slice of each global batch.
 
     Only compact row addresses/statuses are replicated on the host. Feature
     tensors stay on the devices and are exchanged one column at a time. The
     input store is consumed to avoid holding two full copies after exchange.
+
+    ``exchange`` defaults to the runtime's own group (every rank learns). With a
+    learner count below the world size, ranks at or past it only send; they get
+    ``None`` back. Such ranks have no runtime and pass ``configs`` =
+    (model_config, loss_config, train_config, v2_config) instead. The learner
+    ranks' stores, digests and batch order are those of a run whose world is the
+    learner count alone, whatever the number of collecting ranks.
     """
     torch = v2._torch()
-    if runtime.v2_config.order != 'ordered' or not runtime.v2_config.distributed_rows:
+    if runtime is None:
+        model_config, loss_config, train_config, v2_config = configs
+    else:
+        model_config, loss_config, train_config, v2_config = (runtime.model_config, runtime.loss_config,
+                                                              runtime.train_config, runtime.v2_config)
+    if exchange is None:
+        exchange = Exchange(runtime.rank, runtime.world_size, runtime.process_group, runtime.world_size)
+    if runtime is not None and (runtime.rank, runtime.world_size) != (exchange.rank % exchange.learners, exchange.learners):
+        raise ValueError('learner runtime rank/world must be the exchange learner rank/world')
+    if v2_config.order != 'ordered' or not v2_config.distributed_rows:
         raise ValueError('explicit canonical distributed file order required')
     keys = np.asarray(keys, dtype=np.int64)
     if len(keys) != store.rows:
@@ -108,22 +133,25 @@ def distribute_store(store, keys, batches, runtime):
     status = store.terminal_status or ('UNKNOWN',) * store.rows
     metadata = dict(keys=keys, complete=np.asarray([s == 'COMPLETE' for s in status], bool), store_id=store.store_id,
         fields={k: (tuple(t.shape[1:]), str(t.dtype)) for k, t in store.tensors.items()}, bindings=store.bindings)
-    parts = gather(metadata, runtime)
+    parts = gather(metadata, exchange)
     if any(p['fields'] != metadata['fields'] or p['bindings'] != metadata['bindings']
             or p['store_id'] != metadata['store_id'] for p in parts):
         raise ValueError('all ranks must share row columns and namespace')
     lengths = [len(p['keys']) for p in parts]; offsets = np.cumsum([0, *lengths])
     all_keys = np.concatenate([p['keys'] for p in parts])
-    layout = canonical_layout(all_keys, batches, runtime.train_config.batch_size, runtime.world_size)
-    start, end = offsets[runtime.rank:runtime.rank + 2]
+    layout = canonical_layout(all_keys, batches, train_config.batch_size, exchange.learners)
+    rank, world = exchange.rank, exchange.world_size
+    learner = rank < exchange.learners
+    start, end = offsets[rank:rank + 2]
     local_dest = layout.destinations[start:end]
     send_indices = np.argsort(local_dest, kind='stable')
-    send_counts = np.bincount(local_dest, minlength=runtime.world_size).tolist()
-    incoming = [np.flatnonzero(layout.destinations[a:b] == runtime.rank) + a for a, b in zip(offsets, offsets[1:])]
+    send_counts = np.bincount(local_dest, minlength=world).tolist()
+    incoming = [np.flatnonzero(layout.destinations[a:b] == rank) + a if learner else np.zeros(0, np.int64)
+                for a, b in zip(offsets, offsets[1:])]
     receive_counts = [len(i) for i in incoming]
     receive_indices = np.concatenate(incoming)
     receive_slots = layout.slots[receive_indices]
-    target_rows = len(layout.counts) * layout.local_batch
+    target_rows = len(layout.counts) * layout.local_batch if learner else 0
     # Empty tails on a rank still need a valid dummy input. Exchange one valid
     # row per field as a padding template; its training weight will be zero.
     template_rank = next(i for i, n in enumerate(lengths) if n)
@@ -132,31 +160,34 @@ def distribute_store(store, keys, batches, runtime):
     output = {}
     for name in sorted(list(store.tensors)):
         original = store.tensors.pop(name)
-        template = original[:1].clone() if runtime.rank == template_rank else torch.empty(
+        template = original[:1].clone() if rank == template_rank else torch.empty(
             (1, *original.shape[1:]), dtype=original.dtype, device=store.device)
-        if runtime.world_size > 1:
+        if world > 1:
             import torch.distributed as dist
-            dist.broadcast(template, template_rank, group=runtime.process_group)
+            dist.broadcast(template, template_rank, group=exchange.process_group)
         sent = original.index_select(0, sends).contiguous()
         received = torch.empty((sum(receive_counts), *original.shape[1:]), dtype=original.dtype, device=store.device)
-        if runtime.world_size > 1:
+        if world > 1:
             dist.all_to_all_single(received, sent, output_split_sizes=receive_counts,
-                input_split_sizes=send_counts, group=runtime.process_group)
+                input_split_sizes=send_counts, group=exchange.process_group)
         else:
             received.copy_(sent)
-        value = template.expand(target_rows, *template.shape[1:]).clone()
-        value.index_copy_(0, slots, received)
-        output[name] = value
+        if learner:
+            value = template.expand(target_rows, *template.shape[1:]).clone()
+            value.index_copy_(0, slots, received)
+            output[name] = value
         del original, sent, received, template
+    if not learner:
+        return None
     valid = torch.zeros(target_rows, dtype=torch.bool, device=store.device); valid[slots] = True
     output['training_weights'] = torch.where(valid, output['training_weights'], 0.)
     complete = np.concatenate([p['complete'] for p in parts])
     status = np.full(target_rows, 'UNKNOWN', dtype=object)
     status[receive_slots] = np.where(complete[receive_indices], 'COMPLETE', 'UNKNOWN')
     output.update(store.bindings, terminal_status=tuple(status))
-    result = v2.row_store(output, runtime.model_config, runtime.loss_config, segments=layout.segments,
+    result = v2.row_store(output, model_config, loss_config, segments=layout.segments,
         store_id=v2._sha(dict(original=store.store_id, keys=layout.digest, counts=layout.counts,
-            global_batch=runtime.train_config.batch_size, world_size=runtime.world_size)))
+            global_batch=train_config.batch_size, world_size=exchange.learners)))
     result.distributed_layout = layout
     return result
 

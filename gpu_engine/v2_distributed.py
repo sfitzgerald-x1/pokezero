@@ -34,13 +34,34 @@ CHECKPOINT_WRITE_EXIT_GRACE = 10
 RANKS_PER_NODE = (1, 2, 4)
 
 
+TOPOLOGIES = ('ddp', 'learner-node')
+
+
 class Distribution:
-    def __init__(self, rank, world_size, process_group, *, nodes=1, ranks_per_node=None, store=None):
+    """Rank placement. ``ddp``: every rank collects and learns (data parallel over the whole world).
+    ``learner-node``: every rank collects its global-index shard, rows are routed to the first node's
+    ranks (the learner world, ``ranks_per_node`` wide), which train exactly as a one-node run; the new
+    actor reaches every node through the shared output directory. Only rows cross nodes."""
+
+    def __init__(self, rank, world_size, process_group, *, nodes=1, ranks_per_node=None, store=None,
+                 topology='ddp', learner_group=None):
+        if topology not in TOPOLOGIES:
+            raise ValueError(f'topology must be one of {TOPOLOGIES}')
         self.rank = rank; self.world_size = world_size; self.process_group = process_group
         self.nodes = nodes; self.ranks_per_node = world_size // nodes if ranks_per_node is None else ranks_per_node
         self.node_index = rank // self.ranks_per_node; self.local_rank = rank % self.ranks_per_node
         self.store = store   # rendezvous key-value store shared by every rank (for cross-rank coordination)
+        self.topology = topology
+        self.learner_world = self.ranks_per_node if topology == 'learner-node' else world_size
+        self.learner_group = process_group if self.learner_world == world_size else learner_group
+        if self.learner_world < world_size and learner_group is None and world_size > 1:
+            raise ValueError('learner-node topology requires the learner process group')
+        self.is_learner = rank < self.learner_world
         self.contract = None
+
+    def exchange(self):
+        from pokezero.v2_distributed import Exchange
+        return Exchange(self.rank, self.world_size, self.process_group, self.learner_world)
 
     def gather(self, value):
         from pokezero.v2_distributed import gather
@@ -58,37 +79,40 @@ class Distribution:
             import torch.distributed as dist
             dist.barrier(group=self.process_group)
 
-    def topology(self):
-        return dict(world_size=self.world_size, nodes=self.nodes, ranks_per_node=self.ranks_per_node)
+    def placement(self):
+        return dict(world_size=self.world_size, nodes=self.nodes, ranks_per_node=self.ranks_per_node,
+                    topology=self.topology, learner_world=self.learner_world)
 
     def bind(self, context, args):
         from pokezero.v2_distributed import shard_bounds
         plan = context['plan']
         if args.row_order not in (None, 'file') or args.order != 'ordered' or args.mode == 'reference':
             raise ValueError('distributed V2 requires file row order and static ordered learner')
-        if plan.train.batch_size % self.world_size:
-            raise ValueError('global batch must divide into equal per-rank batches')
+        if plan.train.batch_size % self.learner_world:
+            raise ValueError('global batch must divide into equal per-learner-rank batches')
         for batches in plan.iterations:
             shard_bounds(sum(len(b.games) for b in batches), self.rank, self.world_size)
         # The contract is placement-free on purpose: the same world size on a
         # different node split (for example 1x8 against 2x4) trains identically,
         # so only the world size decides a resume. Node topology is reported.
+        # The ddp contract is unchanged from single-node runs so they still resume.
         self.contract = dict(schema='v2-fused-distributed.v1', world_size=self.world_size,
-            global_batch_size=plan.train.batch_size, local_batch_size=plan.train.batch_size // self.world_size,
+            global_batch_size=plan.train.batch_size, local_batch_size=plan.train.batch_size // self.learner_world,
             lanes_per_rank=args.lanes, declared=context['declared'],
             sharding='contiguous_game_indices_original_block_constructor',
             rows='canonical_block_frame_row_owner', loss='global_weighted_terms_v1',
-            rng='independent_rank_dropout_streams_checkpointed', checkpoint='shared_round_boundary')
+            rng='independent_rank_dropout_streams_checkpointed', checkpoint='shared_round_boundary',
+            **({'topology': self.topology, 'learner_world': self.learner_world} if self.topology != 'ddp' else {}))
         self.games_by_round = [sum(len(b.games) for b in batches) for batches in plan.iterations]
         if any(c != self.contract for c in self.gather(self.contract)):
             raise ValueError('ranks disagree about the declared training contract')
 
     def check_resume(self, saved):
         recorded = saved.get('distribution')
-        if type(recorded) is dict and recorded.get('world_size') != self.world_size:
+        if type(recorded) is dict and (recorded.get('world_size'), recorded.get('topology', 'ddp')) != (self.world_size, self.topology):
             raise ValueError(f'resume topology mismatch: the run was recorded with world size {recorded.get("world_size")} '
-                             f'and this attempt has world size {self.world_size} ({self.nodes} node(s) x {self.ranks_per_node}); '
-                             'restart with the original rank count')
+                             f'({recorded.get("topology", "ddp")}) and this attempt has world size {self.world_size} '
+                             f'({self.nodes} node(s) x {self.ranks_per_node}, {self.topology}); restart with the original placement')
         if recorded != self.contract:
             raise ValueError('resume requires identical source/runtime/rank/game/batch contract')
 
@@ -101,7 +125,7 @@ class Distribution:
         if any(r['snapshot'] != report['snapshot'] or r['training']['steps'] != report['training']['steps']
                 or r['training']['rows'] != report['training']['rows'] for r in reports):
             raise ValueError('rank snapshot/update accounting diverged')
-        combined = dict(reports[0], ranks=reports, **self.topology())
+        combined = dict(reports[0], ranks=reports, **self.placement())
         for key in ('games', 'rows'):
             combined[key] = sum(r[key] for r in reports)
         if combined['games'] != self.games_by_round[report['iteration']]:
@@ -199,7 +223,7 @@ def _probe(args, fused_args, rank, world_size, distribution):
     bench = _bench(distribution, device, floats=10_000_000 if device == 'cuda' else 100_000) if world_size > 1 else None
     distribution.barrier()
     out = Path(fused_args[fused_args.index('--out') + 1]); out.mkdir(parents=True, exist_ok=True)
-    (out / f'probe-rank-{rank}.json').write_text(json.dumps(dict(ranks=ranks, bench=bench, **distribution.topology())) + '\n')
+    (out / f'probe-rank-{rank}.json').write_text(json.dumps(dict(ranks=ranks, bench=bench, **distribution.placement())) + '\n')
     return 0
 
 
@@ -212,11 +236,14 @@ def _worker(args, fused_args):
         if torch.cuda.device_count() != 1:
             raise ValueError('each rank must see exactly its one assigned CUDA device')
         torch.cuda.set_device(0)
-    group = store = None
+    group = store = learners = None
     if world_size > 1:
         store = rendezvous(args, rank, world_size)
         group = dist.group.WORLD
-    distribution = Distribution(rank, world_size, group, nodes=args.nodes, ranks_per_node=args.ranks, store=store)
+        if args.topology == 'learner-node' and args.ranks < world_size:
+            learners = dist.new_group(ranks=list(range(args.ranks)), timeout=datetime.timedelta(seconds=args.collective_timeout))
+    distribution = Distribution(rank, world_size, group, nodes=args.nodes, ranks_per_node=args.ranks, store=store,
+                                topology=args.topology, learner_group=learners)
     try:
         if args.probe:
             return _probe(args, fused_args, rank, world_size, distribution)
@@ -301,6 +328,9 @@ def main(argv=None):
     parser.add_argument('--collective-timeout', type=int, default=1800)
     parser.add_argument('--rendezvous-timeout', type=int, default=1200,
                         help='seconds for every rank of every node to join; a late or missing node fails all nodes')
+    parser.add_argument('--topology', choices=TOPOLOGIES, default='ddp',
+                        help='ddp: every rank learns (gradients cross nodes every step); learner-node: every rank collects, '
+                             'only node 0 learns (only rows cross nodes, once per round)')
     parser.add_argument('--backend', choices=('nccl', 'gloo'), default='nccl', help=argparse.SUPPRESS)
     parser.add_argument('--probe', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--rank', type=int, default=None, help=argparse.SUPPRESS)
@@ -332,7 +362,8 @@ def main(argv=None):
                 OMP_NUM_THREADS='1', MKL_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
             command = [sys.executable, '-m', __name__ if __name__ != '__main__' else 'gpu_engine.v2_distributed',
                 '--ranks', str(args.ranks), '--nodes', str(args.nodes), '--node-index', str(args.node_index),
-                '--rank', str(local), '--master', master, '--backend', args.backend, *(['--probe'] if args.probe else []),
+                '--rank', str(local), '--master', master, '--backend', args.backend, '--topology', args.topology,
+                *(['--probe'] if args.probe else []),
                 '--timeout-seconds', str(args.timeout_seconds), '--collective-timeout', str(args.collective_timeout),
                 '--rendezvous-timeout', str(args.rendezvous_timeout), *fused_args]
             log = (out / f'rank-{rank}.log').open('ab'); logs.append(log)
@@ -351,7 +382,7 @@ def main(argv=None):
         name = 'rank-exit.json' if args.nodes == 1 else f'rank-exit-node-{args.node_index}.json'
         (out / name).write_text(json.dumps(dict(codes=codes, wall_seconds=time.monotonic() - started,
             world_size=world_size, nodes=args.nodes, node_index=args.node_index, ranks_per_node=args.ranks,
-            master=master), indent=2) + '\n')
+            topology=args.topology, master=master), indent=2) + '\n')
     return 0 if len(codes) == args.ranks and all(code == 0 for code in codes.values()) else 1
 
 

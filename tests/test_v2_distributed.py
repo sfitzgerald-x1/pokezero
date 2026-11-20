@@ -83,6 +83,36 @@ def rank_test(rank, world, directory, dropout):
         dist.destroy_process_group()
 
 
+def learner_node_test(rank, world, directory, learners):
+    """Every rank collects a row shard; only ranks < learners train (as a learners-wide run)."""
+    import torch.distributed as dist
+    torch.set_num_threads(1)
+    dist.init_process_group('gloo', init_method='file://' + str(Path(directory) / 'rendezvous'),
+        rank=rank, world_size=world, timeout=datetime.timedelta(seconds=90))
+    group = dist.new_group(ranks=list(range(learners)))
+    try:
+        model, loss, train, full, keys, batches = example()
+        selected = np.flatnonzero(np.arange(full.rows) % world == rank)
+        local = v2.row_store({**{k: t[selected] for k, t in full.tensors.items()}, **full.bindings,
+            'terminal_status': tuple(full.terminal_status[i] for i in selected)}, model, loss, store_id='fixed')
+        config = v2.V2Config(mode='eager', optimizer='single', distributed_rows=True, check_interval=3)
+        exchange = vd.Exchange(rank, world, dist.group.WORLD, learners)
+        runtime = v2.create(model, loss, train, config, enable_v5=True, process_group=group) if rank < learners else None
+        store = vd.distribute_store(local, keys[selected], batches, runtime, exchange=exchange,
+                                    configs=(model, loss, train, config))
+        if rank >= learners:
+            if store is not None:
+                raise AssertionError('collector-only ranks must not receive rows')
+            return
+        report = vd.DistributedTrainer(runtime).train(store)
+        if rank == 0:
+            torch.save(dict(state={k: t.clone() for k, t in runtime.model.state_dict().items()}, updates=report['updates'],
+                steps=runtime.steps, rows=runtime.rows, counts=store.distributed_layout.counts, store_id=store.store_id,
+                outputs=fixture.eval_outputs(runtime.model, full.tensors)), Path(directory) / 'learner.pt')
+    finally:
+        dist.destroy_process_group()
+
+
 class LayoutTests(unittest.TestCase):
     def test_constructor_shards_slice_original_blocks_after_rng(self):
         from gpu_engine import v2_fused, v2_collector
@@ -215,6 +245,27 @@ class DistributedTests(unittest.TestCase):
 
     def test_rank_dropout_streams_resume_exactly(self):
         self.run_ranks(2, dropout=.2)
+
+    def ddp_reference(self, world):
+        """Uninterrupted ddp run of ``world`` learners (no mid-run checkpoint) for bit comparisons."""
+        import torch.multiprocessing as mp
+        with tempfile.TemporaryDirectory() as directory:
+            mp.spawn(learner_node_test, args=(world, directory, world), nprocs=world, join=True)
+            return torch.load(Path(directory) / 'learner.pt', weights_only=True)
+
+    def test_learner_node_eight_collectors_four_learners_is_bit_identical_to_four_rank_ddp(self):
+        import torch.multiprocessing as mp
+        reference = self.ddp_reference(4)
+        with tempfile.TemporaryDirectory() as directory:
+            mp.spawn(learner_node_test, args=(8, directory, 4), nprocs=8, join=True)
+            result = torch.load(Path(directory) / 'learner.pt', weights_only=True)
+        self.assertEqual((result['steps'], result['rows'], result['counts']), (reference['steps'], reference['rows'], reference['counts']))
+        self.assertEqual(result['store_id'], reference['store_id'])   # same canonical digest, learner world 4
+        self.assertEqual(result['updates'], reference['updates'])
+        for key, tensor in result['state'].items():
+            self.assertTrue(torch.equal(tensor, reference['state'][key]), key)
+        for actual, wanted in zip(result['outputs'], reference['outputs']):
+            self.assertTrue(torch.equal(actual, wanted))
 
 
 if __name__ == '__main__':

@@ -113,7 +113,15 @@ class DistributedLaunchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'identical'):
             distribution.check_resume(dict(distribution=dict(distribution.contract, other='y')))
         distribution.check_resume(dict(distribution=dict(distribution.contract)))
-        self.assertEqual(distribution.topology(), dict(world_size=8, nodes=2, ranks_per_node=4))
+        self.assertEqual(distribution.placement(), dict(world_size=8, nodes=2, ranks_per_node=4, topology='ddp', learner_world=8))
+        learner_node = v2_distributed.Distribution(5, 8, None, nodes=2, topology='learner-node', learner_group=object())
+        self.assertEqual((learner_node.learner_world, learner_node.is_learner, learner_node.exchange().learners), (4, False, 4))
+        self.assertTrue(v2_distributed.Distribution(3, 8, None, nodes=2, topology='learner-node', learner_group=object()).is_learner)
+        learner_node.contract = dict(schema='v2-fused-distributed.v1', world_size=8, topology='learner-node', learner_world=4)
+        with self.assertRaisesRegex(ValueError, 'topology mismatch.*\(ddp\).*learner-node'):
+            learner_node.check_resume(dict(distribution=dict(schema='v2-fused-distributed.v1', world_size=8)))
+        with self.assertRaises(ValueError):
+            v2_distributed.Distribution(0, 8, object(), nodes=2, topology='learner-node')   # learner group required
         self.assertEqual((v2_distributed.Distribution(6, 8, None, nodes=2).node_index,
                           v2_distributed.Distribution(6, 8, None, nodes=2).local_rank), (1, 2))
 
@@ -131,7 +139,7 @@ class TwoNodeRendezvousTests(unittest.TestCase):
             probes = [json.loads((out / f'probe-rank-{r}.json').read_text()) for r in range(8)]
             exits = [json.loads((out / f'rank-exit-node-{n}.json').read_text()) for n in (0, 1)]
         for probe in probes:
-            self.assertEqual((probe['world_size'], probe['nodes'], probe['ranks_per_node']), (8, 2, 4))
+            self.assertEqual((probe['world_size'], probe['nodes'], probe['ranks_per_node'], probe['topology']), (8, 2, 4, 'ddp'))
             self.assertEqual([(r['rank'], r['node'], r['local']) for r in probe['ranks']],
                              [(r, r // 4, r % 4) for r in range(8)])
         self.assertEqual([sorted(int(k) for k in e['codes']) for e in exits], [[0, 1, 2, 3], [4, 5, 6, 7]])
