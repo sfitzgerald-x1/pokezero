@@ -1,5 +1,7 @@
 name: GPU engine CPU component checks
 
+# Keep the full CPU matrix active for the one-time premerge timing comparison.
+
 on:
   pull_request:
     paths:
