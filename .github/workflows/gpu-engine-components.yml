@@ -19,6 +19,7 @@ on:
       - 'tests/test_gpu_component_shards.py'
       - 'tests/gpu_component_heavy.json'
       - 'tests/gpu_component_extended.json'
+      - 'tests/gpu_component_weights.json'
       - '.github/workflows/gpu-engine-components-extended.yml'
       - 'tests/test_component_memory_check.py'
       - '.github/workflows/gpu-engine-components.yml'
@@ -149,6 +150,7 @@ jobs:
           python scripts/run_component_memory_check.py --output "$ci_memory_dir" \
             --label 'shard-${{ matrix.shard }}' --summary "$GITHUB_STEP_SUMMARY" -- \
             python scripts/run_gpu_component_shard.py --tier light --index '${{ matrix.shard }}' --count 16 --process-blocks \
+            --weights tests/gpu_component_weights.json \
             --low-optimization-case test_gpu_engine_color_change_owning.ColorChangeOwningTests.test_actual_original_frame_both_views_public_types_requests_and_physics \
             --low-optimization-case test_gpu_engine_bulk_up_owning.BulkUpOwningTests.test_actual_original_frame_both_owners_witness_encoder_and_physics \
             --low-optimization-case test_gpu_engine_belly_drum_owning.BellyDrumOwningTests.test_actual_original_frame_both_owners_witness_encoder_and_physics \
