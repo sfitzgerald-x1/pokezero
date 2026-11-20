@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, TextIO
+from typing import Collection, TYPE_CHECKING, Any, Mapping, Optional, Sequence, TextIO
 
 if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
@@ -1254,9 +1254,11 @@ class LocalShowdownEnv:
             payload={"type": "choices", "battleId": self._battle_token, "choices": choices},
         )
 
-    def _choices_for_actions(self, actions: Mapping[PlayerId, int]) -> dict[PlayerId, str]:
-        requested = self.requested_players()
-        if not requested:
+    def _choices_for_actions(
+        self, actions: Mapping[PlayerId, int], *, exclude: Collection[PlayerId] = (),
+    ) -> dict[PlayerId, str]:
+        requested = tuple(player for player in self.requested_players() if player not in exclude)
+        if not requested and not exclude:
             raise LocalShowdownError("Cannot step without requested players.")
         missing = [player for player in requested if player not in actions]
         if missing:
@@ -1669,6 +1671,9 @@ class LocalShowdownEnv:
                 return event
             self._apply_event(event)
 
+    def _expected_private_choice_error(self, stream: str, line: str) -> bool:
+        return False
+
     def _apply_event(self, event: Mapping[str, Any]) -> bool:
         event_type = event.get("type")
         # On a reused (warm) process, events from a finished battle still drain through the queue;
@@ -1696,7 +1701,7 @@ class LocalShowdownEnv:
             raise LocalShowdownError(f"Malformed bridge stream event: {event!r}")
         clean_lines = [str(line) for line in lines if str(line)]
         for line in clean_lines:
-            if line.startswith("|error|"):
+            if line.startswith("|error|") and not self._expected_private_choice_error(stream, line):
                 self._last_step_had_error = True
                 raise LocalShowdownError(f"Showdown emitted error: {line}")
         if stream == "omniscient":

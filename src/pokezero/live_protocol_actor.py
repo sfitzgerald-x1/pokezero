@@ -255,6 +255,9 @@ class RawPolicy(OwnedProvider):
             history.pop()
         return self.select_action(observation, rng=rng)
 
+    def confirm_choice(self, choice):
+        """Receive a transport acknowledgement for the selected action."""
+
     def claim(self, contract):
         super().claim(contract)
         if self._transformer_policy is not None:
@@ -523,6 +526,12 @@ class NoAction(ValueError):
     """A legitimate absent/waiting own request; no policy call is permitted."""
 
 
+TRAPPED_CHOICE_ERRORS = (
+    "|error|[Unavailable choice] Can't switch: The active Pokémon is trapped",
+    "|error|[Invalid choice] Can't switch: The active Pokémon is trapped",
+)
+
+
 class LiveProtocolActor:
     def __init__(self, contract, *, backend_factory, policy_factory, allow_maybe_trapped_switches=False):
         _require(type(contract) is ActorContract and callable(backend_factory)
@@ -547,6 +556,7 @@ class LiveProtocolActor:
         self._decision_observation, self._decision_snapshot = None, None
         self._decision_request_count, self._terminal = None, False
         self._trapped_rejection_pending = False
+        self._unconfirmed_choice = None
         self._terminal_lifecycle_line = None
         self._backend = self._policy = None
         self.status = 'ACTIVE'
@@ -603,10 +613,7 @@ class LiveProtocolActor:
                 for index, line in enumerate(lines):
                     if line.startswith('|request|'):
                         break
-                    if line in (
-                        "|error|[Unavailable choice] Can't switch: The active Pokémon is trapped",
-                        "|error|[Invalid choice] Can't switch: The active Pokémon is trapped",
-                    ):
+                    if line in TRAPPED_CHOICE_ERRORS:
                         # A matched private choice error is wire control only.
                         # Its literal bytes remain in the owning prefix.
                         feature_lines = lines[:index] + lines[index + 1:]
@@ -665,12 +672,21 @@ class LiveProtocolActor:
             action = decision.action_index
             self._choice = f'move {action+1}' if action < 4 else f'switch {targets[action-4]+1}'
             _require(action < 4 or targets[action-4] >= 0, 'missing switch target')
+            if self.allow_maybe_trapped_switches:
+                self._unconfirmed_choice = self._choice
             self._decision_generation = self.generation
             self._decision_request_count = self._request_count
             self._decision_observation, self._decision_snapshot = observation, snapshot
             return decision
         except BaseException as error:
             self._poison(error); raise
+
+    def confirm_choice(self, choice):
+        self._active()
+        _require(self._unconfirmed_choice is not None and choice == self._unconfirmed_choice,
+                 'acknowledgement does not match the pending owning choice')
+        self._policy.confirm_choice(choice)
+        self._unconfirmed_choice = None
 
     def tentative_switch(self, snapshot):
         self._current(snapshot)
@@ -695,6 +711,7 @@ class LiveProtocolActor:
             _require(type(decision) is PolicyDecision and type(action) is int and 0 <= action < 4
                      and moves[action], 'illegal trapped fallback')
             self._choice = f'move {action + 1}'
+            self._unconfirmed_choice = self._choice
             self._decision_observation = observation
             self._trapped_rejection_pending = True
             return decision

@@ -1,4 +1,6 @@
 """CPU tests. All bank rows and outcomes are inert fixtures."""
+from copy import deepcopy
+from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
@@ -32,6 +34,38 @@ class ProgressEvaluationTests(unittest.TestCase):
         banks['champion_9375'][0]['teams'] = {'p1': original['p2'], 'p2': original['p1']}
         with self.assertRaisesRegex(ValueError, 'overlap'):
             progress.validate_banks(banks, inventory, pairs_per_opponent=2)
+
+    def test_only_100m_plan_enables_uncertain_switches_by_default(self):
+        runtime = dict(sha256='runtime')
+        actor = dict(policy='raw_greedy', inference='float32', runtime='runtime', label_vocabulary='labels')
+        opponents = dict(foul_play={}, champion_9375=dict(policy='untouched_raw_greedy', runtime='runtime'),
+                         max_damage=dict(policy='max_damage_seeded_ties', runtime='runtime'))
+        profile = dict(schema=progress.SCHEMA, runtime=runtime, label_vocabulary_sha256='labels',
+            actor_law_sha256=run._sha(actor), simulator_sha256='showdown', max_requests=250, inventory={},
+            banks={name: {} for name in opponents}, shards={name: 1 for name in opponents},
+            foul_play={'config': {}}, opponent_sha256s={name: 'checkpoint' for name in opponents},
+            opponent_law_sha256s={name: run._sha(law) for name, law in opponents.items()})
+        protocol = SimpleNamespace(sha256='protocol', document=lambda: profile)
+        request = SimpleNamespace(protocol_sha256='protocol', declared_games=1_000_000, run_directory=Path('.'))
+
+        def artifact(value):
+            data = {'showdown': {'compiled_tree_sha256': 'showdown'}} if value is runtime else [{}]
+            return SimpleNamespace(document=lambda: data)
+
+        for games, enabled in ((2_000_000, False), (100_000_000, True)):
+            with self.subTest(games=games), patch.object(progress, '_ref', side_effect=artifact), \
+                    patch.object(progress, 'validate_banks'), \
+                    patch.object(progress.deferred, 'read_milestone', return_value=request), \
+                    patch.object(Path, 'read_bytes', return_value=b'{}'), \
+                    patch.object(progress.json, 'loads', return_value={
+                        'evaluation': {'interval_games': 1_000_000},
+                        'iterations': [[{'games': range(games)}]],
+                    }):
+                _, effective, _ = progress.load_profile(None, protocol)
+            self.assertIs(effective[progress.TRAP_SWITCH_SETTING], enabled)
+            self.assertEqual(effective['actor_law_sha256'] != profile['actor_law_sha256'], enabled)
+            self.assertEqual(effective['opponent_law_sha256s']['champion_9375'] !=
+                             profile['opponent_law_sha256s']['champion_9375'], enabled)
 
     def identity(self, *, seat='p1', checkpoint='c'):
         request = SimpleNamespace(snapshot=SimpleNamespace(checkpoint_sha256=checkpoint, archive_sha256='a'))
@@ -241,6 +275,47 @@ battle.destroy();
             with self.assertRaises(deferred.VoidEvaluation):
                 deferred.read_milestone(reference, staged_run_root=staged)
 
+    def test_native_guarded_switches_resolve_both_seats_at_one_boundary(self):
+        from _showdown_root import has_showdown, showdown_root
+        from pokezero.env import BattleStartOverride
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+        from pokezero.v5_python_collection import OwningEnv
+
+        if not has_showdown():
+            self.skipTest('requires pinned Showdown')
+        root = showdown_root()
+        pack = """
+const {Teams} = require(process.argv[1] + '/dist/sim/teams.js');
+const m = species => ({species, moves: ['splash'], level: 80, gender: 'F'});
+console.log(JSON.stringify({p1: Teams.pack([m('Ditto'), m('Murkrow')]),
+  p2: Teams.pack([m('Nosepass'), m('Abra')])}));
+"""
+        teams = json.loads(subprocess.check_output(['node', '-e', pack, str(root)], text=True))
+        choices = {'p1': 'switch 2', 'p2': 'switch 2'}
+        for trapped in ((), ('p1',), ('p2',), ('p1', 'p2')):
+            with self.subTest(trapped=trapped):
+                env = OwningEnv(LocalShowdownConfig(showdown_root=root, read_timeout_seconds=3))
+                try:
+                    LocalShowdownEnv.reset_with_start_override(env, seed=51087,
+                        start_override=BattleStartOverride(player_teams=teams,
+                            format_id='gen3customgame', observation_format_id='gen3customgame'))
+                    before = env.snapshot()
+                    native = deepcopy(before.bridge_snapshot)
+                    for slot, seat in enumerate(choices):
+                        native['battle']['sides'][slot]['pokemon'][0].update(
+                            maybeTrapped=True, trapped='hidden' if seat in trapped else False)
+                        native['boundaryRequests'][seat]['active'][0]['maybeTrapped'] = True
+                    env.restore(replace(before, bridge_snapshot=native))
+                    retry = Mock(return_value='move 1')
+                    env.step_with_guarded_switches(choices, choices, retry, submission_id=0)
+                    self.assertEqual(tuple(call.args[0] for call in retry.call_args_list), trapped)
+                    for seat, lines in env.owner_lines.items():
+                        self.assertIn('|turn|2', lines)
+                        self.assertEqual(any(line.startswith('|error|[Unavailable choice]') for line in lines),
+                                         seat in trapped)
+                finally:
+                    env.close()
+
     def test_mixed_showdown_keeps_9375_and_max_damage_on_their_own_seats(self):
         class Environment:
             def reset_with_start_override(self, *, seed, start_override):
@@ -264,6 +339,7 @@ battle.destroy();
             actor = Mock(generation=0, prefix_sha256='sha')
             actor.decide.return_value = SimpleNamespace(action_index=0)
             actor.choice.return_value = 'move 1'
+            actor.tentative_switch.return_value = False
             actor.close_game.return_value = {'status': 'CLOSED'}
             return actor
         row = dict(seed=123, teams=dict(p1='literal-a', p2='literal-b'))

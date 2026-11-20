@@ -113,8 +113,8 @@ def require_actor_factory(config, factory, *, actor_version='champion-v4'):
     validate_encoder_config(config)
     _require(type(actor_version) is str and actor_version in ('champion-v4','v5','canary-v4'), 'explicit owning actor version required')
     uncertain = getattr(config, 'owning_allow_maybe_trapped_switches', False)
-    _require(not uncertain or actor_version == 'champion-v4', 'maybe-trapped switches are champion B2 only')
     if actor_version=='canary-v4':
+        _require(not uncertain, 'maybe-trapped switches are unavailable for the canary')
         from .b4_device_canary_runtime import check_factory
         check_factory(config,factory)
         _require(not os.environ.get('POKEZERO_TRAIT_CAPTURE'),'omniscient trait capture forbidden in owning path')
@@ -122,7 +122,8 @@ def require_actor_factory(config, factory, *, actor_version='champion-v4'):
     if actor_version=='v5':
         from gpu_engine.v5_live_protocol import Factory, check_factory
         _require(config.encoder_kind=='jax-owning' and type(factory) is Factory
-            and config.owning_decision_timeout_seconds==60. and factory.learner_seconds==60.,
+            and config.owning_decision_timeout_seconds==60. and factory.learner_seconds==60.
+            and factory.allow_maybe_trapped_switches == uncertain,
             'explicit v5 JAX owning actor and60s learner bound required')
         check_factory(factory)
         _require(not os.environ.get('POKEZERO_TRAIT_CAPTURE'), 'omniscient trait capture forbidden in owning path')
@@ -207,6 +208,8 @@ class OwningWireSession:
                 and type(event['choice']) is str and event['choice']==self.pending_choices[event['player']],
                 'foreign, stale, duplicate or mismatched owning choice acknowledgement')
             self.wait_timeout()
+            if self.config.owning_allow_maybe_trapped_switches and event['player'] == self.owner:
+                self.actor.confirm_choice(event['choice'])
             del self.pending_choices[event['player']]
             self.acknowledged+=1
             if not self.pending_choices:self.ack_deadline=None
