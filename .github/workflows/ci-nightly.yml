@@ -1,0 +1,109 @@
+name: Nightly behavior
+
+on:
+  schedule:
+    - cron: '27 4 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/heads/scott/v2-engine-accel-20261104
+          persist-credentials: false
+      - id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Check sharding and memory-monitor behavior
+        run: python -m unittest tests.test_gpu_component_shards tests.test_component_memory_check -v
+
+  light:
+    needs: source
+    uses: ./.github/workflows/gpu-engine-components.yml
+    with:
+      source: ${{ needs.source.outputs.sha }}
+
+  extended:
+    needs: source
+    uses: ./.github/workflows/gpu-engine-components-extended.yml
+    with:
+      source: ${{ needs.source.outputs.sha }}
+
+  depthn:
+    needs: source
+    uses: ./.github/workflows/depthn-light.yml
+    with:
+      source: ${{ needs.source.outputs.sha }}
+
+  learner-and-adapters:
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      JAX_PLATFORMS: cpu
+      PYTHONPATH: src:.:tests:scripts
+      OMP_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '2'
+      XLA_FLAGS: '--xla_cpu_parallel_codegen_split_count=1 --xla_backend_optimization_level=3'
+      POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/checkout@v5
+        with:
+          repository: smogon/pokemon-showdown
+          ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
+          path: .ci/pokemon-showdown
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.22.2'
+          cache: npm
+          cache-dependency-path: .ci/pokemon-showdown/package-lock.json
+      - name: Install CPU dependencies and build pinned Showdown
+        run: |
+          python -m pip install 'jax==0.12.0' 'numpy==2.5.4' 'scipy==1.18.1' 'websockets==15.0.1'
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.13.0+cpu'
+          npm ci --prefix "$POKEZERO_SHOWDOWN_ROOT"
+          npm run build --prefix "$POKEZERO_SHOWDOWN_ROOT"
+      - name: Run broader learner, evaluation and adapter coverage
+        run: >-
+          python -m scripts.run_ci_unittest
+          tests.test_foulplay_bridge
+          tests.test_local_showdown
+          tests.test_v2_distributed
+          tests.test_v2_distributed_launch
+          tests.test_v2_fused_deferred
+          tests.test_v2_fused_resume_provenance
+          tests.test_v2_learner_profile
+          tests.test_v2_native_embedding
+          tests.test_v2_offline_view_parity
+          tests.test_v2_role_routing
+          tests.test_v2_trainer
+          tests.test_v5_contract
+          tests.test_v5_data
+          tests.test_v5_deferred_evaluation
+          tests.test_v5_deferred_training
+          tests.test_v5_evaluation
+          tests.test_v5_evaluation_capture
+          tests.test_v5_foulplay
+          tests.test_v5_foulplay_source
+          tests.test_v5_model_loss
+          tests.test_v5_model_types
+          tests.test_v5_training
+          tests.test_v5_training_diagnostics
