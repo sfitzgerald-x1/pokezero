@@ -108,7 +108,7 @@ class DistributedLaunchTests(unittest.TestCase):
         distribution = v2_distributed.Distribution(0, 8, None, nodes=2, ranks_per_node=4)
         distribution.contract = dict(schema='v2-fused-distributed.v1', world_size=8, other='x')
         saved = dict(distribution=dict(schema='v2-fused-distributed.v1', world_size=4, other='x'))
-        with self.assertRaisesRegex(ValueError, 'world size 4.*world size 8 \\(2 node\\(s\\) x 4\\)'):
+        with self.assertRaisesRegex(ValueError, r'topology mismatch.*world size 4 \(ddp\).*world size 8 \(2 node\(s\) x 4, ddp\)'):
             distribution.check_resume(saved)
         with self.assertRaisesRegex(ValueError, 'identical'):
             distribution.check_resume(dict(distribution=dict(distribution.contract, other='y')))

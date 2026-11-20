@@ -110,7 +110,8 @@ class Distribution:
     def check_resume(self, saved):
         recorded = saved.get('distribution')
         if type(recorded) is dict and (recorded.get('world_size'), recorded.get('topology', 'ddp')) != (self.world_size, self.topology):
-            raise ValueError(f'resume topology mismatch: the run was recorded with world size {recorded.get("world_size")} '
+            raise ValueError('resume requires identical source/runtime/rank/game/batch contract: topology mismatch, '
+                             f'the run was recorded with world size {recorded.get("world_size")} '
                              f'({recorded.get("topology", "ddp")}) and this attempt has world size {self.world_size} '
                              f'({self.nodes} node(s) x {self.ranks_per_node}, {self.topology}); restart with the original placement')
         if recorded != self.contract:
