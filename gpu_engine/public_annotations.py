@@ -63,6 +63,7 @@ def classify(line):
         '|debug|Wonder Guard immunity: hiddenpower',
         '|debug|Sand Veil - decreasing accuracy',
         '|debug|Negating (sp)atk boost/penalty.',
+        '|debug|Torrent boost',
     ):
         # These pinned owner-stream diagnostics do not write V4 facts.
         return 'text'

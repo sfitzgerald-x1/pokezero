@@ -6,6 +6,14 @@ from gpu_engine.public_annotations import classify
 
 
 class OwnerDebugLiteralTests(unittest.TestCase):
+    def test_witnessed_torrent_boost_diagnostic(self):
+        line = '|debug|Torrent boost'
+        self.assertEqual(classify(line), 'text')
+        for refused in ('|debug|Torrent boosted', '|debug|Blaze boost', line + '|extra',
+                        line + ' ', line + '|[from] ability: Torrent', line + '\n'):
+            with self.subTest(line=refused):
+                self.assertIsNone(classify(refused))
+
     def test_witnessed_diagnostics_and_close_variants(self):
         for root, line, variant in (
             (7, '|debug|Wonder Guard immunity: hiddenpower',
