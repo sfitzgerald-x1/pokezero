@@ -53,6 +53,24 @@ def test_banks_preserve_physical_seats_and_explicit_rng_domains():
         expected_cells({"scratch": {H2H: [1600000000], FP: [1500000000]}}, dry_run=True)
 
 
+def test_scratch_labels_bind_public_source_without_a_training_plan():
+    from pokezero.randbat import Gen3RandbatSource, Gen3RandbatSpeciesUniverse, Gen3RandbatVariant, RandbatSourceMetadata
+    from pokezero.s0_transfer_harness import scratch_label_vocabulary
+    from pokezero.v5_contract import source_variant_census
+
+    binding = "f5a5265143d423af"
+    metadata = RandbatSourceMetadata("gen3randombattle", 3, None, None, None, binding)
+    variant = Gen3RandbatVariant("variant-1", "set", "Swalot", "role", 80,
+                               ("Hidden Power Ice", "Hidden Power Fire", "Toxic"), "Sticky Hold", "Leftovers")
+    source = Gen3RandbatSource(metadata, {"swalot": Gen3RandbatSpeciesUniverse("Swalot", 80, (variant,))})
+    labels = scratch_label_vocabulary(source, binding)
+    assert labels.moves == ("hiddenpower", "struggle", "toxic")
+    assert labels.species_variants == (("swalot", 1),)
+    assert labels.source_binding_sha256 == source_variant_census(source)["source_rows_sha256"]
+    with pytest.raises(ValueError, match="source hash differs"):
+        scratch_label_vocabulary(source, "b" * 16)
+
+
 def test_recompute_retains_unknown_cells_and_does_not_issue_dry_verdict():
     manifest, rows = scratch_rows()
     report = scorer.recompute(manifest, rows)

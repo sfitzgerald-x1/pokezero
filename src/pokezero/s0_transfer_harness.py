@@ -24,20 +24,28 @@ CELL_SECONDS = 150
 WARMUP_ROOT = DRY_RUN_ROOT + 5000
 
 
-def load_settings(runtime_path, expected_sha, labels_path, labels_sha):
+def scratch_label_vocabulary(source, expected_source_hash):
+    from .dex import normalize_id
+    from .v5_contract import LabelVocabulary
+
+    moves = {normalize_id(move) for universe in source.universes.values()
+             for variant in universe.variants for move in variant.moves}
+    moves = {"hiddenpower" if m.startswith("hiddenpower") else m for m in moves}
+    return LabelVocabulary.from_public_source(source, move_ids=tuple(sorted(moves | {"struggle"})),
+                                             expected_source_hash=expected_source_hash)
+
+
+def load_settings(runtime_path, expected_sha):
     import jax
-    from . import v5_contract, v5_worker
+    from . import v5_worker
+    from .live_protocol_actor import ActorContract
+    from .randbat import load_gen3_randbat_source_cached
 
     runtime = v5_worker._record(dict(path=str(runtime_path), sha256=expected_sha))
-    labels = v5_worker._record(dict(path=str(labels_path), sha256=labels_sha))
-    if "model" in labels:
-        # Reuse the pinned label geometry only. No recorded game or seed is executed.
-        from .v5_model import V5ModelConfig
-        labels = V5ModelConfig.from_metadata(labels["model"]).label_vocabulary
-    else:
-        labels = v5_contract.LabelVocabulary(**labels)
     pool_sha = runtime["constructor_pool"]["sha256"]
     profile, vocabulary, gender, category = v5_worker._runtime_metadata(runtime, expected_pool_sha256=pool_sha)
+    source = load_gen3_randbat_source_cached(runtime["showdown"]["root"])
+    labels = scratch_label_vocabulary(source, ActorContract.champion().belief_set_source_hash)
     config = profile.configurations(labels, category_vocabulary=category, arm="B", replicate=0)
     plan = SimpleNamespace(pool_sha256=pool_sha, self_moves=False)
     inputs = v5_worker.Inputs(plan, profile, json.dumps(runtime), json.dumps(vocabulary), json.dumps(gender), "")
@@ -110,7 +118,8 @@ def prepare(args, inputs, config, root):
         raise ValueError("scratch T and B must exercise distinct weights")
     manifest = dict(
         schema=SCHEMA, dry_run=True, banks=banks, expected_cells_sha256=digest(list(cells.values())),
-        runtime_sha256=args.runtime_sha, labels_sha256=args.labels_sha, max_requests=MAX_REQUESTS,
+        runtime_sha256=args.runtime_sha, label_vocabulary_sha256=config["model"].label_vocabulary.sha256,
+        max_requests=MAX_REQUESTS,
         starts=starts, actors={"scratch": actors}, control={"scratch": control}, bootstrap_seed=DRY_RUN_ROOT + 2003,
         source_commit=source_commit(), static_runtime_source_commit=inputs.runtime["source_commit"],
         bridge_sha256=args.bridge_sha, fp_root=str(args.foulplay_root), fp_python=str(args.foulplay_python),
@@ -311,8 +320,6 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--runtime-sha", required=True)
-    parser.add_argument("--labels", type=Path, required=True)
-    parser.add_argument("--labels-sha", required=True)
     parser.add_argument("--foulplay-root", type=Path, required=True)
     parser.add_argument("--foulplay-python", type=Path, required=True)
     parser.add_argument("--foulplay-revision", required=True)
@@ -320,7 +327,7 @@ def main():
     parser.add_argument("--bridge-sha")
     args = parser.parse_args()
     root = args.out.resolve()
-    inputs, config = load_settings(args.runtime, args.runtime_sha, args.labels, args.labels_sha)
+    inputs, config = load_settings(args.runtime, args.runtime_sha)
     if args.side == "showdown":
         if args.bridge is not None:
             install_bridge(args.bridge, args.bridge_sha)
@@ -334,7 +341,8 @@ def main():
                             peer_terminal=root / "showdown.terminal.json")
     if (manifest["source_commit"] != source_commit()
             or manifest["runtime_sha256"] != args.runtime_sha
-            or manifest["labels_sha256"] != args.labels_sha or manifest["bridge_sha256"] != args.bridge_sha
+            or manifest["label_vocabulary_sha256"] != config["model"].label_vocabulary.sha256
+            or manifest["bridge_sha256"] != args.bridge_sha
             or manifest["dry_run"] is not True):
         raise ValueError("partner source or scratch input manifest differs")
     if args.side == "engine":
