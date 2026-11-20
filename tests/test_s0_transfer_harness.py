@@ -6,7 +6,7 @@ import pytest
 
 from pokezero import s0_transfer_recompute as scorer
 from pokezero.s0_transfer_roster import (
-    FP, H2H, SCHEMA, actor_bindings, cell_key, digest, dry_run_clusters,
+    FP, H2H, SCHEMA, actor_bindings, cell_key, cell_record, digest, dry_run_clusters,
     expected_cells, journal_path, write_once,
 )
 
@@ -135,6 +135,34 @@ def test_supervisor_seals_finished_showdown_and_fp_rows_after_worker_timeout(tmp
     scores = scorer.collect_scores(manifest, archived + [r for r in rows if r["environment"] == "engine"])
     assert scores[cell_key(retained[0])] == scores[cell_key(retained[1])] == .5
     assert len(scores) == 280 and sum(score is None for score in scores.values()) == 198
+
+
+def test_resume_preserves_existing_cells_and_reopens_only_deadline_placeholders(tmp_path):
+    from pokezero.s0_transfer_harness import resume_scratch
+
+    manifest, rows = scratch_rows()
+    prior, target = tmp_path / "r2", tmp_path / "r3"
+    engine = [row for row in rows if row["environment"] == "engine"]
+    showdown = [row for row in rows if row["environment"] == "showdown"]
+    expected = expected_cells(manifest["banks"], dry_run=True)
+    dropped, actual_failure = (expected[cell_key(row)] for row in showdown[:2])
+    showdown[0] = cell_record(manifest, dropped, "FAILED", None,
+                             {"reason": "worker exit 124 before a durable cell result"})
+    showdown[1] = cell_record(manifest, actual_failure, "FAILED", None, {"reason": "actual worker exception"})
+    manifest_sha = write_once(prior / "manifest.json", manifest)
+    engine_sha = write_once(prior / "engine.cells.json", engine)
+    showdown_sha = write_once(prior / "showdown.cells.json", showdown)
+
+    with pytest.raises(ValueError, match="previous scratch artifact changed"):
+        resume_scratch(target, prior, manifest_sha=manifest_sha, engine_sha=engine_sha, showdown_sha="0"*64)
+    assert not target.exists()
+    resume_scratch(target, prior, manifest_sha=manifest_sha, engine_sha=engine_sha, showdown_sha=showdown_sha)
+    assert (target / "engine.cells.json").read_bytes() == (prior / "engine.cells.json").read_bytes()
+    assert not journal_path(target, dropped).exists()
+    assert json.loads(journal_path(target, actual_failure).read_bytes()) == showdown[1]
+    assert json.loads(journal_path(target, showdown[2]).read_bytes()) == showdown[2]
+    receipt = json.loads((target / "showdown.resume.json").read_bytes())
+    assert receipt["retained_showdown_cells"] == 199 and receipt["pending_showdown_cells"] == 1
 
 
 def test_engine_batch_deadline_preserves_completed_book_entries():

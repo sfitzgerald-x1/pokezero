@@ -17,6 +17,7 @@ from .s0_transfer_roster import SCHEMA, cell_record, digest, expected_cells, jou
 
 
 DEADLINE_SECONDS = {"engine": 5400, "showdown": 5400}
+SHOWDOWN_CONTINUATION_SECONDS = 10800
 
 
 def seal_side(root, side, exit_code, elapsed_seconds):
@@ -83,7 +84,7 @@ def finalize(root):
     ))
 
 
-def supervise(root, side, rest):
+def supervise(root, side, rest, *, deadline):
     env = dict(os.environ)
     if side == "showdown":
         env["JAX_PLATFORMS"] = "cpu"
@@ -92,7 +93,7 @@ def supervise(root, side, rest):
     started = time.monotonic()
     with subprocess.Popen(command, env=env, start_new_session=True) as child:
         try:
-            code = child.wait(timeout=DEADLINE_SECONDS[side])
+            code = child.wait(timeout=deadline)
         except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
             os.killpg(child.pid, signal.SIGTERM)
             try:
@@ -117,6 +118,8 @@ def main():
     parser.add_argument("directory", type=Path)
     args, rest = parser.parse_known_args()
     root = args.directory.resolve()
+    deadline = (SHOWDOWN_CONTINUATION_SECONDS if args.side == "showdown" and "--resume-from" in rest
+                else DEADLINE_SECONDS[args.side])
     peak = Path("/sys/fs/cgroup/memory.peak")
     current = Path("/sys/fs/cgroup/memory.current")
     samples = []
@@ -132,7 +135,7 @@ def main():
         monitor = threading.Thread(target=sample, daemon=True)
         monitor.start()
     try:
-        code = supervise(root, args.side, rest)
+        code = supervise(root, args.side, rest, deadline=deadline)
     except (TimeoutError, ValueError, OSError, subprocess.SubprocessError) as error:
         code = 1
         print(f"{type(error).__name__}: {error}", file=sys.stderr)
@@ -141,7 +144,7 @@ def main():
         if monitor is not None:
             monitor.join()
     write_once(root / f"{args.side}.supervisor.json", dict(
-        dry_run=True, exit_code=code, deadline_seconds=DEADLINE_SECONDS[args.side],
+        dry_run=True, exit_code=code, deadline_seconds=deadline,
         memory_peak_bytes=int(peak.read_text()) if peak.is_file() else max(samples, default=None),
     ))
     return code

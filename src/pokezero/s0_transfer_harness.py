@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+from collections import Counter
 from dataclasses import replace
 import hashlib
 import json
@@ -130,6 +131,54 @@ def prepare(args, inputs, config, root):
     )
     write_once(root / "manifest.json", manifest)
     return prepared, manifest
+
+
+def resume_scratch(root, prior, *, manifest_sha, engine_sha, showdown_sha):
+    """Reopen only deadline placeholders from one sealed unscored packet."""
+    from .s0_transfer_recompute import collect_scores
+
+    def checked(name, sha):
+        blob = (prior / name).read_bytes()
+        if hashlib.sha256(blob).hexdigest() != sha:
+            raise ValueError(f"previous scratch artifact changed: {name}")
+        return json.loads(blob)
+
+    if root.resolve() == prior.resolve():
+        raise ValueError("scratch continuation needs a separate output directory")
+    manifest = checked("manifest.json", manifest_sha)
+    if manifest["dry_run"] is not True:
+        raise ValueError("only unscored scratch packets can resume")
+    engine_rows = checked("engine.cells.json", engine_sha)
+    showdown_rows = checked("showdown.cells.json", showdown_sha)
+    if (any(row["environment"] != "engine" for row in engine_rows)
+            or any(row["environment"] != "showdown" for row in showdown_rows)):
+        raise ValueError("previous scratch shards are mixed")
+    collect_scores(manifest, engine_rows + showdown_rows)
+
+    def deadline_placeholder(row):
+        return (row["status"] == "FAILED"
+                and row["evidence"] == {"reason": "worker exit 124 before a durable cell result"})
+
+    retained = [row for row in showdown_rows if not deadline_placeholder(row)]
+    if len(retained) == len(showdown_rows) or any(deadline_placeholder(row) for row in engine_rows):
+        raise ValueError("scratch continuation requires a completed engine and missing Showdown cells")
+    if write_once(root / "manifest.json", manifest) != manifest_sha:
+        raise ValueError("scratch manifest is not canonical")
+    if write_once(root / "engine.cells.json", engine_rows) != engine_sha:
+        raise ValueError("previous engine shard is not canonical")
+    write_once(root / "engine.terminal.json", dict(
+        status="COMPLETE", dry_run=True, name="engine.cells.json", sha256=engine_sha,
+        cells=len(engine_rows), status_counts=dict(Counter(row["status"] for row in engine_rows)),
+    ))
+    for row in retained:
+        write_once(journal_path(root, row), row)
+    write_once(root / "showdown.resume.json", dict(
+        dry_run=True, previous_packet=str(prior), manifest_sha256=manifest_sha,
+        previous_engine_sha256=engine_sha, previous_showdown_sha256=showdown_sha,
+        continuation_source_commit=source_commit(), retained_showdown_cells=len(retained),
+        pending_showdown_cells=len(showdown_rows) - len(retained),
+    ))
+    return manifest
 
 
 def source_commit():
@@ -325,10 +374,25 @@ def main():
     parser.add_argument("--foulplay-revision", required=True)
     parser.add_argument("--bridge", type=Path)
     parser.add_argument("--bridge-sha")
+    parser.add_argument("--resume-from", type=Path)
+    parser.add_argument("--resume-manifest-sha")
+    parser.add_argument("--resume-engine-sha")
+    parser.add_argument("--resume-showdown-sha")
     args = parser.parse_args()
     root = args.out.resolve()
     inputs, config = load_settings(args.runtime, args.runtime_sha)
-    if args.side == "showdown":
+    if args.resume_from is not None:
+        from . import v5_python_backend
+
+        if args.side != "showdown" or not all((args.resume_manifest_sha, args.resume_engine_sha,
+                                               args.resume_showdown_sha)):
+            raise ValueError("scratch continuation needs Showdown and all previous artifact digests")
+        manifest = resume_scratch(root, args.resume_from, manifest_sha=args.resume_manifest_sha,
+                                  engine_sha=args.resume_engine_sha, showdown_sha=args.resume_showdown_sha)
+        if args.bridge is not None:
+            install_bridge(args.bridge, args.bridge_sha)
+        prepared = v5_python_backend.prepare(inputs)
+    elif args.side == "showdown":
         if args.bridge is not None:
             install_bridge(args.bridge, args.bridge_sha)
         prepared, manifest = prepare(args, inputs, config, root)
@@ -339,17 +403,20 @@ def main():
     else:
         manifest = wait_for(root / "manifest.json", "Showdown partner did not publish a scratch manifest",
                             peer_terminal=root / "showdown.terminal.json")
-    if (manifest["source_commit"] != source_commit()
+    if ((args.resume_from is None and manifest["source_commit"] != source_commit())
             or manifest["runtime_sha256"] != args.runtime_sha
             or manifest["label_vocabulary_sha256"] != config["model"].label_vocabulary.sha256
             or manifest["bridge_sha256"] != args.bridge_sha
+            or manifest["fp_root"] != str(args.foulplay_root)
+            or manifest["fp_python"] != str(args.foulplay_python)
+            or manifest["fp_revision"] != args.foulplay_revision
             or manifest["dry_run"] is not True):
         raise ValueError("partner source or scratch input manifest differs")
     if args.side == "engine":
         write_once(root / "engine.join.json", dict(manifest_sha256=digest(manifest)))
     expected = {key: cell for key, cell in expected_cells(manifest["banks"], dry_run=True).items()
                 if cell["environment"] == args.side}
-    cells = list(expected.values())
+    cells = [c for c in expected.values() if args.resume_from is None or not journal_path(root, c).is_file()]
 
     def publish(result):
         cell, status, score, evidence = result
@@ -360,10 +427,15 @@ def main():
     if args.side == "engine":
         engine(inputs, config, manifest, cells, publish=publish)
     else:
-        for result in showdown_h2h(prepared, config["model"], manifest, [c for c in cells if c["assay"] == H2H]):
-            publish(result)
-        asyncio.run(showdown_fp(prepared, config["model"], manifest, [c for c in cells if c["assay"] == FP],
-                               publish=publish))
+        h2h_cells = [c for c in cells if c["assay"] == H2H]
+        fp_cells = [c for c in cells if c["assay"] == FP]
+        if args.resume_from is not None and fp_cells:
+            asyncio.run(showdown_fp(prepared, config["model"], manifest, fp_cells, publish=publish))
+        if h2h_cells:
+            for result in showdown_h2h(prepared, config["model"], manifest, h2h_cells):
+                publish(result)
+        if args.resume_from is None and fp_cells:
+            asyncio.run(showdown_fp(prepared, config["model"], manifest, fp_cells, publish=publish))
 
 
 if __name__ == "__main__":
