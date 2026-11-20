@@ -366,19 +366,12 @@ def copied_private(before,side,outgoing,incoming):
     return before._replace(substitute_hp=before.substitute_hp.at[r,seat,new].set(before.substitute_hp[r,seat,old]))
 
 def departed_private(before,side,outgoing,data=None):
-    """Same original entry.depart TOX-counter reset; no physical write here.
-
-    Major status remains on the outgoing mon and never transfers, except the
-    explicit source-bound Natural Cure departure below. Original
-    tox.onSwitchIn resets its own stage; the existing kernel clears that private
-    clock on departure. This predicts only that actual already-existing write.
-    """
+    """Predict departure before the entrant's status SwitchIn callback."""
     r=j.arange(len(side));seat=j.clip(side,0,1);old=j.clip(outgoing,0,5)
     counter=before.status_counter[r,seat,old]
-    expected=j.where(before.status[r,seat,old]==TOXIC_STATUS,0,counter)
     from . import engine_natural_cure_callbacks as nc
     cure=j.zeros_like(side,bool)if data is None else nc.source_status(before.ability[r,seat,old],before.status[r,seat,old],counter,data)
-    return before._replace(status=before.status.at[r,seat,old].set(j.where(cure,0,before.status[r,seat,old])),status_counter=before.status_counter.at[r,seat,old].set(j.where(cure,0,expected)),substitute_hp=before.substitute_hp.at[r,seat,old].set(0))
+    return before._replace(status=before.status.at[r,seat,old].set(j.where(cure,0,before.status[r,seat,old])),status_counter=before.status_counter.at[r,seat,old].set(j.where(cure,0,counter)),substitute_hp=before.substitute_hp.at[r,seat,old].set(0))
 
 def cure_install(rec,data):
     from . import engine_natural_cure_callbacks as nc

@@ -862,7 +862,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             # so its switch is always a replacement (below); its own Ability Start never lowers its own stages.
             switch_faint |= knocked_out
         else:
-            work=arrival.restore_sleep(work,side,eligible=do_switch)
+            work=arrival.switch_in_status(work,side,eligible=do_switch)
     if table.entry is not None:
         # Forced instaswitch actions(order3) install ALL entrants before any
         # runSwitch callback(order101). Ordinary switch actions(order103) do
