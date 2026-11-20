@@ -27,6 +27,7 @@ import json
 import os
 from pathlib import Path
 import time
+import uuid
 
 import numpy as np
 
@@ -172,9 +173,20 @@ def file_pipeline_order(keys, batches):
     return order, tuple(int(c) for c in counts if c)
 
 
-def write_json(path, value):
-    temporary = Path(str(path) + '.tmp');temporary.write_text(json.dumps(value, indent=1, default=str) + '\n')
+def write_json(path, value, *, durable=False):
+    temporary = Path(str(path) + '.tmp')
+    with temporary.open('w') as stream:
+        stream.write(json.dumps(value, indent=1, default=str) + '\n')
+        if durable:
+            stream.flush()
+            os.fsync(stream.fileno())
     os.replace(temporary, path)
+    if durable:
+        descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def select_learner_precision(context, precision):
@@ -223,6 +235,40 @@ def argument_parser():
     return parser
 
 
+def _rank_zero(distribution, phase, action):
+    """Complete an owned phase and share its outcome before peers advance."""
+    if distribution is None:
+        return action()
+    result = error = None
+    if distribution.rank == 0:
+        try:
+            result = action()
+        except Exception as exc:
+            error = exc
+    result, failure = distribution.broadcast((result, None if error is None else (type(error).__name__, str(error))))
+    if failure is not None:
+        kind, message = failure
+        error_type = ValueError if kind == 'ValueError' else RuntimeError
+        raise error_type(f'{phase} failed on rank 0: {kind}: {message}') from error
+    return result
+
+
+def _validated_on_all_ranks(distribution, action):
+    if distribution is None:
+        return action()
+    error = None
+    try:
+        result = action()
+    except (Exception, SystemExit) as exc:
+        error = exc
+    failures = distribution.gather(None if error is None else (type(error).__name__, str(error)))
+    for rank, failure in enumerate(failures):
+        if failure is not None:
+            kind, message = failure
+            error_type = SystemExit if kind == 'SystemExit' else ValueError
+            raise error_type(f'resume inputs failed on rank {rank}: {message}') from error
+    return result
+
 def main(argv=None, *, distribution=None):
     args = argument_parser().parse_args(argv)
     if bool(args.config) == bool(args.declaration):raise SystemExit('exactly one of --config or --declaration')
@@ -243,6 +289,29 @@ def main(argv=None, *, distribution=None):
     plan = select_learner_precision(context, args.learner_precision)
     if distribution is not None:
         distribution.bind(context, args)
+    declaration_sha256 = runs._sha(plan.manifest())
+    deferred = plan.evaluation is not None and plan.evaluation.deferred
+    dispatch = None
+    state_path = out / 'state.json'
+    if deferred:
+        from pokezero.v5_deferred_evaluation import MilestoneDispatch, retain_full_checkpoints, sync_actor, sync_directory
+
+        def setup_dispatch():
+            nonlocal dispatch
+            declaration = out / 'declaration.json'
+            if state_path.exists() and not declaration.is_file():
+                raise ValueError('original fused evaluation declaration is missing')
+            if declaration.exists():
+                if runs._sha(json.loads(declaration.read_bytes())) != declaration_sha256:
+                    raise ValueError('original fused evaluation declaration differs')
+            else:
+                runs._publish(declaration, runs._json(plan.manifest()).encode())
+                sync_directory(out)
+            dispatch = MilestoneDispatch(out, plan.evaluation, plan.evaluation_milestones(), declaration_sha256,
+                report_observer_error=lambda reason: log('EVALUATION_STOP_READ_ERROR', reason=reason))
+
+        _rank_zero(distribution, 'evaluation declaration', setup_dispatch)
+
     if args.torch_memory_fraction > 0:
         # The runtime probe caps Torch for the file pipeline; V2 holds the row store in Torch too.
         torch.cuda.set_per_process_memory_fraction(args.torch_memory_fraction, 0)
@@ -257,33 +326,45 @@ def main(argv=None, *, distribution=None):
         distributed_rows=distribution is not None, native_embedding_backward=args.native_embedding_backward,
         fallback_random=args.fallback_random)
     placement = {} if distribution is None else dict(process_group=distribution.process_group)
-    state_path = out / 'state.json'
-    if state_path.exists():
-        saved = json.loads(state_path.read_text())
-        if saved.get('declaration_sha256') != runs._sha(plan.manifest()):
-            raise ValueError('original fused run declaration binding required')
-        if distribution is not None:
-            distribution.check_resume(saved)
-        elif 'distribution' in saved:
-            raise ValueError('distributed fused run requires its original placement on resume')
-        encoding_receipts = saved.get('checkpoint_encoding_receipts', {})
-        snapshots = [runs.Snapshot(**x) for x in saved['snapshots']];reports = saved['reports']
+    def read_resume_manifest():
+        try:
+            saved = json.loads(state_path.read_bytes())
+        except FileNotFoundError:
+            return None
+        if type(saved) is not dict:
+            raise ValueError('fused resume manifest must be a JSON object')
+        return saved
+
+    saved = _rank_zero(distribution, 'resume manifest', read_resume_manifest)
+    if saved is not None:
+        def resume_inputs():
+            if saved.get('declaration_sha256') != declaration_sha256:
+                raise ValueError('original fused run declaration binding required')
+            if distribution is not None:
+                distribution.check_resume(saved)
+            elif 'distribution' in saved:
+                raise ValueError('distributed fused run requires its original placement on resume')
+            recorded = saved.get('row_order')
+            if recorded is None and args.row_order is None:
+                raise SystemExit('state.json does not record its row order (older runs defaulted to tick); pass --row-order explicitly')
+            if recorded is not None and args.row_order not in (None, recorded):
+                raise SystemExit(f'run was recorded with --row-order {recorded}; a resume cannot switch to {args.row_order}')
+            receipts = saved.get('checkpoint_encoding_receipts', {})
+            restored = [runs.Snapshot(**x) for x in saved['snapshots']]
+            digest = restored[-1].checkpoint_sha256
+            proof = None
+            if not plan.self_moves and digest in receipts:
+                proof = encoding.off_from_receipt(receipts[digest])
+            return restored, receipts, recorded or args.row_order, proof
+
+        snapshots, encoding_receipts, row_order, off_provenance = _validated_on_all_ranks(distribution, resume_inputs)
+        reports = saved['reports']
         for snapshot in snapshots[1:]:roots[snapshot.archive_sha256] = out
         checkpoint = out / snapshots[-1].checkpoint
-        checkpoint_sha = snapshots[-1].checkpoint_sha256
-        off_provenance = None
-        if not plan.self_moves and checkpoint_sha in encoding_receipts:
-            off_provenance = encoding.off_from_receipt(encoding_receipts[checkpoint_sha])
         runtime = v2t.load_checkpoint(checkpoint, enable_v5=True, v2_config=v2_config, expected_model_config=plan.model,
             expected_loss_config=plan.loss, expected_train_config=plan.train, device='cuda',
-            expected_self_moves=plan.self_moves, expected_checkpoint_sha256=checkpoint_sha,
+            expected_self_moves=plan.self_moves, expected_checkpoint_sha256=snapshots[-1].checkpoint_sha256,
             off_provenance=off_provenance, **placement)
-        recorded = saved.get('row_order')
-        if recorded is None and args.row_order is None:
-            raise SystemExit('state.json does not record its row order (older runs defaulted to tick); pass --row-order explicitly')
-        if recorded is not None and args.row_order not in (None, recorded):
-            raise SystemExit(f'run was recorded with --row-order {recorded}; a resume cannot switch to {args.row_order}')
-        row_order = recorded or args.row_order
         log('RESUMED', completed_iterations=len(reports), checkpoint=str(checkpoint), steps=runtime.steps, row_order=row_order)
     else:
         snapshots = [first];reports = [];row_order = args.row_order or 'file'
@@ -312,7 +393,28 @@ def main(argv=None, *, distribution=None):
     collectors = {}
     reference_ends = {e['payload']['stream_id']: e['payload'] for e in events if e['kind'] == 'GAME_END'}
     last = len(plan.iterations) if args.max_iterations is None else min(len(plan.iterations), args.max_iterations)
+    def publish_evaluation(snapshot):
+        dispatch.publish_committed(snapshot, report_error=lambda reason: log(
+            'EVALUATION_REQUEST_ERROR', iteration=snapshot.iteration, reason=reason))
+
+    if deferred and saved is not None:
+        def recover_evaluations():
+            for snapshot in snapshots[1:]:
+                if snapshot.iteration in dispatch.milestones and dispatch.request_missing(snapshot):
+                    publish_evaluation(snapshot)
+            retain_full_checkpoints(out, [
+                dict(iteration=item.iteration, path=item.checkpoint) for item in snapshots[1:]
+            ], dispatch.milestones)
+
+        _rank_zero(distribution, 'evaluation recovery and retention', recover_evaluations)
+    route_stop = None
     for iteration in range(len(reports), last):
+        if deferred:
+            route_stop = _rank_zero(distribution, 'evaluation stop', lambda: dispatch.stop_at_boundary(iteration))
+            if route_stop is not None:
+                if distribution is None or distribution.rank == 0:
+                    log('STOP', iteration=iteration, reason='S0_TRANSFER_FAIL', stop_request=route_stop)
+                break
         phase = {};clock = time.perf_counter();start = clock
         def mark(name):
             nonlocal clock
@@ -377,20 +479,26 @@ def main(argv=None, *, distribution=None):
         train_report = trainer.train(store, window=runs.learning_rate_window(plan, iteration))
         torch.cuda.synchronize();mark('train')
         del store;gc.collect()
-        checkpoint = out / 'artifacts' / f'train-{iteration}.pt'
+        # An attempt interrupted before the state commit owns its artifacts.
+        suffix = _rank_zero(distribution, 'checkpoint attempt', lambda: f'-{uuid.uuid4().hex}') if deferred else ''
+        checkpoint = out / 'artifacts' / f'train-{iteration}{suffix}.pt'
         receipt = v2t.save_checkpoint(checkpoint, runtime)
-        archive = out / 'artifacts' / f'actor-{iteration}.npz';checkpoint_sha = sha(checkpoint)
-        metadata = None
-        if distribution is None or distribution.rank == 0:
+        archive = out / 'artifacts' / f'actor-{iteration}{suffix}.npz'
+
+        def export_checkpoint():
+            checkpoint_sha = receipt['sha256']
             encoding_receipt = receipt['encoding_receipt']
             encoding_receipts[checkpoint_sha] = encoding_receipt
             metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=checkpoint_sha, enable_v5=True,
                 self_moves=plan.self_moves,
                 off_provenance=encoding.off_from_receipt(encoding_receipt) if not plan.self_moves else None)
-        if distribution is not None:
-            metadata = distribution.broadcast(metadata)
-        snapshot = runs.Snapshot(iteration=iteration, checkpoint=f'artifacts/train-{iteration}.pt', checkpoint_sha256=checkpoint_sha,
-            archive=f'artifacts/actor-{iteration}.npz', archive_sha256=metadata['weights_archive_sha256'],
+            if deferred:
+                sync_actor(archive)
+            return checkpoint_sha, metadata
+
+        checkpoint_sha, metadata = _rank_zero(distribution, 'checkpoint export', export_checkpoint)
+        snapshot = runs.Snapshot(iteration=iteration, checkpoint=str(checkpoint.relative_to(out)), checkpoint_sha256=checkpoint_sha,
+            archive=str(archive.relative_to(out)), archive_sha256=metadata['weights_archive_sha256'],
             model_sha256=runs._sha(plan.model.metadata()))
         roots[snapshot.archive_sha256] = out;snapshots.append(snapshot);actor_params(snapshot.archive_sha256)
         mark('checkpoint_export_reload')
@@ -411,26 +519,35 @@ def main(argv=None, *, distribution=None):
             games_per_second_steady=round(report['games_per_second_steady'], 2), phase_seconds={k: round(v, 1) for k, v in phase.items()},
             history=history, reused=reused, occupancy=round(stats.get('occupancy', 0), 3), dispositions=report['dispositions'],
             final_epoch_loss=report['training'].get('final_epoch_mean', {}).get('loss'), matching=same)
-        state = dict(snapshots=[asdict(s) for s in snapshots], reports=reports, row_order=row_order,
-            declaration_sha256=runs._sha(plan.manifest()), checkpoint_encoding_receipts=encoding_receipts)
-        if distribution is not None:
-            state['distribution'] = distribution.contract
-        if distribution is None or distribution.rank == 0:
-            write_json(state_path, state)
-        if distribution is not None:
-            distribution.barrier()
+        def commit_round():
+            state = dict(snapshots=[asdict(s) for s in snapshots], reports=reports, row_order=row_order,
+                declaration_sha256=declaration_sha256, checkpoint_encoding_receipts=encoding_receipts)
+            if distribution is not None:
+                state['distribution'] = distribution.contract
+            write_json(state_path, state, durable=deferred)
+            if deferred:
+                publish_evaluation(snapshot)
+                # The reference initializer is outside this run's retention.
+                retain_full_checkpoints(out, [
+                    dict(iteration=item.iteration, path=item.checkpoint) for item in snapshots[-2:]
+                    if item.iteration >= 0], dispatch.milestones)
+
+        _rank_zero(distribution, 'round commit, outbox and retention', commit_round)
         del rows, result, roster, tree;gc.collect()
         keep = {s.archive_sha256 for s in snapshots[-1 - plan.historical_window:]}
         for digest in list(params):
             if digest not in keep:del params[digest]
+    if deferred and route_stop is None:
+        route_stop = _rank_zero(distribution, 'evaluation stop', lambda: dispatch.stop_at_boundary(len(reports)))
     total = time.perf_counter() - wall_start
     games = sum(r['games'] for r in reports)
     summary = dict(schema='v2-fused-measurement.v2', declared=context['declared'], lanes=args.lanes, mode=args.mode,
         order=args.order, row_order=row_order, torch_memory_fraction_override=args.torch_memory_fraction if args.torch_memory_fraction > 0 else None, iterations=reports, preparation_seconds=context['preparation_seconds'], wall_seconds_this_attempt=total,
         games=games, games_per_second_steady_mean=games / max(1e-9, sum(r['steady_seconds'] for r in reports)),
         scope='Throughput of the fused V2 pipeline; not a strength result.')
-    if distribution is None or distribution.rank == 0:
-        write_json(out / 'report.json', summary)
+    if route_stop is not None:
+        summary.update(status='STOPPED', reason='S0_TRANSFER_FAIL', stop_request=route_stop)
+    _rank_zero(distribution, 'final report', lambda: write_json(out / 'report.json', summary))
     log('DONE', wall_seconds=total, iterations=len(reports), games=games)
     return 0
 

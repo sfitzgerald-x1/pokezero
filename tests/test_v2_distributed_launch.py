@@ -2,6 +2,8 @@ from pathlib import Path
 import sys
 import tempfile
 from types import SimpleNamespace
+import queue
+import time
 import unittest
 from unittest.mock import Mock, patch
 from uuid import UUID
@@ -10,6 +12,14 @@ from gpu_engine import v2_distributed
 
 
 class DistributedLaunchTests(unittest.TestCase):
+    def test_supervisor_drains_coordinated_checkpoint_error_exits(self):
+        completed = queue.Queue()
+        code = v2_distributed.CHECKPOINT_WRITE_EXIT
+        for rank in (0, 3, 1, 2):
+            completed.put((rank, code))
+        self.assertEqual(v2_distributed._wait_workers(completed, 4, time.monotonic()+2),
+                         dict.fromkeys(range(4), code))
+
     def test_workers_receive_valid_cuda_selectors_in_visible_device_order(self):
         first = UUID('11111111-1111-4111-8111-111111111111')
         second = 'GPU-22222222-2222-4222-8222-222222222222'

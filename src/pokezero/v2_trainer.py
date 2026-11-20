@@ -693,6 +693,13 @@ def create(model_config, loss_config, train_config, v2_config=None, *, enable_v5
     one CUDA device per DDP rank). Rank ``r > 0`` derives its own dropout stream
     from (seed, r). All ranks start from the same parameters.
     """
+    runtime = _create_runtime(model_config, loss_config, train_config, v2_config, enable_v5=enable_v5,
+        device=device, process_group=process_group, self_moves=self_moves)
+    _broadcast_parameters(runtime)
+    return runtime
+
+
+def _create_runtime(model_config, loss_config, train_config, v2_config, *, enable_v5, device, process_group, self_moves):
     if enable_v5 is not True:
         raise ValueError('explicit v5 trainer enablement required')
     if type(self_moves) is not bool:
@@ -713,12 +720,15 @@ def create(model_config, loss_config, train_config, v2_config=None, *, enable_v5
     optimizer = build_optimizer(base.model.parameters(), train_config, v2_config.optimizer)
     runtime = Runtime(model_config, loss_config, train_config, v2_config, base.model, optimizer, rng,
         contract.contract_descriptor(), device, world_size, rank, process_group, self_moves=self_moves)
-    if world_size > 1:
-        import torch.distributed as dist
-        with torch.no_grad():
-            for parameter in runtime.model.parameters():
-                dist.broadcast(parameter.data, 0, group=process_group)
     return runtime
+
+
+def _broadcast_parameters(runtime):
+    if runtime.world_size > 1:
+        import torch.distributed as dist
+        with _torch().no_grad():
+            for parameter in runtime.model.parameters():
+                dist.broadcast(parameter.data, 0, group=runtime.process_group)
 
 
 def learning_rate(train_config, window, epoch):
@@ -1066,6 +1076,10 @@ def _v2_digest(section):
     return _sha({key: value for key, value in section.items() if key != 'rng_by_rank'})
 
 
+class CheckpointWriteError(RuntimeError):
+    """The rank-zero checkpoint writer reported a common terminal failure."""
+
+
 def save_checkpoint(path, runtime):
     """Write a v5-format checkpoint with a ``v2`` resume section; never overwrite.
 
@@ -1079,33 +1093,54 @@ def save_checkpoint(path, runtime):
         raise ValueError('explicit bool runtime self_moves required')
     if runtime.failed:
         raise RuntimeError('refusing to checkpoint a runtime that failed a finiteness check')
-    torch = _torch()
     rng_by_rank = [runtime.rng]
     if runtime.world_size > 1:
         import torch.distributed as dist
         rng_by_rank = [None] * runtime.world_size
         dist.all_gather_object(rng_by_rank, runtime.rng, group=runtime.process_group)
-    path = Path(path); receipt = None
+    path = Path(path)
+    if runtime.world_size == 1:
+        return _write_checkpoint(path, runtime, rng_by_rank)
+    receipt = None
+    error = None
     if runtime.rank == 0:
-        if path.exists():
-            raise FileExistsError(path)
-        metadata = _v5_metadata(runtime)
-        section = _v2_section(runtime, rng_by_rank)
-        payload = dict(metadata=metadata, metadata_sha256=_sha(metadata),
-            state_dict={name: value.detach().cpu().clone() for name, value in runtime.model.state_dict().items()},
-            optimizer_state=_canonical_optimizer_state(runtime.optimizer), rng=rng_by_rank[0],
-            v2=section, v2_sha256=_v2_digest(section))
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.' + path.name + '.', suffix='.tmp', delete=False) as stream:
-            temporary = Path(stream.name); torch.save(payload, stream); stream.flush(); os.fsync(stream.fileno())
-        os.link(temporary, path); temporary.unlink()
-        receipt = dict(path=str(path), sha256=v5_data._file_sha(path), steps=runtime.steps, rows=runtime.rows,
-            schema=v5.CHECKPOINT_SCHEMA, v2_schema=V2_SCHEMA)
-        from .checkpoint_self_moves import _writer_receipt
-        receipt['encoding_receipt'] = _writer_receipt(path, checkpoint_sha256=receipt['sha256'],
-            metadata_sha256=payload['metadata_sha256'], self_moves=runtime.self_moves)
-    if runtime.world_size > 1:
-        import torch.distributed as dist
-        dist.barrier(group=runtime.process_group)
+        try:
+            receipt = _write_checkpoint(path, runtime, rng_by_rank)
+        except Exception as exc:
+            error = exc
+    outcome = [None if error is None else f'{type(error).__name__}: {error}']
+    dist.broadcast_object_list(outcome, src=0, group=runtime.process_group)
+    if outcome[0] is not None:
+        message = f'rank 0 checkpoint write failed: {outcome[0]}'
+        raise CheckpointWriteError(message) from error
+    dist.barrier(group=runtime.process_group)
+    return receipt
+
+
+def _write_checkpoint(path, runtime, rng_by_rank):
+    if path.exists():
+        raise FileExistsError(path)
+    torch = _torch()
+    metadata = _v5_metadata(runtime)
+    section = _v2_section(runtime, rng_by_rank)
+    payload = dict(metadata=metadata, metadata_sha256=_sha(metadata),
+        state_dict={name: value.detach().cpu().clone() for name, value in runtime.model.state_dict().items()},
+        optimizer_state=_canonical_optimizer_state(runtime.optimizer), rng=rng_by_rank[0],
+        v2=section, v2_sha256=_v2_digest(section))
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.' + path.name + '.', suffix='.tmp', delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            torch.save(payload, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.link(temporary, path)
+        finally:
+            temporary.unlink()
+    receipt = dict(path=str(path), sha256=v5_data._file_sha(path), steps=runtime.steps, rows=runtime.rows,
+        schema=v5.CHECKPOINT_SCHEMA, v2_schema=V2_SCHEMA)
+    from .checkpoint_self_moves import _writer_receipt
+    receipt['encoding_receipt'] = _writer_receipt(path, checkpoint_sha256=receipt['sha256'],
+        metadata_sha256=payload['metadata_sha256'], self_moves=runtime.self_moves)
     return receipt
 
 
@@ -1117,6 +1152,35 @@ def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_con
     ``v2_config`` may change execution-only choices (mode, check interval,
     optimizer kernel). ``order``/``order_seed`` must match an unfinished cursor.
     """
+    world_size, _ = _distributed(process_group)
+    error = None
+    try:
+        runtime, digest = _restore_checkpoint(path, enable_v5=enable_v5, v2_config=v2_config,
+            expected_model_config=expected_model_config, expected_loss_config=expected_loss_config,
+            expected_train_config=expected_train_config, device=device, process_group=process_group,
+            expected_self_moves=expected_self_moves, off_provenance=off_provenance,
+            expected_checkpoint_sha256=expected_checkpoint_sha256, world_size=world_size)
+    except Exception as exc:
+        if world_size == 1:
+            raise
+        error = exc
+        digest = None
+    if world_size > 1:
+        import torch.distributed as dist
+        inputs = [None] * world_size
+        dist.all_gather_object(inputs, (digest, None if error is None else str(error)), group=process_group)
+        for rank, (_, failure) in enumerate(inputs):
+            if failure is not None:
+                raise ValueError(f'rank {rank} checkpoint resume failed: {failure}') from error
+        if any(other != digest for other, _ in inputs):
+            raise ValueError('ranks must resume the same immutable checkpoint bytes')
+        _broadcast_parameters(runtime)
+    return runtime
+
+
+def _restore_checkpoint(path, *, enable_v5, v2_config, expected_model_config, expected_loss_config,
+                        expected_train_config, device, process_group, expected_self_moves,
+                        off_provenance, expected_checkpoint_sha256, world_size):
     if enable_v5 is not True:
         raise ValueError('explicit v5 trainer enablement required')
     from .checkpoint_self_moves import checked_checkpoint, resolve_self_moves
@@ -1150,10 +1214,10 @@ def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_con
     if section['cursor'] is not None and not section['cursor']['complete'] and (
             (v2_config.order, v2_config.order_seed) != (saved.order, saved.order_seed)):
         raise ValueError('an unfinished cursor resumes only with its original batch order')
-    runtime = create(model, loss, training, v2_config, enable_v5=True, device=device, process_group=process_group,
-        self_moves=self_moves)
-    if runtime.world_size != section['world_size']:
+    if world_size != section['world_size']:
         raise ValueError('resume requires the original world size')
+    runtime = _create_runtime(model, loss, training, v2_config, enable_v5=True, device=device,
+        process_group=process_group, self_moves=self_moves)
     runtime.model.load_state_dict(payload['state_dict'], strict=True)
     _load_optimizer_state(runtime.optimizer, payload['optimizer_state'])
     if any(not torch.isfinite(parameter).all() for parameter in runtime.model.parameters()):
@@ -1165,7 +1229,7 @@ def load_checkpoint(path, *, enable_v5=False, v2_config=None, expected_model_con
     with v5._rng_scope(torch, runtime.device, state=runtime.rng):
         pass
     runtime.model.train(metadata['model_training'])
-    return runtime
+    return runtime, checked.sha256
 
 
 def export_actor(checkpoint, out, *, expected_self_moves=None, off_provenance=None):

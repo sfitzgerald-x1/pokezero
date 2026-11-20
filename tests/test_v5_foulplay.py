@@ -46,6 +46,22 @@ class V5FoulPlayTests(unittest.TestCase):
         legacy=stack.enter_context(patch.object(old,'load_transformer_checkpoint',side_effect=AssertionError('no old loader')))
         return legacy
 
+    def test_progress_100ms_keeps_declared_packed_start_and_budget(self):
+        from pokezero.env import BattleStartOverride
+        cfg = self.config(search_time_ms=100)
+        start = BattleStartOverride({'p1':'literal-a','p2':'literal-b'}, observation_format_id='gen3randombattle')
+        seen = []
+        async def run(config, **kwargs):
+            seen.append((config.search_time_ms, kwargs['packed_starts'], kwargs['game_offsets']))
+            return NS(games=(self.game(config,8),), foulplay_random_seed_schedule=(102,))
+        with ExitStack() as stack, jax.default_matmul_precision('highest'):
+            self.preparation(stack)
+            stack.enter_context(patch.object(old, '_run_controlled_foulplay_games', side_effect=run))
+            outcome = asyncio.run(v5.run_panel(cfg, self.factory, enable_v5=True, game_offsets=(1,),
+                                                packed_starts={1:start}))
+        self.assertEqual(seen, [(100,{1:start},(1,))])
+        self.assertEqual(outcome['rows'][0]['status'], 'COMPLETE')
+
     def test_explicit_real_factory_dispatch_preserves_bank_and_unknowns_without_old_loader(self):
         config=self.config();seen=[]
         async def run(cfg,**kwargs):
