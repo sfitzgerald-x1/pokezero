@@ -136,6 +136,7 @@ class MilestoneDispatch:
         self.report_observer_error = report_observer_error
         self.last_error = None
         self.pending = {}
+        self._mismatched_games = set()
         if policy.route_declaration_sha256:
             self.stop_key = _stop_key() if stop_key is None else stop_key
             if type(self.stop_key) is not bytes or len(self.stop_key) < 32:
@@ -159,6 +160,9 @@ class MilestoneDispatch:
                 return True
             value = _milestone_document(request, self.policy.route_declaration_sha256, full_checkpoint)
             _check_existing_milestone(path, value)
+        except ImmutableRequestMismatch:
+            self._mismatched_games.add(games)
+            return True
         except (OSError, ValueError):
             return True
         return False
@@ -187,6 +191,8 @@ class MilestoneDispatch:
         except (ValueError, OSError) as error:
             self.pending[games] = (snapshot, full_checkpoint)
             if isinstance(error, ImmutableRequestMismatch):
+                # Reject stale stop signals even if the durable VOID write fails.
+                self._mismatched_games.add(games)
                 row = dict(schema=VOID, status='VOID', declared_games=games, iteration=snapshot.iteration,
                     declaration_sha256=self.declaration_sha256, protocol_sha256=self.policy.protocol_sha256,
                     existing_request_sha256=error.existing_sha256, proposed_request_sha256=error.proposed_sha256,
@@ -224,7 +230,7 @@ class MilestoneDispatch:
             if iteration >= next_iteration:
                 return None
             path = self.path(games)
-            if _void_log(path).exists():
+            if games in self._mismatched_games or _void_log(path).exists():
                 raise ValueError('stop references a VOID evaluation')
             request, digest = _small_document(path)
             if (digest != payload['dispatch_sha256'] or request['schema'] != MILESTONE
@@ -638,6 +644,7 @@ def execute_dispatch(reference,*,resume=False,enable_cpu_panel=False,protocol=No
                 raise ValueError('original CPU evaluator outcome required')
             # Recheck immutable inputs only in the evaluator.
             _dispatch_inputs(reference, protocol=protocol)
+            require_live_milestone(request)
         except Exception as error:
             outcome = run.EvaluationOutcome('UNKNOWN', reason=type(error).__name__ + ': ' + str(error))
         result=dict(started,outcome=asdict(outcome))

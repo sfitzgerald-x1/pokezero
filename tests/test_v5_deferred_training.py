@@ -243,6 +243,93 @@ class DeferredTrainingTests(unittest.TestCase):
             self.assertNotEqual(receipt['existing_request_sha256'], receipt['proposed_request_sha256'])
             self.assertIn('full_checkpoint', receipt['diff'])
 
+    def test_restart_ignores_stale_signed_stop_when_void_write_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'run'
+            policy = run.EvaluationProtocol('c'*64, 2, 'deferred', ROUTE)
+            plan = replace(fixture.plan(), evaluation=policy)
+            publish = deferred.publish_dispatch
+            write = deferred._publish_equal
+
+            def publish_stale(request, protocol, expected, **kwargs):
+                other = root/'artifacts/different-full.pt'
+                other.write_bytes(b'other immutable full checkpoint')
+                kwargs['full_checkpoint'] = dict(path=str(other.relative_to(root)), sha256=run._file_sha(other))
+                receipt = publish(request, protocol, expected, **kwargs)
+                payload = dict(schema=deferred.STOP, verdict='FAIL', route_schema='s0.transfer.r2',
+                    route_declaration_sha256=ROUTE, declaration_sha256=request.declaration_sha256,
+                    protocol_sha256=policy.protocol_sha256, iteration=request.snapshot.iteration,
+                    declared_games=request.declared_games, dispatch_sha256=receipt.request_sha256,
+                    independent_verdict_sha256='f'*64)
+                write(root/'evaluation-stop.json', dict(payload=payload, signature=deferred._signature(payload, UNIT_KEY)))
+                return receipt
+
+            with patch.dict(os.environ, {deferred.STOP_KEY_ENV: UNIT_KEY.hex()}):
+                backend = fixture.FakeBackend()
+                with patch.object(deferred, 'publish_dispatch', side_effect=publish_stale):
+                    stopped = Harness().execute(root, plan, backend, fixture.FakeTraining(), None)
+                self.assertEqual((stopped['reason'], backend.collect_calls), ('S0_TRANSFER_FAIL', [1, 2]))
+                path = root/'artifacts/cpu-panels/2/request.json'
+                original_request = path.read_bytes()
+                original_stop = (root/'evaluation-stop.json').read_bytes()
+
+                def unavailable(path, document):
+                    if path.name == 'evaluation-void.json':
+                        raise OSError('injected VOID receipt write failure')
+                    return write(path, document)
+
+                backend = fixture.FakeBackend()
+                with patch.object(deferred, '_publish_equal', side_effect=unavailable):
+                    resumed = Harness().execute(root, plan, backend, fixture.FakeTraining(), None, resume=True)
+            self.assertEqual((resumed['status'], resumed['steps'], backend.collect_calls),
+                             ('COMPLETE_DECLARATION', 6, [3, 4]))
+            self.assertEqual(path.read_bytes(), original_request)
+            self.assertEqual((root/'evaluation-stop.json').read_bytes(), original_stop)
+            self.assertIsNone(deferred.read_eval_void(path, 2))
+            store = run.Store(root, plan, resume=True)
+            self.assertTrue(any('EVALUATION_VOID_LOG_ERROR' in row['reason']
+                                for row in store.matching('EVALUATION_REQUEST_ERROR')))
+            self.assertTrue(any('stop references a VOID evaluation' in row['reason']
+                                for row in store.matching('EVALUATION_STOP_READ_ERROR')))
+
+    def test_void_arriving_during_final_binding_validation_discards_cpu_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'run'
+            protocol = artifact(Path(directory) / 'protocol.json', {})
+            policy = run.EvaluationProtocol(protocol.sha256, 2, 'deferred')
+            plan = replace(fixture.plan(), evaluation=policy)
+            Harness().execute(root, plan, fixture.FakeBackend(), fixture.FakeTraining(), None)
+            path = root/'artifacts/cpu-panels/2/request.json'
+            reference = evaluation.Artifact(str(path), run._file_sha(path))
+            request = deferred.read_milestone(reference)
+            dispatch = deferred.MilestoneDispatch(root, policy, {0: 2}, request.declaration_sha256)
+            bind = evaluation._check_request_binding
+            attempted = False
+
+            def finish(actual):
+                nonlocal attempted
+                attempted = True
+                return Harness().result(actual)
+
+            def check_and_void(*args, **kwargs):
+                bind(*args, **kwargs)
+                if attempted:
+                    self.assertIsNone(deferred.read_eval_void(path, 2))
+                    dispatch.publish_committed(request.snapshot, report_error=lambda _: None,
+                        full_checkpoint=dict(path='artifacts/different.pt', sha256='f'*64))
+
+            with patch.dict(os.environ, {'CUDA_VISIBLE_DEVICES': '', 'JAX_PLATFORMS': 'cpu'}), \
+                    patch.object(evaluation, 'EvaluationHook', return_value=finish), \
+                    patch.object(evaluation, '_check_request_binding', side_effect=check_and_void) as binding:
+                outcome = deferred.execute_dispatch(reference, protocol=protocol, enable_cpu_panel=True)
+            self.assertEqual(binding.call_count, 2)
+            self.assertEqual(outcome.status, 'UNKNOWN')
+            self.assertIn('VOID milestone', outcome.reason)
+            self.assertIsNone(outcome.report)
+            durable = json.loads((path.parent/'outcomes/000000.json').read_bytes())
+            self.assertEqual(durable['outcome']['status'], 'UNKNOWN')
+            self.assertEqual(run._file_sha(path), reference.sha256)
+
     def test_void_revokes_live_and_resumed_dispatch_consumers(self):
         from pokezero import v5_progress_evaluation as progress
 
