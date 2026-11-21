@@ -119,8 +119,9 @@ def test_recompute_retains_unknown_cells_and_does_not_issue_dry_verdict():
     bounded = report["contrasts"]["G"]["missingness_bounded_ci90_pp"]
     assert bounded[0] < 50.0 == bounded[1]
     assert scorer.recompute(manifest, rows[:-1])["missing_cells"] == 2
-    with pytest.raises(ValueError, match="duplicate"):
-        scorer.recompute(manifest, rows + [rows[-1]])
+    damaged = scorer.recompute(manifest, rows + [rows[-1]])
+    assert damaged["invalid_rows"] == damaged["integrity_errors"] == 1
+    assert damaged["missing_cells"] == 2
 
 
 def test_recompute_uses_literal_winner_and_rejects_wrong_seat_or_roster():
@@ -328,21 +329,95 @@ def test_prepare_roster_independent_of_actor_self_moves(monkeypatch):
     assert configured.public_config.feature_masks.self_moves is True
 
 
-def test_supervisor_does_not_score_until_engine_exits(monkeypatch, tmp_path):
+def test_supervisor_scores_durable_rows_after_timeouts(monkeypatch, tmp_path):
     import sys
-    from pokezero import s0_transfer_supervise
+    from pokezero import s0_transfer_harness as harness, s0_transfer_supervise as supervisor
+    from pokezero.s0_transfer_roster import panel_lock
 
     (tmp_path / "manifest.json").write_text("{}")
-    monkeypatch.setattr(sys, "argv", ["supervisor", "showdown", str(tmp_path)])
-    monkeypatch.setattr(s0_transfer_supervise, "run_worker", lambda *a, **k: 0)
+    done = tmp_path / "showdown.done.json"
+    done.write_text('{"exit_code":124}')
+    (tmp_path / "engine.done.json").write_text('{"exit_code":124}')
+    monkeypatch.setattr(sys, "argv", ["supervisor", "showdown", str(tmp_path), "--resume", "--publish-stop"])
 
-    def wait(*args):
-        raise TimeoutError("engine still running")
+    participants = []
+    def worker(root, side, args, **kwargs):
+        participants.append(side)
+        assert args[args.index("--attempt") + 1] == "1"
+        assert not (root / f"{side}.done.json").exists()
+        with pytest.raises(BlockingIOError), panel_lock(tmp_path, scoring=True):
+            pytest.fail("scoring overlapped live worker")
+        return 124
 
-    def score(*args, **kwargs):
-        pytest.fail("scored while the engine was still running")
+    def late_peer(seconds):
+        # Called by the real join only once it has read the stale attempt-zero receipt.
+        assert participants == ["showdown"]
+        assert supervisor.main(["engine", str(tmp_path), "--resume"]) == 124
 
-    monkeypatch.setattr(s0_transfer_supervise, "wait_for", wait)
-    monkeypatch.setattr(s0_transfer_supervise.subprocess, "run", score)
-    assert s0_transfer_supervise.main() == 1
-    assert json.loads((tmp_path / "showdown.done.json").read_text())["exit_code"] == 1
+    def score(command, *, check, timeout):
+        assert participants == ["showdown", "engine"]
+        assert json.loads((tmp_path / "engine.done.json").read_bytes())["attempt"] == 1
+        assert "--publish-stop" in command and "--lock-seconds" in command and timeout == 300
+        assert not done.exists()
+        with panel_lock(tmp_path, scoring=True):
+            return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(harness.time, "sleep", late_peer)
+    monkeypatch.setattr(supervisor, "run_worker", worker)
+    monkeypatch.setattr(supervisor.subprocess, "run", score)
+    assert supervisor.main() == 124
+    assert json.loads(done.read_text())["score_exit_code"] == 0
+
+
+def test_engine_resume_reuses_only_matching_batch_shapes(monkeypatch):
+    pytest.importorskip("jax")
+    from gpu_engine import s0_transfer_engine as engine
+
+    compiled = []
+    played = []
+    class Collector:
+        def __init__(self, *args, lanes, max_requests):
+            self.count = len(args[-1])
+            assert lanes == self.count
+
+        def compile(self, params, threads):
+            compiled.append(self.count)
+
+        def rebind(self, roster):
+            assert self.count == len(roster)
+
+    monkeypatch.setattr(engine.rollout, "compile_labels", lambda *args: None)
+    monkeypatch.setattr(engine.rollout, "Bindings", lambda *args: None)
+    monkeypatch.setattr(engine.v2_collector, "RefillCollector", Collector)
+    monkeypatch.setattr(engine, "make_roster", lambda init, pool, bindings, cells, *rest: (cells, None))
+    monkeypatch.setattr(engine, "play_batch", lambda collector, *args, **kwargs: played.append(collector.count))
+    groups = [[dict(role="T", seat=0) for _ in range(n)] for n in (20, 19, 20, 1)]
+    engine.evaluate(SimpleNamespace(engine_tables=None, observation_tables=None, source_sha256="src"),
+                    SimpleNamespace(metadata=lambda: {}), SimpleNamespace(category_vocabulary_sha256="labels",
+                    label_vocabulary=None), groups, {}, {"T": ("t", object()), "B": ("b", object())},
+                    run_sha="run", lanes=20, max_requests=100, publish=None)
+    assert compiled == [20, 19, 1] and played == [20, 19, 20, 1]
+
+
+def test_resume_two_shards_preserves_280_original_attempts(tmp_path):
+    from pokezero.s0_transfer_roster import Shard, terminal_writer, raw_paths
+
+    manifest, rows = scratch_rows()
+    sha = digest(manifest)
+    expected = expected_cells(manifest["banks"], dry_run=True)
+    by_key = {cell_key(row): row for row in rows}
+    for side, count in (("engine", 1), ("showdown", 2)):
+        for i in range(count):
+            shard = Shard(i, count)
+            cells = {k: c for k, c in expected.items() if c["environment"] == side and shard.owns(c)}
+            for resume in (False, True):
+                with terminal_writer(tmp_path, side, shard, cells, sha, resume=resume) as (pending, publish):
+                    for cell in pending if resume else pending[:5]:
+                        row = by_key[cell_key(cell)]
+                        publish((cell, row["status"], row["evidence"]))
+                if not resume:
+                    with (tmp_path/(shard.stem(side)+".jsonl")).open("ab") as stream:
+                        stream.write(b'{"uncommitted"')
+    merged = [row for side in ("engine", "showdown") for path in raw_paths(tmp_path, side, sha)
+              for row in read_terminals(path, manifest_sha256=sha)]
+    assert len(merged) == 280 and scorer.recompute(manifest, merged)["missing_cells"] == 0

@@ -15,7 +15,7 @@ import zipfile
 
 from .s0_transfer_roster import (
     DRY_RUN_ROOT, FP, H2H, SCHEMA, canonical, cell_key, digest, dry_run_clusters,
-    expected_cells, write_json,
+    expected_cells, write_json, Shard, terminal_writer,
 )
 
 
@@ -126,13 +126,41 @@ def scratch_actors(root, config):
     return {"scratch": actors}
 
 
+def fused_snapshots(entry, cycles, route_sha):
+    """Bind the published milestone to the committed fused state and original B."""
+    from itertools import islice
+    from . import v2_fused_state, v5_run
+    from .v5_deferred_evaluation import read_owned_milestone
+    from .v5_evaluation import Artifact
+
+    ref = Artifact(**entry["dispatch"])
+    request = read_owned_milestone(ref)
+    base = request.run_directory
+    state = v2_fused_state.read_state(base, include_full_reports=False)
+    declaration = json.loads((base / "declaration.json").read_bytes())
+    snapshots = state["snapshots"]
+    reports = state["reports"][:cycles]
+    if (base != Path(entry["run"]).resolve() or request.declared_games != cycles * 20_000
+            or request.snapshot.iteration != cycles - 1
+            or declaration["evaluation"]["route_declaration_sha256"] != route_sha or not route_sha
+            or digest(declaration) != request.declaration_sha256
+            or state["declaration_sha256"] != request.declaration_sha256
+            or [s["iteration"] for s in snapshots[:cycles + 1]] != list(range(-1, cycles))
+            or [r["iteration"] for r in reports] != list(range(cycles))
+            or any(r["games"] != 20_000 for r in reports)
+            or any(games != 20_000 for games in islice(v5_run.manifest_iteration_game_counts(declaration), cycles))
+            or v5_run.Snapshot(**snapshots[cycles]) != request.snapshot):
+        raise ValueError("dispatch does not match committed fused milestone")
+    return (base, declaration, v5_run.Snapshot(**snapshots[0]), request.snapshot,
+            state["checkpoint_encoding_receipts"])
+
+
 def production_actors(root, spec):
     from . import checkpoint_self_moves, v5_training
     from .live_protocol_actor import ActorContract
     from .s0_transfer_control import shadow, tensor_digest
     from .v5_loss import V5LossConfig
     from .v5_model import V5ModelConfig
-    from .v5_run import Snapshot
 
     cycles = spec["cadence_iterations"]
     if cycles not in (50, 100):
@@ -144,32 +172,35 @@ def production_actors(root, spec):
     result = {}
     runs, replicate_ids = set(), set()
     for replica, entry in spec["replicas"].items():
-        base, declaration, events = checkpoint_self_moves.verified_run(entry["run"])
+        base, declaration, first, trained, receipts = fused_snapshots(
+            entry, cycles, spec["route_declaration_sha256"])
+        reference = Path(entry["reference_run"]).resolve()
         replicate = entry["replicate"]
         if (type(replicate) is not int or declaration["model"]["replicate"] != replicate
                 or replicate in replicate_ids or base.resolve() in runs):
             raise ValueError("registered replicas require distinct, matching training runs")
         runs.add(base.resolve())
         replicate_ids.add(replicate)
-        progress = {event["payload"]["iteration"] for event in events if event["kind"] == "ITERATION_COMPLETE"}
-        plan = declaration["iterations"]
-        if (len(plan) < cycles or any(sum(len(batch["games"]) for batch in it) != 20_000
-                                     for it in plan[:cycles])
-                or not set(range(cycles)).issubset(progress)
-                or declaration.get("self_moves", False) != spec["self_moves"]):
-            raise ValueError("run milestone is uncommitted or encoder configuration differs")
+        if declaration.get("self_moves", False) != spec["self_moves"]:
+            raise ValueError("fused encoder configuration differs")
         actors = {}
-        for role, iteration in (("B", -1), ("T", cycles - 1)):
-            snap = Snapshot(**entry[role])
-            if snap.iteration != iteration:
-                raise ValueError("expected the game-zero and committed milestone checkpoints")
-            checked, self_moves, _ = checkpoint_self_moves.run_checkpoint(
-                base, snap.checkpoint, snap.checkpoint_sha256, iteration=iteration,
-                expected_snapshot=snap, require_snapshot=True,
-            )
-            checkpoint = (base / snap.checkpoint).resolve()
-            archive = (base / snap.archive).resolve()
-            if not archive.is_relative_to(base):
+        for role, snap, owner in (("B", first, reference), ("T", trained, base)):
+            if role == "B":
+                checked, self_moves, _ = checkpoint_self_moves.run_checkpoint(
+                    owner, snap.checkpoint, snap.checkpoint_sha256, iteration=-1,
+                    expected_snapshot=snap, require_snapshot=True)
+            else:
+                checked = checkpoint_self_moves.checked_checkpoint(
+                    owner / snap.checkpoint, expected_checkpoint_sha256=snap.checkpoint_sha256)
+                proof = None if spec["self_moves"] else checkpoint_self_moves.off_from_receipt(
+                    receipts[snap.checkpoint_sha256])
+                self_moves = checkpoint_self_moves.resolve_self_moves(
+                    checked, expected_self_moves=spec["self_moves"], off_provenance=proof)
+            if self_moves != spec["self_moves"]:
+                raise ValueError("baseline/target input convention differs")
+            checkpoint = (owner / snap.checkpoint).resolve()
+            archive = (owner / snap.archive).resolve()
+            if not archive.is_relative_to(owner):
                 raise ValueError("actor archive must belong to the training run")
             model = checked.metadata["model"]
             if digest(model) != snap.model_sha256:
@@ -247,6 +278,9 @@ def prepare(args, inputs, config, root, spec):
             jax=inputs.runtime["versions"]["jax"],
         ),
     )
+    if spec is not None:
+        manifest.update(route_declaration_sha256=spec["route_declaration_sha256"],
+                        dispatches={r: entry["dispatch"] for r, entry in spec["replicas"].items()})
     write_json(root / "manifest.json", manifest)
     return prepared, manifest
 
@@ -256,16 +290,29 @@ def source_commit():
         ["git", "rev-parse", "HEAD"], text=True).strip()
 
 
-def wait_for(path, message, *, peer_terminal=None):
+def wait_for(path, message, *, peer_terminal=None, seconds=JOIN_SECONDS, min_attempt=None,
+             peer_attempt=0):
     start = time.monotonic()
-    while not path.is_file():
-        if peer_terminal is not None and peer_terminal.is_file():
-            terminal = json.loads(peer_terminal.read_bytes())
-            raise ValueError(f'peer exited {terminal["exit_code"]} before publishing {path.name}')
-        if time.monotonic() - start >= JOIN_SECONDS:
+    while True:
+        try:
+            value = json.loads(path.read_bytes())
+        except FileNotFoundError:
+            pass
+        else:
+            if min_attempt is None or value.get("attempt", 0) >= min_attempt:
+                return value
+        if peer_terminal is not None:
+            try:
+                terminal = json.loads(peer_terminal.read_bytes())
+            except FileNotFoundError:
+                pass
+            else:
+                if terminal.get("attempt", 0) >= peer_attempt:
+                    raise ValueError(f'peer exited {terminal["exit_code"]} before publishing {path.name}')
+        remaining = start + seconds - time.monotonic()
+        if remaining <= 0:
             raise TimeoutError(message)
-        time.sleep(2)
-    return json.loads(path.read_bytes())
+        time.sleep(min(2, remaining))
 
 
 def pack_bridge(path):
@@ -385,10 +432,38 @@ def foulplay_failure(cell, status, reason):
     return cell, status, {"reason": reason}
 
 
+def champion_game_runner(config):
+    """Load H once per worker. Each battle gets fresh owning seats and histories."""
+    from . import foulplay_bridge as fp
+    from .live_protocol_runtime import champion_actor_factory
+    from .v5_foulplay import _TransportOnly
+
+    fp._validate_external_paths(config)
+    factory = champion_actor_factory(config)
+    model, result = fp.load_transformer_checkpoint(config.checkpoint, map_location="cpu")
+    model.eval()
+    fp._warn_on_belief_provenance_mismatch(config, result)
+    model_config = result.model_config
+    env = fp.LocalShowdownConfig(
+        showdown_root=config.showdown_root, node_binary=config.node_binary,
+        category_vocab=fp.category_vocab_from_model_config(model_config, config.showdown_root),
+        observation_spec=fp.observation_spec_from_model_config(model_config),
+        feature_masks=fp.feature_masks_from_model_config(model_config))
+    dex = fp.load_showdown_dex_cached(config.showdown_root)
+
+    async def game(cell_config, packed, verify_birth):
+        return await fp._run_controlled_foulplay_games(
+            cell_config, policy=_TransportOnly(), policy_id=model_config.policy_id,
+            vocab=env.category_vocab, dex=dex, observation_spec=env.observation_spec,
+            feature_masks=env.feature_masks, checkpoint_sha256=factory.contract.checkpoint_sha256,
+            owning_actor_factory=factory, actor_runtime=(model, result, env),
+            packed_starts={0: packed}, packed_birth_callback=verify_birth)
+    return game
+
+
 async def showdown_fp(prepared, model, manifest, cells, *, publish, replica):
     from .env import BattleStartOverride
-    from .foulplay_bridge import ControlledFoulPlayConfig, run_controlled_foulplay_benchmark
-    from .live_protocol_runtime import champion_actor_factory
+    from .foulplay_bridge import ControlledFoulPlayConfig
     from .s0_transfer_starts import showdown_birth
     from .v5_foulplay import run_panel
 
@@ -409,11 +484,9 @@ async def showdown_fp(prepared, model, manifest, cells, *, publish, replica):
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
 
-    async def play(cell):
+    def cell_config(cell):
         role, seat = cell["role"], cell["seat"]
-        start = manifest["starts"][str(cell["cluster"])]
-        birth = []
-        config = ControlledFoulPlayConfig(
+        return ControlledFoulPlayConfig(
             checkpoint=Path(roster_actors[role]["checkpoint"]),
             showdown_root=Path(prepared.public_config.showdown_root),
             node_binary=prepared.public_config.node_binary, foulplay_root=Path(fw),
@@ -424,22 +497,21 @@ async def showdown_fp(prepared, model, manifest, cells, *, publish, replica):
             opponent_crash_retries=0, allow_search_fallback=False, pokezero_player=f"p{seat + 1}",
             record_refusals=False,
         )
+    champion_cell = next((cell for cell in cells if cell["role"] == "H"), None)
+    champion_game = champion_game_runner(cell_config(champion_cell)) if champion_cell is not None else None
+
+    async def play(cell):
+        role = cell["role"]
+        config = cell_config(cell)
+        start = manifest["starts"][str(cell["cluster"])]
+        birth = []
         packed = BattleStartOverride(start["packed"], observation_format_id="gen3randombattle")
 
         def verify_birth(snapshot):
             birth.append(showdown_birth(snapshot, start["showdown_birth"]))
 
         if role == "H":
-            try:
-                panel = await run_controlled_foulplay_benchmark(
-                    config, owning_actor_factory=champion_actor_factory(config),
-                    packed_start=packed, packed_birth_callback=verify_birth,
-                )
-            except PermissionError:
-                raise
-            except (ValueError, RuntimeError, TimeoutError, OSError) as error:
-                status = "REFUSED" if isinstance(error, ValueError) else "FAILED"
-                return foulplay_failure(cell, status, f"{type(error).__name__}: {error}")
+            panel = await champion_game(config, packed, verify_birth)
             game, = panel.games
             fp_seed, = panel.foulplay_random_seed_schedule
             raw = dict(seed=game.seed, fp_seed=fp_seed, source_game=game.to_dict())
@@ -461,7 +533,15 @@ async def showdown_fp(prepared, model, manifest, cells, *, publish, replica):
 
     async def play_next():
         for cell in pending:
-            publish(await play(cell))
+            try:
+                result = await play(cell)
+            except PermissionError:
+                raise
+            except (ValueError, KeyError, IndexError, TypeError, RuntimeError, OSError) as error:
+                # Only the game call is isolated. Ledger and infrastructure failures propagate.
+                status = "REFUSED" if isinstance(error, (ValueError, KeyError, IndexError, TypeError)) else "FAILED"
+                result = foulplay_failure(cell, status, f"{type(error).__name__}: {error}")
+            publish(result)
 
     await asyncio.gather(*(play_next() for _ in range(4)))
 
@@ -493,6 +573,10 @@ def main(argv=None):
     parser.add_argument("--foulplay-revision", required=True)
     parser.add_argument("--bridge", type=Path)
     parser.add_argument("--bridge-sha")
+    parser.add_argument("--shard", type=Shard.parse, default=Shard(), metavar="I/N")
+    parser.add_argument("--resume", action="store_true", help="continue only unattempted cells of the same shard")
+    parser.add_argument("--attempt", type=int, default=0)
+    parser.add_argument("--join-seconds", type=float, default=JOIN_SECONDS)
     parser.add_argument("--spec", type=Path, help="registered production inputs; omit for the unscored scratch roster")
     args = parser.parse_args(argv)
     if (args.bridge is None) != (args.bridge_sha is None):
@@ -502,6 +586,8 @@ def main(argv=None):
     manifest_path = root / "manifest.json"
     if args.spec is not None and args.side != "prepare":
         parser.error("prepare the registered run on CPU before submitting either worker")
+    if args.shard.count > 1 and args.side != "prepare" and not manifest_path.is_file():
+        raise ValueError("prepare a shared manifest before admitting shards")
     if args.side != "engine" and args.bridge is not None:
         install_bridge(args.bridge, args.bridge_sha)
     if args.side == "prepare" or (args.side == "showdown" and not manifest_path.is_file()):
@@ -517,7 +603,8 @@ def main(argv=None):
             return
     else:
         manifest = wait_for(manifest_path, "Showdown did not prepare a run manifest",
-                            peer_terminal=root / "showdown.done.json" if args.side == "engine" else None)
+                            peer_terminal=root / "showdown.done.json" if args.side == "engine" else None,
+                            seconds=args.join_seconds, peer_attempt=args.attempt)
         if (manifest["schema"] != SCHEMA or manifest["source_commit"] != source_commit()
                 or manifest["config"]["runtime_sha256"] != args.runtime_sha):
             raise ValueError("worker source or runtime differs from the run manifest")
@@ -529,21 +616,14 @@ def main(argv=None):
             prepared = prepare_showdown(inputs)
 
     expected = {key: cell for key, cell in expected_cells(manifest["banks"], dry_run=manifest["dry_run"]).items()
-                if cell["environment"] == args.side}
-    with (root / f"{args.side}.jsonl").open("xb") as output:
-        output.write(canonical(dict(manifest_sha256=digest(manifest))) + b"\n")
-        output.flush()
-
-        def publish(result):
-            cell, status, witness = result
-            if expected.get(cell_key(cell)) != cell:
-                raise ValueError("terminal belongs to an unexpected cell")
-            output.write(canonical(dict(cell, status=status, evidence=witness)) + b"\n")
-            output.flush()
-
+                if cell["environment"] == args.side and args.shard.owns(cell)}
+    with terminal_writer(root, args.side, args.shard, expected, digest(manifest), resume=args.resume) as worker:
+        remaining, publish = worker
         for replica, actors in manifest["actors"].items():
             model = V5ModelConfig.from_metadata(actors["B"]["model"])
-            cells = [cell for cell in expected.values() if cell["replica"] == replica]
+            cells = [cell for cell in remaining if cell["replica"] == replica]
+            if not cells:
+                continue
             if args.side == "engine":
                 engine(inputs, model, manifest, cells, publish=publish, replica=replica)
             else:
