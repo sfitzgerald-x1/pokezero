@@ -163,9 +163,9 @@ EFFECTS = (
          'named probe when dropped (#1930 (M2 + R1) PR body, R1 section, position -> probe table: 4 wrap and seven more, 8 and 9 '
          'wrap_tie, 11 wrap_trapper_faint and wrap_trapper_switch)',
          'live roots: since the trap walls a held partial trap is built (both sides): the protocol world takes partiallytrapped out '
-         'of the payload the CPU materializer sees (gpu_engine/phase_d_protocol_world.py:385-402), counts its ticks on the lines '
+         'of the payload the CPU materializer sees (gpu_engine/phase_d_protocol_world.py:385-404), counts its ticks on the lines '
          '(gpu_engine/phase_d_protocol_world.py:356-382) and draws the hidden remaining duration from Showdown\'s posterior, uniform '
-         'on wrap_support, with the opposing active as its trapper (gpu_engine/phase_d_protocol_world.py:345-353, 426-443); an '
+         'on wrap_support, using the opposing active or a verified living bench source (gpu_engine/phase_d_protocol_world.py:345-353, 445-464); an '
          'own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:379; the older route still refuses it, '
          'gpu_engine/phase_d_live_worlds.py:389-390, OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE)'),
         'Shuckle (Staller) only. In-tree since M2 the trap and its residual chip are modelled; since the trap walls a root already '
@@ -179,7 +179,7 @@ EFFECTS = (
          'probes: 10 perishsong* scenarios (perishsong, _tie, _last_faster, _baton, _switch, _meanlook, _soundproof, _soundproof_user, '
          '_protect_sub, _reuse), EXACT against Showdown f76228a1 at M2 + R1 (3e0878e4)',
          'live roots: since #1949 a held perish count is built (both sides): the protocol world\'s typed mapper writes the shown count '
-         '(gpu_engine/phase_d_protocol_world.py:693 -> v5_hypothetical_state.py:149, held_volatiles) and the protocol world writes '
+         '(gpu_engine/phase_d_protocol_world.py:733 -> v5_hypothetical_state.py:149, held_volatiles) and the protocol world writes '
          'Showdown\'s duration, 4 for the silent perish3 of the Song\'s own turn, carried across a Baton Pass '
          '(gpu_engine/phase_d_protocol_world.py:242-257, 329-339); an own-held one only on the protocol route (gpu_engine/phase_d_live_worlds.py:379); '
          'gpu_engine/public_active.py:47, 218-234 keeps the public counts for the encoder'),

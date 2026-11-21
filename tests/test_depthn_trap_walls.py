@@ -143,14 +143,14 @@ class PreflightTests(unittest.TestCase):
         self.assertNotIn('native-probed-hard-trapped-own-request', {kind for kind, _ in rows})
         self.assertEqual({rows[('native-probed-or-hidden-volatile-clock', s)] for s in ('p1', 'p2')}, {'CLEAR'})
 
-    def test_mean_look_is_admitted_on_our_side_only(self):
+    def test_mean_look_is_admitted_on_both_named_sides(self):
         for owner, foe in (('p1', 'p2'), ('p2', 'p1')):
             with self.subTest(owner=owner):
                 payload = dict(selfPlayer=owner, pendingBatonPassSides=[], sides={owner: dict(volatiles=[], meanlookTrap=True, pokemon=[]),
                                                                                 foe: dict(volatiles=[], meanlookTrap=True, pokemon=[])})
                 rows = self.kinds(payload)
                 self.assertEqual(rows[('native-probed-or-hidden-volatile-clock', owner)], 'CLEAR')
-                self.assertEqual(rows[('native-probed-or-hidden-volatile-clock', foe)], 'TRIGGERED')
+                self.assertEqual(rows[('native-probed-or-hidden-volatile-clock', foe)], 'CLEAR')
         unowned = dict(pendingBatonPassSides=[], sides=dict(p1=dict(volatiles=[], meanlookTrap=True, pokemon=[])))
         self.assertEqual(self.kinds(unowned)[('native-probed-or-hidden-volatile-clock', 'p1')], 'TRIGGERED')   # no owner named
         for volatile in ('trapped', 'solarbeam'):

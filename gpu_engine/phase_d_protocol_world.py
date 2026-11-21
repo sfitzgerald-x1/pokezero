@@ -28,6 +28,7 @@ from . import device_public_worlds as public_worlds,device_public_world_state as
 from . import phase_d_live_worlds as live,phase_d_tail as tail,phase_d_transform as transform_facts
 from .v5_hypothetical_state import map_spec
 from .phase_d_constructor_rules import public_hp_bin,request_ordered_packed,own_pp_carry,sleep_support
+from .state import partially_trapped
 
 SCHEMA='pokezero.phase-d.protocol-materialization.v1'
 
@@ -119,10 +120,9 @@ def preflight_checks(payload,removed=None):
     # (engine_world._require_world_reproduces_trap) and the device derives it per request (transition.action_mask).
     checks=[dict(kind='deferred-baton-phase',status='TRIGGERED' if payload.get('pendingBatonPassSides') else 'CLEAR',fatal=True)]
     for seat,side in payload['sides'].items():
-        # encore is not refused: its count is drawn from the public posterior (_encore_facts, _write_encores); nor is a Mean
-        # Look trap on our own active (no clock: _write_own_meanlook links it to the world's trapper). trapped, solarbeam and
-        # a Mean Look trap on the opponent still are.
-        fail=bool(side.get('meanlookTrap') and seat!=payload.get('selfPlayer') or set(side['volatiles'])&{'trapped','solarbeam'})
+        # Encore's count is drawn from the public posterior; each side's Mean Look flag is linked to this world's
+        # opposing active after mapping. An unnamed owner and unclassified trapped/solarbeam volatiles still refuse.
+        fail=bool(side.get('meanlookTrap') and payload.get('selfPlayer') not in ('p1','p2') or set(side['volatiles'])&{'trapped','solarbeam'})
         checks.append(dict(kind='native-probed-or-hidden-volatile-clock',status='TRIGGERED' if fail else 'CLEAR',side=seat,fatal=True))
         blockers=side.get('materializationBlockers',())
         failed=[kind for kind in blockers if not (str(kind).startswith('item-state-removed:') and normalize_id(str(kind).split(':',1)[1]) in (removed or {}).get(seat,()))]
@@ -389,17 +389,36 @@ def _defer_traps(payload,owner):
     world's trapper instead). When either cause is ours, our request's `trapped` leaves the projection too: the CPU world no
     longer holds its cause (engine_world._require_world_reproduces_trap would refuse it), and the finished world's root mask
     is checked against the request instead (OWN_REQUEST_TRAP_REPRODUCED). Returns (projection, our Mean Look, wrapped sides);
-    the payload itself when there is nothing to defer."""
+    the payload itself when there is nothing to defer. Own Ingrain leaves the projected bag after exact ROOTED agreement;
+    the original B2 bit is restored after typed mapping, and the final device mask reproduces its request trap."""
     seat=f'p{owner+1}'
     wrapped=tuple(sorted(int(name[1])-1 for name,side in payload['sides'].items() if 'partiallytrapped' in side['volatiles']))
     meanlook=bool(payload['sides'][seat].get('meanlookTrap'))
-    if not wrapped and not meanlook:return payload,False,()
+    rooted='ingrain' in payload['sides'][seat]['volatiles']
+    if not wrapped and not meanlook and not rooted:return payload,False,()
     projected=json.loads(json.dumps(payload))
-    for side in projected['sides'].values():side['volatiles']=[v for v in side['volatiles'] if v!='partiallytrapped']
+    for name,side in projected['sides'].items():side['volatiles']=[v for v in side['volatiles'] if v!='partiallytrapped' and not (name==seat and v=='ingrain')]
     if meanlook:projected['sides'][seat]['meanlookTrap']=False
     request=projected.get('selfActiveRequestState')
-    if (meanlook or owner in wrapped) and isinstance(request,dict) and request.get('trapped'):request['trapped']=False
+    if (meanlook or rooted or owner in wrapped) and isinstance(request,dict) and request.get('trapped'):request['trapped']=False
     return projected,meanlook,wrapped
+
+
+def _rooted_agreement(payload,detached,owner):
+    """The owning payload and B2's exact active volatile agree before deferring an Ingrain request trap."""
+    shown='ingrain' in payload['sides'][f'p{owner+1}']['volatiles']
+    at=int(np.asarray(detached.own['active']))
+    held=bool(int(np.asarray(detached.own['volatile'])[at])&live.ROOTED)
+    if shown!=held:raise ValueError('OWN_INGRAIN_B2_PAYLOAD_DISAGREEMENT')
+    return shown
+
+
+def _defer_foe_meanlook(payload,owner):
+    """Remove only the opponent's Mean Look flag for mapping; retain our own request's trap constraint."""
+    seat=f'p{2-owner}';held=bool(payload['sides'][seat].get('meanlookTrap'))
+    if not held:return payload,False
+    projected=json.loads(json.dumps(payload));projected['sides'][seat]['meanlookTrap']=False
+    return projected,True
 
 
 def _wrap_agreement(facts,wrapped,detached,owner):
@@ -423,23 +442,25 @@ def _wrap_agreement(facts,wrapped,detached,owner):
             raise ValueError('PUBLIC_WRAP_B2_DISAGREEMENT')
 
 
-def _write_wraps(physical,wrapped,facts,seed):
+def _write_wraps(physical,wrapped,facts,seed,*,sources=None):
     """The world with each wrapped active's remaining partial-trap duration drawn uniformly from wrap_support (its own RNG
     per world and side, as _write_encores) and its trapper, the opposing active, as this world's party index (the engine's
     partial_trap_source: transition.py's residual releases the trap once that index is not the foe's living active, and
     state.partially_trapped traps only while it is). Refuses: no live trap on the lines (PUBLIC_WRAP_START_UNAVAILABLE), a
     support the lines rule out (PUBLIC_WRAP_COUNT_UNAVAILABLE), ticks that are not one per residual since the start
-    (PUBLIC_WRAP_TICK_DISAGREEMENT), or a trapper that is not the opposing current active (PUBLIC_WRAP_TRAPPER_NOT_ACTIVE)."""
+    (PUBLIC_WRAP_TICK_DISAGREEMENT), or an inactive trapper without an exact public party join at a pending replacement
+    boundary (PUBLIC_WRAP_TRAPPER_NOT_ACTIVE). Such a joined source keeps its identity until the engine's residual."""
     for side in wrapped:
         fact=facts[side]
         if fact is None:raise ValueError('PUBLIC_WRAP_START_UNAVAILABLE')
         support=wrap_support(fact['k'])
         if not support:raise ValueError('PUBLIC_WRAP_COUNT_UNAVAILABLE')
         if fact['k']!=fact['upkeeps']:raise ValueError('PUBLIC_WRAP_TICK_DISAGREEMENT')
-        if not fact['trapper_active']:raise ValueError('PUBLIC_WRAP_TRAPPER_NOT_ACTIVE')
+        source=int(physical.active[0,1-side]) if fact['trapper_active'] else (sources or {}).get(side)
+        if type(source)is not int or not 0<=source<6 or not fact['trapper_active'] and int(physical.hp[0,1-side,source])<=0:raise ValueError('PUBLIC_WRAP_TRAPPER_NOT_ACTIVE')
         at=int(physical.active[0,side]);count=random.Random(f'wrap:{seed}:{side}').choice(support)
         physical=physical._replace(partial_trap_counter=tail._put(physical.partial_trap_counter,(0,side,at),count),
-            partial_trap_source=tail._put(physical.partial_trap_source,(0,side,at),int(physical.active[0,1-side])))
+            partial_trap_source=tail._put(physical.partial_trap_source,(0,side,at),source))
     return physical
 
 
@@ -455,6 +476,23 @@ def _write_own_meanlook(physical,detached,meanlook,owner):
     at=int(np.asarray(detached.own['active']))
     if int(np.asarray(detached.own['trap_source'])[at])<0:raise ValueError('OWN_MEANLOOK_B2_PAYLOAD_DISAGREEMENT')
     return physical._replace(trap_source=tail._put(physical.trap_source,(0,owner,at),int(physical.active[0,1-owner])))
+
+
+def _write_foe_meanlook(physical,detached,meanlook,owner):
+    """B2's public opponent flag must agree with the payload; the source is this world's own active, never a donor slot.
+    The parser clears the flag when either active leaves, just as for _write_own_meanlook. No hidden clock is needed."""
+    features=detached.view.get('mon_features') or {};flags=features.get('meanlook_trap')
+    if flags is None:
+        if meanlook:raise ValueError('OPPONENT_MEANLOOK_B2_PAYLOAD_DISAGREEMENT')
+        return physical
+    flags=np.asarray(flags)
+    if flags.shape!=(1,6):raise ValueError('OPPONENT_MEANLOOK_B2_PAYLOAD_DISAGREEMENT')
+    if not meanlook and not flags.any():return physical
+    active=np.asarray(detached.view.get('active')).astype(bool)
+    if active.shape!=(1,6) or int(active.sum())!=1 or bool(flags[active].any())!=meanlook or flags[~active].any():
+        raise ValueError('OPPONENT_MEANLOOK_B2_PAYLOAD_DISAGREEMENT')
+    foe=1-owner;at=int(physical.active[0,foe])
+    return physical._replace(trap_source=tail._put(physical.trap_source,(0,foe,at),int(physical.active[0,owner])))
 
 
 def _restore_sleep(physical,detached,metadata,sleepers,origins,rng,base_abilities,*,diagnostics=None):
@@ -655,7 +693,9 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         projected,sleepers=_defer_sleep(root.materialization_payload)
         projected=tail.defer_substitutes(projected,tail_facts['fresh_substitutes'])
         projected,yawns=_defer_yawn(projected,inputs.lines)
+        own_rooted=_rooted_agreement(projected,detached,owner)
         projected,own_meanlook,wrapped=_defer_traps(projected,owner)
+        projected,foe_meanlook=_defer_foe_meanlook(projected,owner)
         origins=_once(inputs,root,'origins',lambda:_sleep_origins(inputs.lines))
         rows=_once(inputs,root,'revealed',lambda:tuple(public_worlds._revealed(detached,inputs.source)),shared=True)
         foes=unpack_team(start.player_teams[f'p{foe+1}'])
@@ -756,9 +796,13 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
         # Traps with no public clock in the payload: our Mean Look link, and each side's partial trap (drawn per world).
         try:
             physical=_write_own_meanlook(physical,detached,own_meanlook,owner)
+            physical=_write_foe_meanlook(physical,detached,foe_meanlook,owner)
             wrap_facts=_once(inputs,root,'wrap_facts',lambda:_wrap_facts(inputs.lines),shared=True)
             _wrap_agreement(wrap_facts,wrapped,detached,owner)
-            physical=_write_wraps(physical,wrapped,wrap_facts,seed)
+            from .phase_d_wrap_source import inactive_sources
+            sources=inactive_sources(physical,wrapped,wrap_facts,lines=inputs.lines,request=state.self_request,detached=detached,
+                metadata=metadata,assignment=assignment,owner=owner,replacement=tail_facts['replacement'])
+            physical=_write_wraps(physical,wrapped,wrap_facts,seed,sources=sources)
         except ValueError as error:
             failures.append(str(error))
             if wrapped:diagnostics.append(dict(kind='PUBLIC_WRAP_WORLD_POSTERIOR',status='TRIGGERED',fatal=True,reason=str(error)))
@@ -775,7 +819,7 @@ def materialize_protocol(root,start,*,inputs,seed,key=None):
             fail=bool(mask[4:].any())
             diagnostics.append(dict(kind='OWN_REQUEST_TRAP_REPRODUCED',status='TRIGGERED' if fail else 'CLEAR',fatal=True))
             if fail:failures.append('OWN_REQUEST_TRAP_NOT_REPRODUCED')
-        elif tail_facts['replacement'] is None and (own_meanlook or owner in wrapped):
+        elif tail_facts['replacement'] is None and (own_meanlook or own_rooted or owner in wrapped and bool(np.asarray(partially_trapped(_device(physical)))[0,owner])):
             # The other direction for a trap written on our active: Showdown traps it (tryTrap: trapped = true) and its
             # request shows `trapped` whenever we have a living bench to switch to (getMoveRequestData's canSwitchIn).
             at=int(physical.active[0,owner])
