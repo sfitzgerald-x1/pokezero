@@ -140,7 +140,7 @@ WARMUP_BUDGET=3600.
 
 
 def make_pricers(executor,forward,params,*,worlds,buckets=(1,2,4),block_lanes=2187,blocks_per_call=16,labels=guard_inputs.child_labels,
-        leaf_layout='blocks',wide_nodes=None):
+        leaf_layout='blocks',wide_nodes=None,program_cache=None):
     """The live pricers: {bucket b: ObservedDepthNPricer(capacity b x W/2, depth 2, k 9, k1 9/9, prior, fixed_capacity)} with
     `forward` (the champion) and one program table shared after binding `params` (block programs compile once, P1 once per
     bucket); `labels` is the effect guard's turn-1 child gather (depthn_guard_inputs); `leaf_layout`/`wide_nodes` the leaf
@@ -150,7 +150,7 @@ def make_pricers(executor,forward,params,*,worlds,buckets=(1,2,4),block_lanes=21
     for b in buckets:
         p=guard_inputs.ObservedDepthNPricer(executor,None,capacity=b*(worlds//2),depth=DEPTH,k_own=WIDTH,k_opp=WIDTH,k1_own=WIDTH,k1_opp=WIDTH,block_lanes=block_lanes,
             blocks_per_call=blocks_per_call,selection='prior',fixed_capacity=True,forward=forward,actor_capacity=len(params),labels=labels,
-            leaf_layout=leaf_layout,wide_nodes=wide_nodes)
+            leaf_layout=leaf_layout,wide_nodes=wide_nodes,program_cache=program_cache)
         p.bind(params);p.programs=table;out[b]=p
     return out
 
