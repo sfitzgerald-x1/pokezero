@@ -1,0 +1,14 @@
+{
+ "path": "gpu_engine/phase_d_protocol_world.py",
+ "anchors": {
+  "def-defer-traps": {"scope": "_defer_traps", "needle": "def _defer_traps", "extent": "stmt", "digest": "110c296c0581", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "def-wrap-facts": {"scope": "_wrap_facts", "needle": "def _wrap_facts", "extent": "stmt", "digest": "5ded12ba201d", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "def-wrap-support": {"scope": "wrap_support", "needle": "def wrap_support", "extent": "stmt", "digest": "7594154a064c", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "def-write-held-counts": {"scope": "_write_held_counts", "needle": "def _write_held_counts", "extent": "stmt", "digest": "a59202416709", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "def-write-wraps": {"scope": "_write_wraps", "needle": "def _write_wraps", "extent": "stmt", "digest": "4e6c0143f478", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "defer-yawn": {"scope": "_defer_yawn", "needle": "_defer_yawn", "extent": "stmt", "digest": "7f9f03b89664", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "map-spec": {"scope": "materialize_protocol", "needle": "map_spec", "extent": "line", "digest": "a458155af7a6", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "perish-counts": {"scope": "_perish_counts", "needle": "_perish_counts", "extent": "stmt", "digest": "2c2d10706439", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "public-item-swap-not-supported": {"scope": "", "needle": "def _removed_items", "extent": "stmt", "digest": "9d156364b96f", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

@@ -1,0 +1,27 @@
+{
+ "path": "gpu_engine/state.py",
+ "anchors": {
+  "charge-move": {"scope": "BattleState", "needle": "charge_move", "extent": {"through": {"scope": "BattleState", "needle": "    charge_counter: jax.Array", "extent": "line"}}, "digest": "35bc24beb125", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "choice-move": {"scope": "BattleState", "needle": "choice_move", "extent": "line", "digest": "ecd6badac7ad", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "class-battlestate": {"scope": "BattleState", "needle": "class BattleState", "extent": {"through": {"scope": "BattleState", "needle": "partial_trap_source: jax.Array", "extent": "line"}}, "digest": "533cddf1c1c3", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "def-usable-moves": {"scope": "usable_moves", "needle": "def usable_moves", "extent": {"through": {"scope": "usable_moves", "needle": "def usable_moves(state: BattleState) -> jax.Array:", "extent": "line"}}, "digest": "f069bce12576", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "destiny-bond": {"scope": "", "needle": "DESTINY_BOND", "extent": "line", "digest": "2fd4ff425695", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "encore-counter": {"scope": "BattleState", "needle": "encore_move", "extent": {"through": {"scope": "BattleState", "needle": "encore_counter: jax.Array", "extent": "line"}}, "digest": "28653241ee58", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "focus-punch": {"scope": "", "needle": "FOCUS_PUNCH", "extent": {"through": {"scope": "", "needle": "FOCUS_LOST = 32", "extent": "line"}}, "digest": "62d9b0d5fd73", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "item-knocked": {"scope": "BattleState", "needle": "item_knocked", "extent": "line", "digest": "bdb132e42dfc", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "leech-seed": {"scope": "", "needle": "LEECH_SEED", "extent": "line", "digest": "9b0ff2d94390", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "partial-trap-counter": {"scope": "BattleState", "needle": "partial_trap_counter", "extent": {"through": {"scope": "BattleState", "needle": "partial_trap_source: jax.Array", "extent": "line"}}, "digest": "0f749833356f", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "perish-counter": {"scope": "BattleState", "needle": "perish_counter", "extent": "line", "digest": "ce1c7d3682b4", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "protect-counter": {"scope": "BattleState", "needle": "protect_counter", "extent": "line", "digest": "351d253a0678", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "recharge-counter": {"scope": "BattleState", "needle": "recharge_counter", "extent": "line", "digest": "d2bf4a81aa87", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "sleep-skipped": {"scope": "BattleState", "needle": "sleep_skipped", "extent": "line", "digest": "f40aeb6785a8", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "spikes": {"scope": "BattleState", "needle": "spikes", "extent": "line", "digest": "cb6921950512", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "status-counter": {"scope": "BattleState", "needle": "status:", "extent": {"through": {"scope": "BattleState", "needle": "rest_origin: jax.Array", "extent": "line"}}, "digest": "8c721cc599e8", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "substitute-hp": {"scope": "BattleState", "needle": "substitute_hp", "extent": "line", "digest": "23c6a08a704b", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "trap-source": {"scope": "BattleState", "needle": "    trap_source", "extent": "line", "digest": "6fe3b14cc08f", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "truant-loaf": {"scope": "BattleState", "needle": "truant_loaf", "extent": "line", "digest": "98e64b7dacc7", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "weather-counter": {"scope": "BattleState", "needle": "weather:", "extent": {"through": {"scope": "BattleState", "needle": "weather_counter: jax.Array", "extent": "line"}}, "digest": "0bd24c408c30", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "wish-counter": {"scope": "BattleState", "needle": "wish_counter", "extent": {"through": {"scope": "BattleState", "needle": "wish_amount: jax.Array", "extent": "line"}}, "digest": "48f547386d3b", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "yawn-counter": {"scope": "BattleState", "needle": "yawn_counter", "extent": "line", "digest": "e0a141ed65cc", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

@@ -1,0 +1,7 @@
+{
+ "path": "gpu_engine/transform.py",
+ "anchors": {
+  "def-apply": {"scope": "apply", "needle": "def apply", "extent": "line", "digest": "7e7c88e5a180", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "def-revert": {"scope": "revert", "needle": "def revert", "extent": "line", "digest": "a62aad8f43cf", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

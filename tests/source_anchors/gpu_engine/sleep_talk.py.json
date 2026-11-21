@@ -1,0 +1,6 @@
+{
+ "path": "gpu_engine/sleep_talk.py",
+ "anchors": {
+  "sleeptalk": {"scope": "from_metadata", "needle": "def from_metadata", "extent": {"through": {"scope": "from_metadata", "needle": "allowed.append(name not in {\"_none\",\"sleeptalk\",\"struggle\"}", "extent": "line"}}, "digest": "0b4958f6951f", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

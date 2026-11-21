@@ -1,0 +1,6 @@
+{
+ "path": "gpu_engine/entry.py",
+ "anchors": {
+  "spikes": {"scope": "from_metadata", "needle": "spikes", "extent": "line", "digest": "16043483c519", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

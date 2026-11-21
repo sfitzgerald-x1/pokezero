@@ -1,0 +1,6 @@
+{
+ "path": "gpu_engine/sustain.py",
+ "anchors": {
+  "leechseed": {"scope": "from_metadata", "needle": "def from_metadata", "extent": "stmt", "digest": "92ac738765ba", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

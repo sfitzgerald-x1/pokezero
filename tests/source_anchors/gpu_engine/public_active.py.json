@@ -1,0 +1,7 @@
+{
+ "path": "gpu_engine/public_active.py",
+ "anchors": {
+  "perish": {"scope": "ActiveTables", "needle": "perish", "extent": "line", "digest": "4f27df4a2d24", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "perish-start": {"scope": "apply", "needle": "named=", "extent": {"through": {"scope": "apply", "needle": "bag=jnp.where(((op==ADD)|(op==PERISH_START))[:,None],bag|mask,jnp.where((op==REMOVE)[:,None],bag&~mask,bag))", "extent": "line"}}, "digest": "a69105d0dfbd", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

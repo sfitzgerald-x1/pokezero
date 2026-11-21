@@ -1,0 +1,10 @@
+{
+ "path": "gpu_engine/phase_d_live_worlds.py",
+ "anchors": {
+  "destiny-bond": {"scope": "from_b2", "needle": "DESTINY_BOND", "extent": "line", "digest": "f187b52f72ef", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "materialize-copy": {"scope": "_materialize_phase_d", "needle": "from .", "extent": {"through": {"scope": "_materialize_phase_d", "needle": "world = materializer.materialize(root, start, tables, recipe,transform_mapper=materialize_copy)", "extent": "line"}}, "digest": "77fb318cae1e", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "own-volatile-or-latent-clock-unavailable": {"scope": "from_b2", "needle": "if any", "extent": "stmt", "digest": "9bf59f796849", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "partiallytrapped": {"scope": "from_b2", "needle": "'partiallytrapped'", "extent": "line", "digest": "ad1296bd7dc2", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "transform-check-evidence": {"scope": "from_b2", "needle": "from . import phase_d_transform", "extent": {"through": {"scope": "from_b2", "needle": "transform.check_evidence(state,catalog,transform_facts)", "extent": "line"}}, "digest": "081b2b760c9c", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

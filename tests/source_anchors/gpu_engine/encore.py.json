@@ -1,0 +1,7 @@
+{
+ "path": "gpu_engine/encore.py",
+ "anchors": {
+  "def-apply": {"scope": "", "needle": "def apply", "extent": {"through": {"scope": "residual", "needle": "def residual(state,side,*,eligible):", "extent": "line"}}, "digest": "46c3ff347707", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "def-from-metadata": {"scope": "from_metadata", "needle": "def from_metadata", "extent": "stmt", "digest": "a4d92b8ccaea", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

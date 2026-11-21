@@ -1,0 +1,9 @@
+{
+ "path": "gpu_engine/engine_request_source.py",
+ "anchors": {
+  "charge-move": {"scope": "_produce", "needle": "charge_move", "extent": "line", "digest": "3d6de3621d37", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "encore": {"scope": "_produce", "needle": "locked =", "extent": "stmt", "digest": "eb6cc9b79eba", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "lock": {"scope": "_produce", "needle": "LOCK", "extent": "line", "digest": "1e715409af07", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "unsafe-history": {"scope": "_unsafe_history", "needle": "_unsafe_history", "extent": "stmt", "digest": "9d8440f1d3cb", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

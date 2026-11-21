@@ -1,0 +1,6 @@
+{
+ "path": "gpu_engine/items.py",
+ "anchors": {
+  "trick-jax-array": {"scope": "ItemTable", "needle": "trick: jax.Array", "extent": "line", "digest": "029c2c3fcea9", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

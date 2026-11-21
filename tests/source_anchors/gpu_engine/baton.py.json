@@ -1,0 +1,6 @@
+{
+ "path": "gpu_engine/baton.py",
+ "anchors": {
+  "batonpass": {"scope": "from_metadata", "needle": "batonpass", "extent": "line", "digest": "972426be84f4", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

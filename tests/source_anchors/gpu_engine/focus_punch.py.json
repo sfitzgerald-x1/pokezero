@@ -1,0 +1,6 @@
+{
+ "path": "gpu_engine/focus_punch.py",
+ "anchors": {
+  "focuspunch": {"scope": "from_metadata", "needle": "def from_metadata", "extent": "stmt", "digest": "2837c75d3d5c", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

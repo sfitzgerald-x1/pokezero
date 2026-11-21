@@ -1,0 +1,7 @@
+{
+ "path": "gpu_engine/linked_traps.py",
+ "anchors": {
+  "meanlook": {"scope": "from_metadata", "needle": "def from_metadata", "extent": "stmt", "digest": "8f7ff627d595", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "meanlook-2": {"scope": "", "needle": "def from_metadata", "extent": {"through": {"scope": "apply", "needle": "jnp.where(hit,actor,old)))", "extent": "line"}}, "digest": "8bb594d6a946", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

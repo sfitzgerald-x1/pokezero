@@ -1,0 +1,6 @@
+{
+ "path": "gpu_engine/engine_device_observation.py",
+ "anchors": {
+  "own-moves": {"scope": "encode", "needle": "foe_num = foe_num.at[..., base_columns", "extent": {"through": {"scope": "encode", "needle": "move = j.where(charged[:, None], j.where(j.arange(4) == 0, charge_move[:, None], 0), move)", "extent": "line"}}, "digest": "5e40c76ae77b", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}
