@@ -246,8 +246,11 @@ class CollectorAuditTests(unittest.TestCase):
         arrays = dict(streams=j.array([3, 7, 5, 7], dtype=j.int32),
                       mask=j.array([True, False, True, True]),
                       values=j.array([[1., 2.], [3., 4.], [5., 6.], [7., 8.]], dtype=j.float32))
-        with tempfile.TemporaryDirectory() as directory, patch.object(j, 'take', side_effect=AssertionError):
-            for n, indices in ((3, [1, 2]), (2, [1])):
+        with (tempfile.TemporaryDirectory() as directory,
+              patch.object(j, 'take', side_effect=AssertionError),
+              patch.object(v2_fused, '_AUDIT_GATHER_ROWS', 2),
+              patch.object(torch, 'as_tensor', wraps=torch.as_tensor) as take):
+            for n, indices in ((4, [1, 2, 3]), (3, [1, 2]), (2, [1])):
                 store = RowStore(arrays, n, {}, {})
                 sampled, empty = v2_fused.audit(store, [(1, 5, 7), (2, 8, 9)], directory)
                 self.assertEqual(sampled['rows'], len(indices))
@@ -258,6 +261,7 @@ class CollectorAuditTests(unittest.TestCase):
                         for name, field in arrays.items():
                             self.assertEqual(written[name].dtype, field.dtype)
                             np.testing.assert_array_equal(written[name], np.asarray(field)[expected])
+            self.assertEqual([call.args[0].shape for call in take.call_args_list], [(2,)] * 4)
 
 
 class FusedDeferredTests(unittest.TestCase):

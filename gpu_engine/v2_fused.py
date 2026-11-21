@@ -148,6 +148,9 @@ def construct(context, backend, iteration, current, past, ordinal, *, shard=None
     return roster, kinds, len(historical)
 
 
+_AUDIT_GATHER_ROWS = 4096
+
+
 def audit(store, blocks, out):
     """Compressed host copy of the audited blocks' rows (keys, targets and inputs)."""
     if not blocks:
@@ -156,15 +159,22 @@ def audit(store, blocks, out):
     import torch
 
     streams = np.asarray(jax.device_get(store.arrays['streams']))[:store.n]
-    device = torch.from_dlpack(store.arrays['streams']).device
+    columns = {name: torch.from_dlpack(value) for name, value in store.arrays.items()}
+    device = columns['streams'].device
     written = []
     for index, lo, hi in blocks:
         rows = np.flatnonzero((streams >= lo) & (streams <= hi))
-        take = torch.as_tensor(rows, device=device)
-        # Match the trainer's DLPack handoff without compiling an XLA kernel
-        # for the varying number of valid or sampled rows.
-        arrays = {name: torch.from_dlpack(value).index_select(0, take).cpu().numpy()
+        arrays = {name: np.empty((len(rows), *value.shape[1:]), dtype=value.dtype)
                   for name, value in store.arrays.items()}
+        for begin in range(0, len(rows), _AUDIT_GATHER_ROWS):
+            selected = rows[begin:begin + _AUDIT_GATHER_ROWS]
+            valid = len(selected)
+            padded = np.zeros(_AUDIT_GATHER_ROWS, dtype=np.int64)
+            padded[:valid] = selected
+            take = torch.as_tensor(padded, device=device)
+            # Use fixed-size device gathers and omit padded rows from the archive.
+            for name, column in columns.items():
+                arrays[name][begin:begin + valid] = column.index_select(0, take)[:valid].cpu().numpy()
         path = Path(out, f'audit-block-{index:06d}.npz');np.savez_compressed(path, **arrays)
         written.append(dict(block=index, streams=[int(lo), int(hi)], rows=int(len(rows)), path=str(path), bytes=path.stat().st_size))
     return written
