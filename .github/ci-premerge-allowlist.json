@@ -1,0 +1,16 @@
+{
+  "pr_workflows": {
+    "premerge.yml": ["pull_request"]
+  },
+  "premerge_jobs": ["core", "hygiene", "premerge"],
+  "core_lanes": [
+    "turn",
+    "collect",
+    "encode",
+    "encode-parity",
+    "search",
+    "oracle",
+    "learn",
+    "serve"
+  ]
+}
