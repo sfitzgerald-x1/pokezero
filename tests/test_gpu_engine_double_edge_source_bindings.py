@@ -23,15 +23,13 @@ class DoubleEdgeSourceBindingTests(unittest.TestCase):
   # §6 (the effect-coordinate chance proof) re-certifies four bodies and the pinned-file inventories at its own commits:
   # 72670171 and 3b0cc40e (plan_for_state's effect axes and SUSPENDED_ROOT_SAVED_BLOCKS, conditional_law's saved
   # effect block, residual_order.py in SOURCE_PINS and the domain lists) and 53dc3add (ordinary_law's effect bank).
-  # The integration merge preserves the reviewed Transform and Tier D logic, adds transform.py
-  # to the ordered domain tables and witness inventory, and keeps the single-snapshot plan gates.
-  # Certify the merged bodies and inventories at the merge commit, before this test-only update.
-  certified={'chance_consumers.py':'ccfb148638dab12fbcf62339cfe4c7905e54f13f',
-             'chance_consumers_pins.py':'ccfb148638dab12fbcf62339cfe4c7905e54f13f',
-             'phase_d_chance.py':'ccfb148638dab12fbcf62339cfe4c7905e54f13f',
-             'conditional_law.py':'ccfb148638dab12fbcf62339cfe4c7905e54f13f',
-             'engine_source_frame_witness.py':'ccfb148638dab12fbcf62339cfe4c7905e54f13f',
-             'ordinary_law.py':'ccfb148638dab12fbcf62339cfe4c7905e54f13f'}
+  # Certify the integrated gate bodies and pin inventories at the merge commit.
+  certified={'chance_consumers.py':'790a9715be8bc49181a43a3f763422e89936c5b2',
+             'chance_consumers_pins.py':'790a9715be8bc49181a43a3f763422e89936c5b2',
+             'phase_d_chance.py':'790a9715be8bc49181a43a3f763422e89936c5b2',
+             'conditional_law.py':'790a9715be8bc49181a43a3f763422e89936c5b2',
+             'engine_source_frame_witness.py':'790a9715be8bc49181a43a3f763422e89936c5b2',
+             'ordinary_law.py':'790a9715be8bc49181a43a3f763422e89936c5b2'}
   constants={'SOURCE_PINS','MAPPING_PINS','DOMAIN_PINS','KERNEL_PINS','DOMAIN_SHA256','KERNEL_SHA256'}
   for file in ('chance_consumers.py','chance_consumers_pins.py','ordinary_law.py','conditional_law.py',
                'engine_source_frame_witness.py','phase_d_chance.py'):
