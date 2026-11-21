@@ -12,15 +12,21 @@ from pokezero.s0_transfer_roster import (
 )
 
 
-def test_staged_bridge_contains_the_witness_port(tmp_path, monkeypatch):
+def test_staged_bridge_contains_the_witness_port(tmp_path, monkeypatch, capsys):
     from pokezero import s0_transfer_harness as harness
 
     bundle = tmp_path / "bridge.zip"
-    harness.pack_bridge(bundle)
+    staged = tmp_path / "staged.zip"
+    harness.main(["pack-bridge", str(bundle), "--worker-path", str(staged)])
+    bridge, path, sha_option, expected_sha = json.loads(capsys.readouterr().out)
+    assert (bridge, path, sha_option) == ("--bridge", str(staged), "--bridge-sha")
+    assert expected_sha == hashlib.sha256(bundle.read_bytes()).hexdigest()
+
+    staged.write_bytes(bundle.read_bytes())
     installed_root = tmp_path / "installed"
     installed_root.mkdir()
     monkeypatch.setattr(harness, "__file__", str(installed_root / "src/pokezero/s0_transfer_harness.py"))
-    harness.install_bridge(bundle, hashlib.sha256(bundle.read_bytes()).hexdigest())
+    harness.install_bridge(staged, expected_sha)
     bridge = installed_root / "scripts/battle_bridge.mjs"
     witness = installed_root / "scripts/battle_bridge_witness_port.mjs"
     assert f"./{witness.name}" in bridge.read_text()

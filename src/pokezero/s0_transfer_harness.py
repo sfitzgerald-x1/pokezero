@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 from types import SimpleNamespace
 import zipfile
@@ -273,6 +274,7 @@ def pack_bridge(path):
     with zipfile.ZipFile(path, "x", compression=zipfile.ZIP_DEFLATED) as archive:
         for name in BRIDGE_SOURCES:
             archive.writestr(name, (source / name).read_bytes())
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def install_bridge(path, expected_sha):
@@ -464,10 +466,24 @@ async def showdown_fp(prepared, model, manifest, cells, *, publish, replica):
     await asyncio.gather(*(play_next() for _ in range(4)))
 
 
-def main():
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["pack-bridge"]:
+        parser = argparse.ArgumentParser(
+            prog="s0_transfer_harness pack-bridge",
+            description="Pack the current Showdown bridge and print worker arguments as JSON.",
+        )
+        parser.add_argument("output", type=Path)
+        parser.add_argument("--worker-path", type=Path, help="destination of the staged archive")
+        args = parser.parse_args(argv[1:])
+        bridge_sha = pack_bridge(args.output)
+        worker_path = args.worker_path or args.output.resolve()
+        print(json.dumps(["--bridge", str(worker_path), "--bridge-sha", bridge_sha]))
+        return
+
     from .v5_model import V5ModelConfig
 
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, epilog="Use pack-bridge to build the staged archive.")
     parser.add_argument("side", choices=("prepare", "engine", "showdown"))
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--runtime", type=Path, required=True)
@@ -478,7 +494,9 @@ def main():
     parser.add_argument("--bridge", type=Path)
     parser.add_argument("--bridge-sha")
     parser.add_argument("--spec", type=Path, help="registered production inputs; omit for the unscored scratch roster")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if (args.bridge is None) != (args.bridge_sha is None):
+        parser.error("--bridge and --bridge-sha must be supplied together")
     root = args.out.resolve()
     root.mkdir(parents=True, exist_ok=True)
     manifest_path = root / "manifest.json"
