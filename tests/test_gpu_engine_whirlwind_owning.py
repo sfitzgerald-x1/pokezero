@@ -113,7 +113,10 @@ console.log(JSON.stringify(out));"""
    at=int(p.start[0])+offset;words=done.words.at[0,at,column].add(1);l=done.execution.ledger._replace(words=done.execution.ledger.words.at[0,at,column].add(1));bad=done._replace(words=words,execution=done.execution._replace(ledger=l));self.assertEqual(cb.owned(bad,p.start+offset).tolist(),[False]+[True]*7,(offset,column))
 
  def test_default_phazing_program_exact_and_current_pins(self):
-  old=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/phazing.py'],text=True));new=ast.parse(Path('gpu_engine/phazing.py').read_text())
+  historical=subprocess.check_output(['git','show',BASE+':gpu_engine/phazing.py'],text=True)
+  self.assertEqual(historical.count('entry.restore_sleep('),1)
+  old=ast.parse(historical.replace('entry.restore_sleep(','entry.switch_in_status('))
+  new=ast.parse(Path('gpu_engine/phazing.py').read_text())
   class Strip(ast.NodeTransformer):
    def visit_If(self,n):
     if ast.unparse(n.test)=='_public_trace is not None':return n.orelse

@@ -1,0 +1,309 @@
+{
+ "beliefs": [
+  {
+   "condition": "0 fnt",
+   "gender": null,
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Explosion"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p1",
+   "species": "Claydol"
+  },
+  {
+   "condition": "33/100",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Hydro Pump"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p1",
+   "species": "Swampert"
+  }
+ ],
+ "census": {
+  "species": {
+   "claydol": {
+    "census_lik": [
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "census_n": 6,
+    "census_n_after": 6,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "claydol-1-variant-1",
+     "claydol-1-variant-2",
+     "claydol-1-variant-3",
+     "claydol-1-variant-4",
+     "claydol-1-variant-5",
+     "claydol-1-variant-6"
+    ],
+    "true_variant": "claydol-1-variant-4"
+   },
+   "swampert": {
+    "census_lik": [
+     0.0625,
+     0.0625,
+     0.0625,
+     0.0625,
+     0.0625
+    ],
+    "census_n": 5,
+    "census_n_after": 5,
+    "census_strikes": 1,
+    "survivor_ids": [
+     "swampert-1-variant-1",
+     "swampert-2-variant-3",
+     "swampert-3-variant-5",
+     "swampert-3-variant-6",
+     "swampert-3-variant-7"
+    ],
+    "true_variant": "swampert-1-variant-1"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Claydol",
+    "crit": false,
+    "eff": null,
+    "hp_before": 267,
+    "ko": true,
+    "line": 29,
+    "move": "explosion",
+    "n_excluded_universe": 0,
+    "n_variants_with_move": 6,
+    "observed": 267,
+    "reason": null,
+    "true_match": 16,
+    "true_variant": "claydol-1-variant-4"
+   },
+   {
+    "attacker": "Swampert",
+    "crit": false,
+    "eff": null,
+    "hp_before": 238,
+    "ko": false,
+    "line": 46,
+    "move": "hydropump",
+    "n_excluded_universe": 0,
+    "n_variants_with_move": 5,
+    "observed": 126,
+    "reason": null,
+    "true_match": 1,
+    "true_variant": "swampert-1-variant-1"
+   },
+   {
+    "attacker": "Swampert",
+    "crit": false,
+    "eff": null,
+    "hp_before": 112,
+    "ko": true,
+    "line": 56,
+    "move": "hydropump",
+    "n_excluded_universe": null,
+    "n_variants_with_move": null,
+    "observed": 112,
+    "reason": "ambiguous-band",
+    "true_match": null,
+    "true_variant": null
+   }
+  ]
+ },
+ "decision_index": 4,
+ "format_id": "gen3randombattle",
+ "name": "refusal_ambiguous_pinch",
+ "note": "Census refusal: ambiguous_pinch",
+ "ordinal": 2453,
+ "owner": "p2",
+ "posterior": {
+  "claydol": {
+   "hard": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "provenance": "e68d8b226ebd2ef9d45092eb7422cfc2f507c20d438d78be617b3bc92bdc0a76",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      16,
+      16,
+      16,
+      16,
+      16,
+      16,
+      0,
+      0,
+      0,
+      0
+     ],
+     "crit": false,
+     "ko": true,
+     "line": 29,
+     "move": "explosion",
+     "observed": 267,
+     "reason": ""
+    }
+   ],
+   "weights": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "swampert": {
+   "hard": [
+    0,
+    2,
+    4,
+    5,
+    6
+   ],
+   "provenance": "e68d8b226ebd2ef9d45092eb7422cfc2f507c20d438d78be617b3bc92bdc0a76",
+   "strikes": [
+    {
+     "admitted": true,
+     "counts": [
+      1,
+      0,
+      1,
+      0,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0
+     ],
+     "crit": false,
+     "ko": false,
+     "line": 46,
+     "move": "hydropump",
+     "observed": 126,
+     "reason": ""
+    },
+    {
+     "admitted": false,
+     "counts": null,
+     "crit": false,
+     "ko": true,
+     "line": 56,
+     "move": "hydropump",
+     "observed": 112,
+     "reason": "ambiguous-band"
+    }
+   ],
+   "weights": [
+    1,
+    0,
+    1,
+    0,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0
+   ]
+  }
+ },
+ "prefix_sha256": "a48c9c0f9a1c65f213b42482d049848a3d865c26d365165ad4d3a7d3044b3619",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400408",
+  "decision_index": 4,
+  "generation": 10,
+  "lines": [
+   "|t:|1794591275",
+   "|gametype|singles",
+   "|player|p1|FoulPlayBot||",
+   "|player|p2|PokeZeroBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794591275",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Claydol|Claydol, L81|100/100",
+   "|switch|p2a: Nidoking|Nidoking, L82, M|267/267",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Megahorn\",\"id\":\"megahorn\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Shadow Ball\",\"id\":\"shadowball\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false},{\"move\":\"Sludge Bomb\",\"id\":\"sludgebomb\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Nidoking\",\"details\":\"Nidoking, L82, M\",\"condition\":\"267/267\",\"active\":true,\"stats\":{\"atk\":198,\"def\":173,\"spa\":187,\"spd\":170,\"spe\":187},\"moves\":[\"megahorn\",\"shadowball\",\"earthquake\",\"sludgebomb\"],\"baseAbility\":\"poisonpoint\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Deoxys\",\"details\":\"Deoxys-Attack, L70\",\"condition\":\"186/186\",\"active\":false,\"stats\":{\"atk\":293,\"def\":69,\"spa\":293,\"spd\":69,\"spe\":251},\"moves\":[\"shadowball\",\"psychoboost\",\"superpower\",\"extremespeed\"],\"baseAbility\":\"pressure\",\"item\":\"whiteherb\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Steelix\",\"details\":\"Steelix, L82, M\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":187,\"def\":375,\"spa\":137,\"spd\":154,\"spe\":96},\"moves\":[\"toxic\",\"earthquake\",\"protect\",\"doubleedge\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Yanma\",\"details\":\"Yanma, L92, M\",\"condition\":\"267/267\",\"active\":false,\"stats\":{\"atk\":171,\"def\":134,\"spa\":189,\"spd\":134,\"spe\":227},\"moves\":[\"substitute\",\"shadowball\",\"reversal\",\"hiddenpowerflying\"],\"baseAbility\":\"speedboost\",\"item\":\"liechiberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Blissey\",\"details\":\"Blissey, L76, F\",\"condition\":\"513/513\",\"active\":false,\"stats\":{\"atk\":20,\"def\":59,\"spa\":158,\"spd\":249,\"spe\":128},\"moves\":[\"aromatherapy\",\"toxic\",\"seismictoss\",\"softboiled\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Pinsir\",\"details\":\"Pinsir, L81, F\",\"condition\":\"238/238\",\"active\":false,\"stats\":{\"atk\":248,\"def\":208,\"spa\":136,\"spd\":159,\"spe\":184},\"moves\":[\"rockslide\",\"swordsdance\",\"hiddenpowerbug\",\"earthquake\"],\"baseAbility\":\"hypercutter\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794591278",
+   "|move|p2a: Nidoking|Megahorn|p1a: Claydol",
+   "|-supereffective|p1a: Claydol",
+   "|-damage|p1a: Claydol|5/100",
+   "|move|p1a: Claydol|Explosion|p2a: Nidoking",
+   "|-damage|p2a: Nidoking|0 fnt",
+   "|faint|p1a: Claydol",
+   "|faint|p2a: Nidoking",
+   "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Nidoking\",\"details\":\"Nidoking, L82, M\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":198,\"def\":173,\"spa\":187,\"spd\":170,\"spe\":187},\"moves\":[\"megahorn\",\"shadowball\",\"earthquake\",\"sludgebomb\"],\"baseAbility\":\"poisonpoint\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Deoxys\",\"details\":\"Deoxys-Attack, L70\",\"condition\":\"186/186\",\"active\":false,\"stats\":{\"atk\":293,\"def\":69,\"spa\":293,\"spd\":69,\"spe\":251},\"moves\":[\"shadowball\",\"psychoboost\",\"superpower\",\"extremespeed\"],\"baseAbility\":\"pressure\",\"item\":\"whiteherb\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Steelix\",\"details\":\"Steelix, L82, M\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":187,\"def\":375,\"spa\":137,\"spd\":154,\"spe\":96},\"moves\":[\"toxic\",\"earthquake\",\"protect\",\"doubleedge\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Yanma\",\"details\":\"Yanma, L92, M\",\"condition\":\"267/267\",\"active\":false,\"stats\":{\"atk\":171,\"def\":134,\"spa\":189,\"spd\":134,\"spe\":227},\"moves\":[\"substitute\",\"shadowball\",\"reversal\",\"hiddenpowerflying\"],\"baseAbility\":\"speedboost\",\"item\":\"liechiberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Blissey\",\"details\":\"Blissey, L76, F\",\"condition\":\"513/513\",\"active\":false,\"stats\":{\"atk\":20,\"def\":59,\"spa\":158,\"spd\":249,\"spe\":128},\"moves\":[\"aromatherapy\",\"toxic\",\"seismictoss\",\"softboiled\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Pinsir\",\"details\":\"Pinsir, L81, F\",\"condition\":\"238/238\",\"active\":false,\"stats\":{\"atk\":248,\"def\":208,\"spa\":136,\"spd\":159,\"spe\":184},\"moves\":[\"rockslide\",\"swordsdance\",\"hiddenpowerbug\",\"earthquake\"],\"baseAbility\":\"hypercutter\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794591281",
+   "|switch|p2a: Pinsir|Pinsir, L81, F|238/238",
+   "|switch|p1a: Swampert|Swampert, L78, M|100/100",
+   "|",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":48,\"maxpp\":48,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Bug 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Pinsir\",\"details\":\"Pinsir, L81, F\",\"condition\":\"238/238\",\"active\":true,\"stats\":{\"atk\":248,\"def\":208,\"spa\":136,\"spd\":159,\"spe\":184},\"moves\":[\"rockslide\",\"swordsdance\",\"hiddenpowerbug\",\"earthquake\"],\"baseAbility\":\"hypercutter\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Deoxys\",\"details\":\"Deoxys-Attack, L70\",\"condition\":\"186/186\",\"active\":false,\"stats\":{\"atk\":293,\"def\":69,\"spa\":293,\"spd\":69,\"spe\":251},\"moves\":[\"shadowball\",\"psychoboost\",\"superpower\",\"extremespeed\"],\"baseAbility\":\"pressure\",\"item\":\"whiteherb\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Steelix\",\"details\":\"Steelix, L82, M\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":187,\"def\":375,\"spa\":137,\"spd\":154,\"spe\":96},\"moves\":[\"toxic\",\"earthquake\",\"protect\",\"doubleedge\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Yanma\",\"details\":\"Yanma, L92, M\",\"condition\":\"267/267\",\"active\":false,\"stats\":{\"atk\":171,\"def\":134,\"spa\":189,\"spd\":134,\"spe\":227},\"moves\":[\"substitute\",\"shadowball\",\"reversal\",\"hiddenpowerflying\"],\"baseAbility\":\"speedboost\",\"item\":\"liechiberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Blissey\",\"details\":\"Blissey, L76, F\",\"condition\":\"513/513\",\"active\":false,\"stats\":{\"atk\":20,\"def\":59,\"spa\":158,\"spd\":249,\"spe\":128},\"moves\":[\"aromatherapy\",\"toxic\",\"seismictoss\",\"softboiled\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoking\",\"details\":\"Nidoking, L82, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":198,\"def\":173,\"spa\":187,\"spd\":170,\"spe\":187},\"moves\":[\"megahorn\",\"shadowball\",\"earthquake\",\"sludgebomb\"],\"baseAbility\":\"poisonpoint\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794591283",
+   "|move|p2a: Pinsir|Swords Dance|p2a: Pinsir",
+   "|-boost|p2a: Pinsir|atk|2",
+   "|move|p1a: Swampert|Hydro Pump|p2a: Pinsir",
+   "|-damage|p2a: Pinsir|112/238",
+   "|",
+   "|upkeep",
+   "|turn|3",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Rock Slide\",\"id\":\"rockslide\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Swords Dance\",\"id\":\"swordsdance\",\"pp\":47,\"maxpp\":48,\"target\":\"self\",\"disabled\":false},{\"move\":\"Hidden Power Bug 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Earthquake\",\"id\":\"earthquake\",\"pp\":16,\"maxpp\":16,\"target\":\"allAdjacent\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Pinsir\",\"details\":\"Pinsir, L81, F\",\"condition\":\"112/238\",\"active\":true,\"stats\":{\"atk\":248,\"def\":208,\"spa\":136,\"spd\":159,\"spe\":184},\"moves\":[\"rockslide\",\"swordsdance\",\"hiddenpowerbug\",\"earthquake\"],\"baseAbility\":\"hypercutter\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Deoxys\",\"details\":\"Deoxys-Attack, L70\",\"condition\":\"186/186\",\"active\":false,\"stats\":{\"atk\":293,\"def\":69,\"spa\":293,\"spd\":69,\"spe\":251},\"moves\":[\"shadowball\",\"psychoboost\",\"superpower\",\"extremespeed\"],\"baseAbility\":\"pressure\",\"item\":\"whiteherb\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Steelix\",\"details\":\"Steelix, L82, M\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":187,\"def\":375,\"spa\":137,\"spd\":154,\"spe\":96},\"moves\":[\"toxic\",\"earthquake\",\"protect\",\"doubleedge\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Yanma\",\"details\":\"Yanma, L92, M\",\"condition\":\"267/267\",\"active\":false,\"stats\":{\"atk\":171,\"def\":134,\"spa\":189,\"spd\":134,\"spe\":227},\"moves\":[\"substitute\",\"shadowball\",\"reversal\",\"hiddenpowerflying\"],\"baseAbility\":\"speedboost\",\"item\":\"liechiberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Blissey\",\"details\":\"Blissey, L76, F\",\"condition\":\"513/513\",\"active\":false,\"stats\":{\"atk\":20,\"def\":59,\"spa\":158,\"spd\":249,\"spe\":128},\"moves\":[\"aromatherapy\",\"toxic\",\"seismictoss\",\"softboiled\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoking\",\"details\":\"Nidoking, L82, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":198,\"def\":173,\"spa\":187,\"spd\":170,\"spe\":187},\"moves\":[\"megahorn\",\"shadowball\",\"earthquake\",\"sludgebomb\"],\"baseAbility\":\"poisonpoint\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794591286",
+   "|move|p2a: Pinsir|Hidden Power|p1a: Swampert",
+   "|-damage|p1a: Swampert|33/100",
+   "|move|p1a: Swampert|Hydro Pump|p2a: Pinsir",
+   "|-damage|p2a: Pinsir|0 fnt",
+   "|faint|p2a: Pinsir",
+   "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Pinsir\",\"details\":\"Pinsir, L81, F\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":248,\"def\":208,\"spa\":136,\"spd\":159,\"spe\":184},\"moves\":[\"rockslide\",\"swordsdance\",\"hiddenpowerbug\",\"earthquake\"],\"baseAbility\":\"hypercutter\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Deoxys\",\"details\":\"Deoxys-Attack, L70\",\"condition\":\"186/186\",\"active\":false,\"stats\":{\"atk\":293,\"def\":69,\"spa\":293,\"spd\":69,\"spe\":251},\"moves\":[\"shadowball\",\"psychoboost\",\"superpower\",\"extremespeed\"],\"baseAbility\":\"pressure\",\"item\":\"whiteherb\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Steelix\",\"details\":\"Steelix, L82, M\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":187,\"def\":375,\"spa\":137,\"spd\":154,\"spe\":96},\"moves\":[\"toxic\",\"earthquake\",\"protect\",\"doubleedge\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Yanma\",\"details\":\"Yanma, L92, M\",\"condition\":\"267/267\",\"active\":false,\"stats\":{\"atk\":171,\"def\":134,\"spa\":189,\"spd\":134,\"spe\":227},\"moves\":[\"substitute\",\"shadowball\",\"reversal\",\"hiddenpowerflying\"],\"baseAbility\":\"speedboost\",\"item\":\"liechiberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Blissey\",\"details\":\"Blissey, L76, F\",\"condition\":\"513/513\",\"active\":false,\"stats\":{\"atk\":20,\"def\":59,\"spa\":158,\"spd\":249,\"spe\":128},\"moves\":[\"aromatherapy\",\"toxic\",\"seismictoss\",\"softboiled\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoking\",\"details\":\"Nidoking, L82, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":198,\"def\":173,\"spa\":187,\"spd\":170,\"spe\":187},\"moves\":[\"megahorn\",\"shadowball\",\"earthquake\",\"sludgebomb\"],\"baseAbility\":\"poisonpoint\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}"
+  ],
+  "own_request_line": "|request|{\"forceSwitch\":[true],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p2\",\"pokemon\":[{\"ident\":\"p2: Pinsir\",\"details\":\"Pinsir, L81, F\",\"condition\":\"0 fnt\",\"active\":true,\"stats\":{\"atk\":248,\"def\":208,\"spa\":136,\"spd\":159,\"spe\":184},\"moves\":[\"rockslide\",\"swordsdance\",\"hiddenpowerbug\",\"earthquake\"],\"baseAbility\":\"hypercutter\",\"item\":\"salacberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Deoxys\",\"details\":\"Deoxys-Attack, L70\",\"condition\":\"186/186\",\"active\":false,\"stats\":{\"atk\":293,\"def\":69,\"spa\":293,\"spd\":69,\"spe\":251},\"moves\":[\"shadowball\",\"psychoboost\",\"superpower\",\"extremespeed\"],\"baseAbility\":\"pressure\",\"item\":\"whiteherb\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Steelix\",\"details\":\"Steelix, L82, M\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":187,\"def\":375,\"spa\":137,\"spd\":154,\"spe\":96},\"moves\":[\"toxic\",\"earthquake\",\"protect\",\"doubleedge\"],\"baseAbility\":\"rockhead\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Yanma\",\"details\":\"Yanma, L92, M\",\"condition\":\"267/267\",\"active\":false,\"stats\":{\"atk\":171,\"def\":134,\"spa\":189,\"spd\":134,\"spe\":227},\"moves\":[\"substitute\",\"shadowball\",\"reversal\",\"hiddenpowerflying\"],\"baseAbility\":\"speedboost\",\"item\":\"liechiberry\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Blissey\",\"details\":\"Blissey, L76, F\",\"condition\":\"513/513\",\"active\":false,\"stats\":{\"atk\":20,\"def\":59,\"spa\":158,\"spd\":249,\"spe\":128},\"moves\":[\"aromatherapy\",\"toxic\",\"seismictoss\",\"softboiled\"],\"baseAbility\":\"naturalcure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p2: Nidoking\",\"details\":\"Nidoking, L82, M\",\"condition\":\"0 fnt\",\"active\":false,\"stats\":{\"atk\":198,\"def\":173,\"spa\":187,\"spd\":170,\"spe\":187},\"moves\":[\"megahorn\",\"shadowball\",\"earthquake\",\"sludgebomb\"],\"baseAbility\":\"poisonpoint\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"}]},\"noCancel\":true}",
+  "owner": "p2",
+  "prefix_sha256": "a48c9c0f9a1c65f213b42482d049848a3d865c26d365165ad4d3a7d3044b3619",
+  "request_id": "battle-gen3randombattle-controlled-2103400408:4",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

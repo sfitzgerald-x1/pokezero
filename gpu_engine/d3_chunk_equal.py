@@ -40,9 +40,54 @@ def timing(provider, records, label_seconds):
         leaves_per_second=None if label_seconds <= compile_ else 162 * priced / (label_seconds - compile_))
 
 
+def initializer_proof(origin, snapshot):
+    from pokezero import checkpoint_self_moves as encoding
+    from pokezero.v5_run import Snapshot
+
+    if origin is None:
+        raise ValueError('an OFF actor in an ON plan requires --initializer-run with original initializer evidence')
+    root, declaration, events = encoding.verified_run(origin)
+    if declaration.get('self_moves', False):
+        raise ValueError('the original initializer run must declare self_moves off')
+    identity = ('iteration', 'checkpoint_sha256', 'archive_sha256', 'model_sha256')
+    matches = [
+        Snapshot(**event['payload']) for event in events
+        if event['kind'] == 'SNAPSHOT'
+        and all(event['payload'].get(field) == getattr(snapshot, field) for field in identity)
+    ]
+    if len(matches) != 1:
+        raise ValueError('exactly one original snapshot matching the destination initializer is required')
+    proof, _ = encoding.original_initializer(root, matches[0])
+    return proof
+
+
+def load_actor(plan, snapshot, run_root, initializer_run):
+    from gpu_engine import v5_model
+    from gpu_engine.private_self_moves import check_run_actor
+    from pokezero.checkpoint_self_moves import archive_self_moves
+    from pokezero.v5_run import _sha
+
+    if snapshot.model_sha256 != _sha(plan.model.metadata()):
+        raise ValueError('snapshot model digest differs from the plan')
+    params, config, meta = v5_model.load(run_root / snapshot.archive, expected_archive_sha256=snapshot.archive_sha256,
+        expected_checkpoint_sha256=snapshot.checkpoint_sha256,
+        expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
+        expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
+    if config != plan.model:
+        raise SystemExit('actor configuration differs')
+    proof = None
+    if plan.self_moves and not archive_self_moves(meta):
+        proof = initializer_proof(initializer_run, snapshot)
+    check_run_actor(meta, plan_self_moves=plan.self_moves, iteration=snapshot.iteration,
+                    context='D3 chunk equal', initializer=proof)
+    return params
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--d3-root', required=True, help='the D3 bank run root (prespec.json, runtime.json, run/)')
+    parser.add_argument('--initializer-run', type=Path,
+        help='original OFF run directory with the matching iteration -1 snapshot, required only for an OFF initializer in an ON plan')
     parser.add_argument('--out', required=True, help='new output directory')
     parser.add_argument('--chunks', type=int, default=2)
     parser.add_argument('--baseline-chunks', type=int, default=1, help='chunks the baseline teacher labels and the variants are compared on')
@@ -53,6 +98,7 @@ def main(argv=None):
     if not 1 <= args.baseline_chunks <= args.chunks:raise SystemExit('need 1 <= --baseline-chunks <= --chunks')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
     root = Path(args.d3_root)
+    run_root = root / 'run'
     from pokezero import v5_worker as worker, v5_run as runs
     runtime_path = root / 'runtime.json'
     runtime = worker._record(dict(path=str(runtime_path), sha256=hashlib.sha256(runtime_path.read_bytes()).hexdigest()))
@@ -61,19 +107,22 @@ def main(argv=None):
     from pokezero.v5_model import V5ModelConfig
     from pokezero.v5_loss import V5LossConfig
     from pokezero import v5_training as training
-    from gpu_engine import v5_device_rollout as rollout, v5_model
+    from gpu_engine import v5_device_rollout as rollout
     from gpu_engine.v5_device_backend import RuntimeBackend
     from gpu_engine.v5_device_teacher import Provider
     from gpu_engine.d3_saved_root_gate import differences
     profile, vocabulary, gender, _ = worker._runtime_metadata(runtime, expected_pool_sha256=runtime['constructor_pool']['sha256'])
-    d = json.loads((root / 'run' / 'declaration.json').read_text())
+    d = json.loads((run_root / 'declaration.json').read_text())
+    if 'self_moves' in d and d['self_moves'] is not True:
+        raise ValueError('self_moves must be omitted or declared as true in the plan')
     loss_fields = {k: v for k, v in d['loss'].items() if k in V5LossConfig.__dataclass_fields__}
     batches = tuple(tuple(runs.Batch(tuple(runs.Game(**g) for g in x['games']), x['constructor_seed'], x['sampling_seed'],
         x.get('gender_seed'), x.get('gender_domain'), tuple(x.get('gender_root_ids', ()))) for x in it) for it in d['iterations'])
     plan = runs.Plan(d['run_id'], V5ModelConfig.from_metadata(d['model']), V5LossConfig(**loss_fields), training.TrainConfig(**d['train']),
         batches, d['pool_sha256'], d['selection_seed'], d['historical_fraction'], d['historical_window'], d['max_requests'],
-        runs.Watchdog(**d['watchdog']), checkpoint_updates=d['checkpoint_updates'], discount=d['discount'])
-    declared = json.loads((root / 'run' / 'journal' / '000000000.json').read_text())['payload']['declaration_sha256']
+        runs.Watchdog(**d['watchdog']), checkpoint_updates=d['checkpoint_updates'], discount=d['discount'],
+        self_moves=d.get('self_moves', False))
+    declared = json.loads((run_root / 'journal' / '000000000.json').read_text())['payload']['declaration_sha256']
     if runs._sha(plan.manifest()) != declared:raise SystemExit('rebuilt plan differs from the D3 declaration')
     log('PLAN', declaration_sha256=declared, arm=plan.model.arm, games=len(d['iterations'][0][0]['games']),
         memory={k: os.environ.get(k) for k in ('XLA_PYTHON_CLIENT_PREALLOCATE', 'XLA_PYTHON_CLIENT_MEM_FRACTION', 'XLA_PYTHON_CLIENT_ALLOCATOR')})
@@ -82,21 +131,18 @@ def main(argv=None):
         log('PROBE_DIFFERS', error=str(error));jax.config.update('jax_enable_x64', False);jax.config.update('jax_default_matmul_precision', 'highest')
     inputs = worker.Inputs(plan, profile, json.dumps(runtime), json.dumps(vocabulary), json.dumps(gender), runs._sha(plan.manifest()))
     prepared, pool, _, _ = worker.prepare_device_runtime(inputs)
+    events = (json.loads(p.read_text()) for p in sorted((run_root / 'journal').glob('*.json')))
+    snap = next(runs.Snapshot(**e['payload']) for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1)
+    params = load_actor(plan, snap, run_root, args.initializer_run)
     base = dict(frame_batch=True, chunk_batch=True, vectorized=True)
     names = ['baseline'] + args.variant
     providers = {'baseline': Provider(prepared, plan, **base)}
     for variant in args.variant:
         providers[variant] = Provider(prepared, plan, **base, **{flag: True for flag in variant.split(',')})
     backend = RuntimeBackend(prepared, pool, gender_policy=gender, teacher=providers['baseline']);backend.check_plan(plan)
-    events = (json.loads(p.read_text()) for p in sorted((root / 'run' / 'journal').glob('*.json')))
-    snapshot = next(e['payload'] for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1)
-    params, config, _ = v5_model.load(root / 'run' / snapshot['archive'], expected_archive_sha256=snapshot['archive_sha256'],
-        expected_checkpoint_sha256=snapshot['checkpoint_sha256'], expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
-        expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
-    if config != plan.model:raise SystemExit('actor configuration differs')
-    batch = plan.iterations[0][0];ordinal = {g.stream_id: i for i, g in enumerate(plan.games)};snap = runs.Snapshot(**snapshot)
+    batch = plan.iterations[0][0];ordinal = {g.stream_id: i for i, g in enumerate(plan.games)}
     assignments = json.loads(runs._json(tuple(runs.assignment(plan, g, ordinal[g.stream_id], snap, ()) for g in batch.games)))
-    archive = snapshot['archive_sha256']
+    archive = snap.archive_sha256
     bindings = rollout.Bindings(plan.model.category_vocabulary_sha256, plan.model.label_vocabulary, prepared.source_sha256,
         (archive,) * 2, (True, True), backend.declaration_sha256)
     actor_bank = rollout.actor_bank_from_assignments(bindings, (archive,), current_archive=archive, assignments=assignments)

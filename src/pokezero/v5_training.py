@@ -118,6 +118,7 @@ class Runtime:
     rows: int = 0
     progress: dict | None = None
     learning_rate_state: _LearningRateState | None = None
+    self_moves: bool = False
 
 
 def train_config_metadata(config):
@@ -214,9 +215,10 @@ def _rng_scope(torch, device, state=None, seed=None):
         _restore_rng(torch,previous)
 
 
-def create(model_config,loss_config,train_config,*,enable_v5=False):
+def create(model_config,loss_config,train_config,*,enable_v5=False,self_moves=False):
     """Scratch initialization only; opt-in precedes Torch/model allocation."""
     if enable_v5 is not True:raise ValueError('explicit v5 trainer enablement required')
+    if type(self_moves) is not bool:raise ValueError('explicit bool self_moves required')
     if (type(model_config) is not V5ModelConfig or type(loss_config) is not V5LossConfig
             or type(train_config) is not TrainConfig or model_config.arm!=loss_config.arm):
         raise ValueError('same-arm explicit v5 model/loss/train configuration required')
@@ -228,7 +230,7 @@ def create(model_config,loss_config,train_config,*,enable_v5=False):
             eps=train_config.epsilon,foreach=False,amsgrad=False,maximize=False,
             capturable=False,differentiable=False,fused=None)
         rng=_rng_state(torch,train_config.device.startswith('cuda'))
-    runtime=Runtime(model_config,loss_config,train_config,model,optimizer,rng,contract.contract_descriptor())
+    runtime=Runtime(model_config,loss_config,train_config,model,optimizer,rng,contract.contract_descriptor(),self_moves=self_moves)
     if train_config.learning_rate_schedule!='constant':_bind_learning_rate_state(runtime,None)
     return runtime
 
@@ -487,6 +489,7 @@ def train_caches(runtime,paths,*,max_updates=None,learning_rate_window=None,resi
 
 
 def _metadata(runtime):
+    if type(runtime.self_moves) is not bool:raise ValueError('explicit bool self_moves required')
     return dict(schema=CHECKPOINT_SCHEMA,training_schema=contract.TRAINING_CONTRACT_SCHEMA,
         observation_schema=contract.OBSERVATION_SCHEMA_VERSION_V5,model=runtime.model_config.metadata(),
         loss=runtime.loss_config.metadata(),training=train_config_metadata(runtime.train_config),
@@ -496,7 +499,8 @@ def _metadata(runtime):
         optimizer='AdamW',steps=runtime.steps,rows=runtime.rows,progress=runtime.progress,
         model_training=runtime.model.training,
         **(dict(learning_rate_state=None if runtime.learning_rate_state is None else asdict(runtime.learning_rate_state))
-            if runtime.train_config.learning_rate_schedule!='constant' else {}))
+            if runtime.train_config.learning_rate_schedule!='constant' else {}),
+        **(dict(self_moves=True) if runtime.self_moves else {}))
 
 
 def save_checkpoint(path,runtime):
@@ -515,15 +519,27 @@ def save_checkpoint(path,runtime):
         temporary=Path(stream.name);torch.save(payload,stream);stream.flush();os.fsync(stream.fileno())
     # Hard-link publication is atomic and refuses a concurrent existing target.
     os.link(temporary,path);temporary.unlink()
-    return dict(path=str(path),sha256=v5_data._file_sha(path),steps=runtime.steps,rows=runtime.rows,
-        schema=CHECKPOINT_SCHEMA)
+    from .checkpoint_self_moves import _writer_receipt
+    digest=v5_data._file_sha(path)
+    encoding=_writer_receipt(path,checkpoint_sha256=digest,metadata_sha256=payload['metadata_sha256'],self_moves=runtime.self_moves)
+    return dict(path=str(path),sha256=digest,steps=runtime.steps,rows=runtime.rows,
+        schema=CHECKPOINT_SCHEMA,encoding_receipt=encoding)
 
 
 def load_checkpoint(path,*,enable_v5=False,expected_model_config=None,expected_loss_config=None,
-                    expected_train_config=None,expected_learning_rate_window=None):
+                    expected_train_config=None,expected_learning_rate_window=None,expected_self_moves=None,
+                    off_provenance=None,expected_checkpoint_sha256=None):
     """Explicit same-v5 resume; no old loader, permissive warmstart or fresh head."""
     if enable_v5 is not True:raise ValueError('explicit v5 trainer enablement required')
-    torch=_torch();payload=torch.load(Path(path),map_location='cpu',weights_only=True)
+    from .checkpoint_self_moves import checked_checkpoint,resolve_self_moves
+    checked=checked_checkpoint(path,expected_checkpoint_sha256=expected_checkpoint_sha256)
+    self_moves=resolve_self_moves(checked,expected_self_moves=expected_self_moves,off_provenance=off_provenance)
+    torch=_torch();payload=checked.payload
+    section=payload.get('v2')
+    if isinstance(section,dict):
+        settings=section.get('config')
+        if 'lr_start_origin' in section or isinstance(settings,dict) and 'lr_start' in settings:
+            raise ValueError('LR-start checkpoints require V2 resume')
     metadata=payload.get('metadata',{})
     if (metadata.get('schema')!=CHECKPOINT_SCHEMA or payload.get('metadata_sha256')!=_sha(metadata)
             or metadata.get('training_schema')!=contract.TRAINING_CONTRACT_SCHEMA
@@ -546,7 +562,7 @@ def load_checkpoint(path,*,enable_v5=False,expected_model_config=None,expected_l
         if type(metadata[name]) is not int or metadata[name]<0:raise ValueError('nonnegative training counters required')
     if type(metadata['model_training']) is not bool:raise ValueError('explicit model mode required')
     _validate_progress(metadata['progress'])
-    runtime=create(model,loss,training,enable_v5=True)
+    runtime=create(model,loss,training,enable_v5=True,self_moves=self_moves)
     runtime.steps=metadata['steps'];runtime.rows=metadata['rows'];runtime.progress=metadata['progress']
     if training.learning_rate_schedule!='constant':
         if 'learning_rate_state' not in metadata:raise ValueError('explicit scheduled checkpoint state required')

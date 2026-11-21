@@ -407,6 +407,18 @@ class DeclarationTests(unittest.TestCase):
 
 
 class CellTests(unittest.TestCase):
+    def test_screen_revision_enables_uncertain_switches_without_changing_legacy_bind(self):
+        args = dict(checkpoint='/checkpoint', cpu_pair=[1, 2])
+        cell = dict(seed=10, fp_seed=20, seat=0)
+        with patch('pokezero.live_protocol_bridge.validate_encoder_config'):
+            for extras, expected in (({}, False), ({'screen_revision': 6}, True),
+                                    ({'screen_revision': 7}, True),
+                                    ({'screen_revision': 6, 'owning_allow_maybe_trapped_switches': False}, False)):
+                with self.subTest(extras=extras):
+                    config = panel.ladder.configuration(dict(BASE, showdown_root='/showdown',
+                        encoder_kind='jax-owning', owning_decision_timeout_seconds=60., **extras), cell, **args)
+                    self.assertIs(config.owning_allow_maybe_trapped_switches, expected)
+
     def test_cells_equal_codex_raw_cells_on_every_pairing_field(self):
         lad = ladder_fixture.declaration(); seen = set()
         for limit in (500, 2000):

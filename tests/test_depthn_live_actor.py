@@ -387,6 +387,34 @@ class FactoryTests(unittest.TestCase):
     def fresh(self, name):
         self.path = Path(self.directory.name)/'cases'/f'{name}.jsonl'
 
+    def test_tentative_search_switch_records_only_the_acknowledged_move(self):
+        from dataclasses import replace
+
+        calls = []
+        raw = replace(raw_factory(calls), allow_maybe_trapped_switches=True)
+        client = fake_client(calls, lambda request: complete(request, action=4, q=.25))
+        factory = live.factory(NS(), raw_factory=raw, client=client, telemetry_path=self.path,
+                               arm='DN2W8', cell=CELL)
+        actor = factory.actor((None, None, None))
+        actor.begin_game(battle_id='literal', owner='p1', seed=9, stream_id=1)
+        try:
+            request = json.loads(fixture.request().removeprefix('|request|'))
+            request['active'][0]['maybeTrapped'] = True
+            fixture.feed(actor, ('|turn|1', '|request|' + json.dumps(request)))
+            snapshot = actor.snapshot_boundary()
+            self.assertEqual(actor.decide(snapshot, rng=random.Random(4)).action_index, 4)
+            self.assertEqual(self.rows(), [])
+            self.assertEqual(actor.retry_trapped_switch(snapshot, rng=random.Random(4)).action_index, 0)
+            self.assertEqual(self.rows(), [])
+            fixture.feed(actor, ('|turn|2', fixture.request()))
+            actor.confirm_choice('move 1')
+            row, = self.rows()
+            self.assertEqual((row['attempted_action_index'], row['played_action_index'], row['cause']),
+                             (4, 0, live.TRAPPED_SWITCH))
+            self.assertCountEqual(calls, ['search', 'greedy', 'greedy'])
+        finally:
+            actor.close_game()
+
     def test_the_search_request_leaves_before_greedy_and_a_complete_legal_search_is_played(self):
         sent = threading.Event()
         def responder(r): sent.set(); return complete(r, action=4, q=.25)

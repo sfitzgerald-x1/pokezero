@@ -275,7 +275,7 @@ class BatonToxicGuardTests(unittest.TestCase):
   self.assertEqual(cb._quiet(s,side,old,d,outgoing_toxic=True).tolist(),[True,True,True,False,False,False,False,False])
   self.assertEqual(cb._quiet(s,side,old,d).tolist(),[True,False,False,False,False,False,False,False])
   before=cb.snapshot(s);self.assertIn('status_counter',before._fields)
-  self.assertEqual(cb.departed_private(before,side,old).status_counter[r,side,old].tolist(),[0,0,0,0,0,0,1,0])
+  self.assertEqual(cb.departed_private(before,side,old).status_counter[r,side,old].tolist(),counter.tolist())
   altered=s._replace(status_counter=s.status_counter.at[2,side[2],0].add(1));self.assertEqual(cb.equal(before,cb.snapshot(altered)).tolist(),[True,True,False,True,True,True,True,True])
   self.assertEqual(cb.TOXIC_STATUS,4)
  def test_actual_same_frame_toxic_then_baton_work_operand_order(self):

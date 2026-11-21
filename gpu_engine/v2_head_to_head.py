@@ -10,6 +10,7 @@ Evaluation games come from a declared diagnostic config's roster (`--config`,
 smoke schema, `--iteration` selects which declared iteration's blocks). Actors
 are named by run root and iteration: `<run>/state.json` (V2 runs) or the run's
 journal SNAPSHOT events (file-pipeline runs).
+Both actors must declare the same self_moves encoding as the evaluation config.
 
 All paths are command-line arguments.
 """
@@ -50,20 +51,28 @@ def main(argv=None):
     args = parser.parse_args(argv)
     import jax
     from pokezero import v5_run as runs
+    from pokezero.checkpoint_self_moves import archive_self_moves
     from gpu_engine import v5_device_rollout as rollout, v2_collector as v2
     from gpu_engine.v5_device_backend import RuntimeBackend
     from gpu_engine.v2_fused import prepare
     begin = time.perf_counter()
     prep = argparse.Namespace(config=args.config, arm='B', iterations=2 if args.iteration else 1)
     context = prepare(prep);plan = context['plan']
+    catalog_self_moves = context['prepared'].catalog.masks.self_moves
+    if type(catalog_self_moves) is not bool or catalog_self_moves != plan.self_moves:
+        raise ValueError('prepared catalog self_moves differs from the evaluation plan')
     a = snapshot(args.a_run, args.a_iteration);b = snapshot(args.b_run, args.b_iteration)
     if a.archive_sha256 == b.archive_sha256:raise ValueError('two distinct actors required')
     def load(snapshot, root):
         # Same architecture as the evaluation forward; `replicate` (seed label) may differ.
         from gpu_engine import v5_model
-        params, config, _ = v5_model.load(Path(root, snapshot.archive), expected_archive_sha256=snapshot.archive_sha256,
+        params, config, meta = v5_model.load(Path(root, snapshot.archive), expected_archive_sha256=snapshot.archive_sha256,
             expected_checkpoint_sha256=snapshot.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
             expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
+        if archive_self_moves(meta) != plan.self_moves:
+            raise ValueError('actor archive self_moves differs from the evaluation plan')
+        if snapshot.model_sha256 != runs._sha(config.metadata()):
+            raise ValueError('actor snapshot model digest differs from the loaded model')
         if replace(config, replicate=plan.model.replicate) != plan.model:raise ValueError('actor architecture differs from evaluation model')
         return params
     params = (load(a, args.a_run), load(b, args.b_run))
@@ -111,6 +120,8 @@ def main(argv=None):
         collector=dict(occupancy=result.stats['occupancy'], kernel_seconds=result.stats['kernel_seconds']),
         compile_seconds=compile_seconds, wall_seconds=time.perf_counter() - begin,
         scope='Paired engine head-to-head, same teams with seats swapped; not a Foul Play result.')
+    if plan.self_moves:
+        report['self_moves'] = True
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
     (out / f'{args.label}.json').write_text(json.dumps(report, indent=1, default=str) + '\n')
     log('HEAD_TO_HEAD', **{k: v for k, v in report.items() if k not in ('compile_seconds',)})

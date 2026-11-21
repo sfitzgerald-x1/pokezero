@@ -10,6 +10,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as j
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -222,8 +223,11 @@ def _lookup(table, ids):
     return table[j.clip(ids, 0, table.shape[0] - 1)]
 
 
-def encode(state, public, tables, *, observer_sides, legal_action_mask):
+def encode(state, public, tables, *, observer_sides, legal_action_mask, self_moves=None):
     """Pure device view for one owner per batch row; no host/protocol calls.
+
+    ``self_moves`` (V2, static): None follows the tables (engine_device_belief.Tables.self_moves); False forces the own
+    move/PP cells off for this view (a reply prior whose model does not declare self_moves). It never turns them on.
 
     ``legal_action_mask`` is the actual engine request mask in physical bench
     order. We reorder its five switch lanes to the same own_order used by tokens.
@@ -252,7 +256,7 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     cat = j.zeros((b, TOKENS, CATEGORICAL), j.int32)
     present = own['species'] > 0
     active = j.arange(6)[None] == own['active'][:, None]
-    hp = j.clip(own['hp'] / j.maximum(1, own['max_hp']), 0, 1)
+    hp = en.ratio(own['hp'], own['max_hp'])
     alive = own['hp'] > 0
     # Transform (flag-off path): the request shows a transformed active's baseStoredStats (sim/pokemon.ts
     # getSwitchRequestData), while state.stats holds the copy; ACTUAL_* and the expected-stats join read the original.
@@ -263,14 +267,14 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
         own['stats'] = j.where((active & own_transformed[:, None])[..., None], original_stats, own['stats'])
     own_num = j.zeros((b, 6, NUMERIC), j.float32)
     own_num = _put(own_num, ('HP_FRACTION', 'ACTIVE', 'LEGAL', 'PRESENT', 'LEVEL'),
-        (hp, active, alive, present, j.minimum(1, own['level'] / 100)))
+        (hp, active, alive, present, en.normalized(own['level'], 100)))
     stats = ('HP', 'ATK', 'DEF', 'SPA', 'SPD', 'SPE')
     own_num = _put(own_num, tuple('BASE_' + n for n in stats),
-        tuple(j.minimum(1, _lookup(tables.base_stats, own['species'])[..., i] / 200) for i in range(6)))
+        tuple(en.normalized(_lookup(tables.base_stats, own['species'])[..., i], 200) for i in range(6)))
     # Original _self_team_from_request fills stats.hp from exact condition maxHP.
     own_num = _put(own_num, tuple('ACTUAL_' + n for n in stats),
-        (j.where(alive, j.minimum(1, own['max_hp'] / 714), 0),) +
-        tuple(j.minimum(1, own['stats'][..., i] / 714) for i in range(1, 6)))
+        (j.where(alive, en.normalized(own['max_hp'], 714), 0),) +
+        tuple(en.normalized(own['stats'][..., i], 714) for i in range(1, 6)))
     # The own fainted active's stages come from the public carry, as the opponent's do: the engine zeroed them at the
     # faint (Showdown's clearVolatile), the champion's B2/Python inputs keep them until the replacement arrives. See the
     # convention note at engine_device_trackers._observe; do not "fix" it toward Showdown without retraining.
@@ -278,7 +282,7 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     if kept is not None:
         own['boosts'] = j.where((active & ~alive)[..., None], j.asarray(kept, j.int32)[:, None, :], own['boosts'])
     own_num = _put(own_num, tuple('BOOST_' + n for n in stats[1:]),
-        tuple(j.where(active, j.clip(own['boosts'][..., i] / 6, -1, 1), 0) for i in range(5)))
+        tuple(j.where(active, en.normalized(own['boosts'][..., i], 6, minimum=-6), 0) for i in range(5)))
     own_num = _put(own_num, ('GENDER_MALE', 'GENDER_FEMALE', 'POSSIBLE_ABILITY_COUNT',
         'POSSIBLE_ITEM_COUNT', 'REVEALED_ABILITY', 'REVEALED_ITEM'),
         (own['gender'] == 1, own['gender'] == 2, own['ability'] > 0, own['item'] > 0,
@@ -319,11 +323,11 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     foe_num = j.zeros((b, 6, NUMERIC), j.float32)
     foe_num = _put(foe_num, ('HP_FRACTION', 'ACTIVE', 'LEGAL', 'PRESENT', 'LEVEL', 'GENDER_MALE', 'GENDER_FEMALE'),
         (public.hp_fraction, public.active, ~public.fainted, public.present,
-         j.minimum(1, public.level / 100), public.gender == 1, public.gender == 2))
+         en.normalized(public.level, 100), public.gender == 1, public.gender == 2))
     foe_num = _put(foe_num, tuple('BASE_' + n for n in stats),
-        tuple(j.minimum(1, _lookup(tables.base_stats, public.species)[..., i] / 200) for i in range(6)))
+        tuple(en.normalized(_lookup(tables.base_stats, public.species)[..., i], 200) for i in range(6)))
     foe_num = _put(foe_num, tuple('BOOST_' + n for n in stats[1:]),
-        tuple(j.where(public.active, j.clip(public.boosts[..., i] / 6, -1, 1), 0) for i in range(5)))
+        tuple(j.where(public.active, en.normalized(public.boosts[..., i], 6, minimum=-6), 0) for i in range(5)))
     foe_num = _put(foe_num, ('REVEALED_ABILITY', 'REVEALED_ITEM'), (public.ability > 0, public.item > 0))
     foe_cat = j.zeros((b, 6, CATEGORICAL), j.int32)
     for col, value in ((0, _lookup(tables.species, public.species)), (1, _lookup(tables.statuses, public.status)),
@@ -385,7 +389,7 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     numerator = j.clip(own['hp'][rows, actor], 0, den)
     dynamic = tables.hp_power[j.clip(hp_kind - 1, 0, 1), den[:, None], numerator[:, None]].astype(j.float32)
     power = j.where(hp_kind > 0, dynamic, values[..., 0])
-    values = values.at[..., 0].set(j.minimum(1, power / 200))
+    values = values.at[..., 0].set(en.normalized(power, 200))
     action_num = j.zeros((b, 9, NUMERIC), j.float32)
     action_num = action_num.at[:, :4, j.asarray([_index(n) for n in ('BASE_POWER', 'PRIORITY', 'ACCURACY', 'EFFECT_CHANCE', 'SELF_HP_COST')])].set(values)
     max_pp = tables.max_pp[safe_move]
@@ -395,7 +399,7 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
         boosted = state.transform_moves[rows, owner] > 0
         max_pp = j.where(own_transformed[:, None] & ~boosted, tables.base_pp[safe_move], max_pp)
     action_num = action_num.at[:, :4, _index('MOVE_PP_FRACTION')].set(j.where(moves_present,
-        j.where((struggle | charged | recharging)[:, None], 1., j.clip(pp / j.maximum(1, max_pp), 0, 1)), 0))
+        j.where((struggle | charged | recharging)[:, None], 1., en.ratio(pp, max_pp, limit=64)), 0))
     action_num = action_num.at[:, :4, _index('PRESENT')].set(moves_present)
     action_num = action_num.at[:, :4, _index('ACTIVE')].set(moves_present & (usable | struggle[:, None]))
     request_active = j.argmax(gather(active), axis=-1)
@@ -426,7 +430,7 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     turn = state.turn if getattr(public, 'turn', None) is None else public.turn
     weather = state.weather if getattr(public, 'weather', None) is None else public.weather
     spikes = state.spikes if getattr(public, 'spikes', None) is None else public.spikes
-    num = num.at[:, 0, _index('PRESENT')].set(1).at[:, 0, _index('TURN_COUNT')].set(j.minimum(1, turn / 1000))
+    num = num.at[:, 0, _index('PRESENT')].set(1).at[:, 0, _index('TURN_COUNT')].set(en.normalized(turn, 1000))
     num = num.at[:, 0, _index('SELF_HAZARDS')].set(spikes[rows, owner] / 3)
     num = num.at[:, 0, _index('OPP_HAZARDS')].set(spikes[rows, 1 - owner] / 3)
     request_kind = j.where(state.done, 0, j.where(~j.any(legal_action_mask, axis=-1), 1, j.where(forced, 2, 3)))
@@ -459,9 +463,8 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
         foe_flying = _lookup(tables.belief.flying, public.species)
         foe_levitate = (certain == tables.belief.levitate) & (tables.belief.levitate > 0)
         foe_count = j.maximum(0, 6 - public.present.sum(axis=-1)) + j.sum(public.present & ~public.active & ~public.fainted & ~foe_flying & ~foe_levitate, axis=-1)
-        fractions = j.asarray((0., 1 / 8, 1 / 6, 1 / 4), j.float32)
-        num = num.at[:, 0, _index('SELF_HAZARD_EXPECTED')].set(j.minimum(1., own_count * fractions[j.clip(spikes[rows, owner], 0, 3)] / 6))
-        num = num.at[:, 0, _index('OPP_HAZARD_EXPECTED')].set(j.minimum(1., foe_count * fractions[j.clip(spikes[rows, 1 - owner], 0, 3)] / 6))
+        num = num.at[:, 0, _index('SELF_HAZARD_EXPECTED')].set(en.hazard_exposure(own_count, spikes[rows, owner]))
+        num = num.at[:, 0, _index('OPP_HAZARD_EXPECTED')].set(en.hazard_exposure(foe_count, spikes[rows, 1 - owner]))
         posterior = belief_result.weights
         belief_error = belief_result.error | expected_bad
     else:
@@ -481,7 +484,7 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
         own_sub = None
         if hasattr(state, 'substitute_hp'):
             sub = getattr(state, 'substitute_hp')[rows, owner] > 0
-            own_sub = gather(j.where(sub, j.floor(own['max_hp'] / 4) / j.maximum(1, own['max_hp']), 0))
+            own_sub = gather(j.where(sub, en.ratio(own['max_hp'] // 4, own['max_hp']), 0))
         foe_sub = None if foe_facts is None or 'sub_present' not in foe_facts else j.where(foe_facts['sub_present'], .25, 0)
         on, oc, bad_own = features.project_mon(num[:, 1:7], cat[:, 1:7], own_facts,
             active=gather(active), present=gather(present), tables=tables.features,
@@ -508,6 +511,15 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
         foe_num, foe_cat = fn, fc
         feature_error = bad_own | bad_foe | bad_field | bad_stats
     else:stat_on = j.zeros(b, bool)
+    own_move_tables = None if tables.belief is None or self_moves is False else getattr(tables.belief, 'self_moves', None)
+    if own_move_tables is not None:
+        real_own = own
+        if own_transformed is not None:
+            # Self tokens describe the original set; action tokens above still use Transform's copied slots.
+            saved = (active & own_transformed[:, None])[..., None]
+            real_own = dict(own, moves=j.where(saved, state.transform_moves[rows, owner][:, None, :], own['moves']),
+                pp=j.where(saved, state.transform_pp[rows, owner][:, None, :], own['pp']))
+        num, cat = _own_moves(num, cat, real_own, tables, own_move_tables, gather, present)
     num = num.at[:, 7:13].set(foe_num); cat = cat.at[:, 7:13].set(foe_cat)
     num = num.at[:, 23:].set(tail); cat = cat.at[:, 23:].set(foe_cat)
     attention = j.ones((b, TOKENS), bool).at[:, 1:7].set(gather(present)).at[:, 7:13].set(public.present).at[:, 22].set(stat_on)
@@ -526,6 +538,33 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask):
     cat = j.where((cat >= 0) & (cat < tables.category_count), cat, 0)
     return Observation(num, cat, j.broadcast_to(j.asarray(TOKEN_TYPES, j.int32), (b, TOKENS)),
         attention, legal, targets, error, j.sum(flags.astype(j.int32), axis=0), move_targets)
+
+
+def _own_moves(num, cat, own, tables, self_moves, gather, present):
+    """V2 self_moves (engine_device_belief.Tables.self_moves; never traced when off): the observer's own moves and PP on
+    self tokens 1-6, as B2 (private_self_moves) and the Python encoder write them. The engine state is the truth the
+    owner knows: its move slots (the real set) in lexical catalog order as belief:possible_move:<name> (Hidden Power
+    typed), REVEALED_MOVE_COUNT = POSSIBLE_MOVE_COUNT = their number, and per move the validity bit 1 and its PP / catalog
+    max PP. At a constructor root the state's PP is own_pp_carry's (phase_d_protocol_world), the PP B2 and Python read
+    from the history; in search it is the engine's. Every present own member, fainted included; the observer's own seat
+    only (a peer view reads that world's peer state, never the owner's)."""
+    b = num.shape[0]
+    moves = gather(own['moves']); pp = gather(own['pp'])
+    if moves.shape != (b, 6, 4) or pp.shape != (b, 6, 4):raise ValueError('self_moves requires Bx6x4 own move slots and PP')
+    safe = j.clip(moves, 0, self_moves.rank.shape[0] - 1)
+    have = (moves > 0) & gather(present)[..., None]
+    order = j.argsort(j.where(have, self_moves.rank[safe], j.iinfo(j.int32).max), axis=-1)
+    safe = j.take_along_axis(safe, order, axis=-1); have = j.take_along_axis(have, order, axis=-1)
+    pp = j.take_along_axis(pp, order, axis=-1)
+    maximum = _lookup(tables.max_pp, safe)
+    fraction = j.where(have & (maximum > 0), j.clip(j.maximum(0, pp) / j.maximum(maximum, 1), 0, 1), 0).astype(j.float32)
+    count = have.sum(axis=-1).astype(j.float32)
+    own_num = _put(num[:, 1:7], ('REVEALED_MOVE_COUNT', 'POSSIBLE_MOVE_COUNT'), (count, count)); own_cat = cat[:, 1:7]
+    for k in range(4):
+        own_num = own_num.at[..., reference.v4_numeric_index(reference.NUMERIC_OPP_MOVE_PP_OFFSET + k)].set(fraction[..., k])
+        own_num = own_num.at[..., reference.v4_numeric_index(reference.NUMERIC_OPP_MOVE_PP_VALID_OFFSET + k)].set(have[..., k].astype(j.float32))
+        own_cat = own_cat.at[..., reference.CATEGORY_BELIEF_MOVE_OFFSET + k].set(j.where(have[..., k], self_moves.category[safe[..., k]], 0))
+    return num.at[:, 1:7].set(own_num), cat.at[:, 1:7].set(own_cat)
 
 
 def map_actions(observation, state, observer_sides, actions):
@@ -557,12 +596,25 @@ def champion_inputs(observation):
         token_types=observation.token_type_ids[:, :23], attention=observation.attention_mask[:, :23])
 
 
-def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tracked_item=None, posterior=True):
+# V2 self_moves cells on own tokens (_own_moves): the move buckets, both move counts and the 16 + 16 PP/validity columns.
+_SELF_MOVE_CATEGORIES = frozenset(range(reference.CATEGORY_BELIEF_MOVE_OFFSET, reference.CATEGORY_BELIEF_MOVE_OFFSET + 16))
+_SELF_MOVE_NUMERIC = frozenset([reference.v4_numeric_index(reference.NUMERIC_REVEALED_MOVE_COUNT),
+    reference.v4_numeric_index(reference.NUMERIC_POSSIBLE_MOVE_COUNT)] +
+    [reference.v4_numeric_index(o + i) for o in (reference.NUMERIC_OPP_MOVE_PP_OFFSET, reference.NUMERIC_OPP_MOVE_PP_VALID_OFFSET)
+     for i in range(16)])
+
+
+def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tracked_item=None, posterior=True,
+                    self_moves=False, set_posterior=False):
     """Complete meanings; optional real readout keys describe installed hooks.
 
+    Pass the READOUT public view (``engine_device_trackers.readout(carry, observer_sides)``), the view ``encode`` reads,
+    not the world's tracker carry: the carry lacks the readout's derived keys (stats_features from the tendency, the
+    sleep-clause and own feature dictionaries), so given a carry the manifest marks those produced columns ZERO.
     No array contents are copied to host: only the static dictionary keys and
     optional-tail presence are inspected. A missing hook remains ZERO, even
-    though this module already implements its projection algebra.
+    though this module already implements its projection algebra. ``self_moves`` (V2): the encoder's tables carry
+    engine_device_belief.Tables.self_moves, so the own move/PP cells are produced.
     """
     from . import engine_device_features as features
     from .public_belief_features import NUMERIC_COLUMNS as BELIEF_COLUMNS, CATEGORY_COLUMNS as BELIEF_CATEGORIES
@@ -673,6 +725,13 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
                     status, reason = 'TRACKED', 'original source prior + public hard/pin mask fallback; uniform current sampler'
                     if column == 131:
                         status, reason = 'TRACKED', 'produced constant0: frozen investment_belief_narrowing=False disables both standing-pin producers'
+                        if set_posterior:
+                            # Narrowing A: with set_posterior_narrowing the device's damage reveals narrow the standing
+                            # pin (engine_device_belief.Tables.posterior), so a pin disjoint from the hard mask is live.
+                            status, reason = 'TRACKED', 'set_posterior_narrowing standing pin (device damage-reveal producer): pin_conflict live'
+                if self_moves and section == 'own' and (column in _SELF_MOVE_CATEGORIES if kind == 'categorical'
+                                                        else column in _SELF_MOVE_NUMERIC):
+                    status, reason = 'DIRECT', 'V2 self_moves: actual owning engine move slots and PP (state.moves, state.pp)'
                 # Fidelity M1: Trick's -item lines (hooks.trick) and the holder's move lines (hooks.move)
                 # now write ITEM_SWAPPED and CHOICE_LOCKED, so the readout keys are tracked like the others.
                 if status == 'ZERO':

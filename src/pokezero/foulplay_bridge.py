@@ -39,7 +39,7 @@ from .collection import RolloutRecord, write_rollout_record
 from .determinization import gen3_randbat_belief_start_override_planner
 from .deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION, protocol_signature_counts
 from .dex import ShowdownDex, load_showdown_dex_cached
-from .env import PlayerId, TerminalState
+from .env import BattleStartOverride, PlayerId, TerminalState
 from .fallback_replay import RefusalRecord, attach_refusal_recorder
 from .fullgame_phase_progress import FullgamePhaseProgress
 from .local_showdown import (
@@ -965,6 +965,7 @@ class ControlledFoulPlayConfig:
     # Explicit prospective owning-policy controls; legacy axes stay unchanged.
     owning_decision_timeout_seconds: float | None = None
     owning_public_single_line: bool = False
+    owning_allow_maybe_trapped_switches: bool = False
     # Explicit continuation-only CPU placement; None preserves historical commands.
     foulplay_cpu_affinity: int | None = None
 
@@ -6136,6 +6137,7 @@ async def _run_controlled_foulplay_games(
     actor_runtime: tuple[Any, Any, Any] | None = None,
     actor_version: str = 'champion-v4',
     game_offsets: tuple[int, ...] | None = None,
+    packed_starts: Mapping[int, BattleStartOverride] | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run a preconstructed legal policy through the shared FoulPlay bridge.
 
@@ -6156,6 +6158,13 @@ async def _run_controlled_foulplay_games(
             or tuple(sorted(set(game_offsets)))!=game_offsets):
         raise ValueError('ordered explicit v5 finite game offsets required')
     offsets=range(config.games) if game_offsets is None else game_offsets
+    if packed_starts is not None and (
+        actor_version != "v5" or config.format_id != "gen3randombattle"
+        or set(packed_starts) != set(offsets)
+        or any(type(start) is not BattleStartOverride
+               or start.observation_format_id != config.format_id for start in packed_starts.values())
+    ):
+        raise ValueError("explicit v5 packed teams required for every original offset")
     foulplay_random_seed_schedule = (_per_seed_foulplay_random_seed_schedule(config,count=config.games)
         if game_offsets is None else _per_seed_foulplay_random_seed_schedule_for_offsets(config,offsets=offsets))
 
@@ -6236,6 +6245,7 @@ async def _run_controlled_foulplay_games(
                         **({"owning_actor_factory": actor_factory, "actor_runtime": actor_runtime}
                            if actor_factory is not None else {}),
                         **({'actor_version':actor_version} if actor_version in ('v5','canary-v4') else {}),
+                        **({"packed_start": packed_starts[offset]} if packed_starts is not None else {}),
                     )
                 )
             finally:
@@ -7615,6 +7625,16 @@ async def _run_single_game(
     return result
 
 
+def _controlled_players(config: ControlledFoulPlayConfig, packed_start: BattleStartOverride | None):
+    players = {
+        config.pokezero_player: config.pokezero_username,
+        config.foulplay_player: config.foulplay_username,
+    }
+    if packed_start is not None:
+        return {seat: {"name": name, "team": packed_start.player_teams[seat]} for seat, name in players.items()}
+    return players
+
+
 async def _run_single_game_body(
     *,
     config: ControlledFoulPlayConfig,
@@ -7635,6 +7655,7 @@ async def _run_single_game_body(
     live_continuation_oracle_controller: _LiveFoulPlayContinuationOracleController | None = None,
     phase_progress: FullgamePhaseProgress | None = None,
     owning_session: OwningWireSession | None = None,
+    packed_start: BattleStartOverride | None = None,
 ) -> ControlledFoulPlayGameResult:
     require_session(config, owning_session)
     battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
@@ -7668,10 +7689,7 @@ async def _run_single_game_body(
             "battleId": battle_id,
             "formatid": config.format_id,
             "seed": showdown_seed_from_int(seed),
-            "players": {
-                config.pokezero_player: config.pokezero_username,
-                config.foulplay_player: config.foulplay_username,
-            },
+            "players": _controlled_players(config, packed_start),
         }
     )
 
@@ -8590,6 +8608,25 @@ async def _handle_owning_decision_boundary(
     state.previous_requested_players = requested_players
     choices = {}
     owner = config.pokezero_player
+    tentative = False
+    accepted_switch = None
+
+    def record_decision(decision, observation, elapsed, *, retried=False):
+        decision = replace(decision, metadata={**dict(decision.metadata),
+            "policy_elapsed_seconds": elapsed,
+            "policy_elapsed_scope": "owning-snapshot-encode-selection-and-choice",
+            "owning_decision_timeout_seconds": config.owning_decision_timeout_seconds,
+            "encoder_kind": config.encoder_kind,
+            "owner_prefix_sha256": snapshot.prefix_sha256,
+            "actor_namespace": snapshot.namespace,
+            **({"trapped_switch_retry": True} if retried else {})})
+        state.trajectory.append(TrajectoryStep(player_id=owner,turn_index=decision_round,
+            observation=observation,legal_action_mask=observation.legal_action_mask,
+            action_index=decision.action_index,
+            metadata={"policy_id":decision.policy_id,**dict(decision.metadata)}))
+        state.decisions.append(decision)
+        state.pokezero_decision_players.append(owner)
+
     if owner in requested_players:
         if phase_progress is not None:
             phase_progress.emit("candidate_policy", "started", seed=state.seed,
@@ -8621,19 +8658,10 @@ async def _handle_owning_decision_boundary(
         if phase_progress is not None:
             phase_progress.emit("candidate_policy", "returned", seed=state.seed,
                                 seat=owner, decision_round=decision_round)
-        decision = replace(decision, metadata={**dict(decision.metadata),
-            "policy_elapsed_seconds": elapsed,
-            "policy_elapsed_scope": "owning-snapshot-encode-selection-and-choice",
-            "owning_decision_timeout_seconds": config.owning_decision_timeout_seconds,
-            "encoder_kind": config.encoder_kind,
-            "owner_prefix_sha256": snapshot.prefix_sha256,
-            "actor_namespace": snapshot.namespace})
-        state.trajectory.append(TrajectoryStep(player_id=owner,turn_index=decision_round,
-            observation=observation,legal_action_mask=observation.legal_action_mask,
-            action_index=decision.action_index,
-            metadata={"policy_id":decision.policy_id,**dict(decision.metadata)}))
-        state.decisions.append(decision)
-        state.pokezero_decision_players.append(owner)
+        tentative = (config.owning_allow_maybe_trapped_switches
+                     and session.actor.tentative_switch(snapshot))
+        if not tentative:
+            record_decision(decision, observation, elapsed)
     else:
         session.boundary(requested_players=requested_players,
             decision_round=decision_round, requests=state.request_lines)
@@ -8647,10 +8675,41 @@ async def _handle_owning_decision_boundary(
             foulplay_process=foulplay_process,foulplay_logs=foulplay_logs,
             phase_progress=phase_progress)
         choices[config.foulplay_player] = choice
+    if tentative:
+        expected = dict(battleId=state.battle_id, player=owner,
+                        choice=choices[owner], submissionId=decision_round)
+        await bridge.send(dict(type="attempt_maybe_trapped_switch", **expected))
+        event = await asyncio.wait_for(bridge.next_event(), timeout=session.wait_timeout())
+        if type(event.get("submissionId")) is not int:
+            session.reject_event("invalid guarded switch submission", event)
+        if event == dict(type="choice_ack", **expected):
+            accepted_switch = event
+            record_decision(decision, observation, elapsed)
+        elif event == dict(type="choice_rejected", reason="trapped", **expected):
+            limit = config.owning_decision_timeout_seconds
+            remaining = None if limit is None else limit - elapsed
+            if remaining is not None and remaining <= 0:
+                raise TimeoutError("owning trapped fallback deadline expired")
+            started = time.perf_counter()
+            retry = asyncio.to_thread(session.actor.retry_trapped_switch, snapshot,
+                                       rng=random.Random(f"{state.seed}:{owner}:{decision_round}"))
+            decision = await asyncio.wait_for(retry, timeout=remaining)
+            elapsed += time.perf_counter() - started
+            if limit is not None and elapsed >= limit:
+                raise TimeoutError("owning trapped fallback deadline expired")
+            choices[owner] = session.actor.choice(snapshot)
+            record_decision(decision, session.actor.decision_observation(snapshot), elapsed, retried=True)
+        else:
+            session.reject_event("unexpected guarded switch result", event)
     if phase_progress is not None:
         phase_progress.emit("submission", "started", seed=state.seed, decision_round=decision_round)
     submission_id=session.prepare_submission(choices,requested_players=requested_players,decision_round=decision_round)
-    await bridge.send({"type":"choices","battleId":state.battle_id,"choices":choices,"submissionId":submission_id})
+    submitted = choices
+    if accepted_switch is not None:
+        session.acknowledge(accepted_switch)
+        submitted = {player: choice for player, choice in choices.items() if player != owner}
+    if submitted:
+        await bridge.send({"type":"choices","battleId":state.battle_id,"choices":submitted,"submissionId":submission_id})
     if phase_progress is not None:
         phase_progress.emit("submission", "returned", seed=state.seed, decision_round=decision_round)
     if owner in choices:

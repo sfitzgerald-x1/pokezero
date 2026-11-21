@@ -1,0 +1,254 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "attract_failures_phaze",
+ "note": "Four distinct level-5 reserves are KOd by Seismic Toss, leaving one bench candidate (the established forced-sample probe path). Then a positive Attract is followed by repeated, same-gender, genderless, Oblivious and Protect failures. Roar forces the source out and clears the relation; the final turn checks the cleared recipient can act. The final recipient roll is immobilizing if stale infatuation survives.",
+ "teams": [
+  [
+   {
+    "species": "Alakazam",
+    "moves": [
+     "attract",
+     "splash",
+     "protect",
+     "rest"
+    ],
+    "ability": "Synchronize",
+    "item": "",
+    "gender": "M"
+   },
+   {
+    "species": "Magikarp",
+    "moves": [
+     "splash",
+     "tackle",
+     "flail",
+     "protect"
+    ],
+    "ability": "Swift Swim",
+    "item": "",
+    "level": 5,
+    "gender": "M"
+   },
+   {
+    "species": "Tentacruel",
+    "moves": [
+     "splash",
+     "protect",
+     "surf",
+     "sonicboom"
+    ],
+    "ability": "Liquid Ooze",
+    "item": "",
+    "level": 5,
+    "gender": "M"
+   },
+   {
+    "species": "Smeargle",
+    "moves": [
+     "splash",
+     "spore",
+     "spikes",
+     "encore"
+    ],
+    "ability": "Own Tempo",
+    "item": "",
+    "level": 5,
+    "gender": "M"
+   },
+   {
+    "species": "Dunsparce",
+    "moves": [
+     "splash",
+     "tackle",
+     "protect",
+     "rest"
+    ],
+    "ability": "Serene Grace",
+    "item": "",
+    "level": 5,
+    "gender": "M"
+   },
+   {
+    "species": "Celebi",
+    "moves": [
+     "splash",
+     "protect",
+     "psychic",
+     "recover"
+    ],
+    "ability": "Natural Cure",
+    "item": "Leftovers",
+    "gender": "M"
+   }
+  ],
+  [
+   {
+    "species": "Clefable",
+    "moves": [
+     "splash",
+     "protect",
+     "roar",
+     "seismictoss"
+    ],
+    "ability": "Cute Charm",
+    "item": "",
+    "gender": "F"
+   },
+   {
+    "species": "Snorlax",
+    "gender": "M",
+    "ability": "Thick Fat",
+    "item": "",
+    "moves": [
+     "splash",
+     "protect",
+     "roar",
+     "rest"
+    ]
+   },
+   {
+    "species": "Metagross",
+    "gender": "N",
+    "ability": "Clear Body",
+    "item": "",
+    "moves": [
+     "splash",
+     "protect",
+     "roar",
+     "rest"
+    ]
+   },
+   {
+    "species": "Jynx",
+    "gender": "F",
+    "ability": "Oblivious",
+    "item": "",
+    "moves": [
+     "splash",
+     "protect",
+     "roar",
+     "rest"
+    ]
+   },
+   {
+    "species": "Blissey",
+    "gender": "F",
+    "ability": "Natural Cure",
+    "item": "",
+    "moves": [
+     "splash",
+     "protect",
+     "roar",
+     "rest"
+    ]
+   },
+   {
+    "species": "Jolteon",
+    "moves": [
+     "splash",
+     "protect",
+     "thunderbolt",
+     "batonpass"
+    ],
+    "ability": "Volt Absorb",
+    "item": "Leftovers",
+    "gender": "M"
+   }
+  ]
+ ],
+ "script": [
+  [
+   "switch 2",
+   "move 4"
+  ],
+  [
+   "switch 3",
+   ""
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 4",
+   ""
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 5",
+   ""
+  ],
+  [
+   "move 1",
+   "move 4"
+  ],
+  [
+   "switch 1",
+   ""
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 4"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "switch 5"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 2",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 1"
+  ]
+ ],
+ "axes": [],
+ "expect": {
+  "exact": true
+ },
+ "tape_steps": {
+  "20": {
+   "effect.1.4": 0
+  }
+ }
+}

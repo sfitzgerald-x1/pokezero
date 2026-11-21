@@ -138,10 +138,31 @@ class DeviceRecordedPrefixTests(unittest.TestCase):
                 with self.assertRaises(ValueError):r.run_prefix(manifest,out='/shared/fixture/not-created')
         tree=ast.parse(Path(r.__file__).read_text())
         previous=ast.parse(subprocess.check_output(['git','show',BASE+':gpu_engine/device_recorded_reencoding.py'],cwd=c.ROOT,text=True))
-        old={x.name:ast.dump(x,include_attributes=False)for x in previous.body if isinstance(x,ast.FunctionDef)}
-        current={x.name:ast.dump(x,include_attributes=False)for x in tree.body if isinstance(x,ast.FunctionDef)}
+        old={x.name:x for x in previous.body if isinstance(x,ast.FunctionDef)}
+        current={x.name:x for x in tree.body if isinstance(x,ast.FunctionDef)}
+        dump=lambda node:ast.dump(node,include_attributes=False)
+        old_read=ast.parse("_,requested=_boundary(record['before'])").body[0]
+        new_read=ast.parse("requested=_requested(record['before'])").body[0]
+        class RequestedOnly(ast.NodeTransformer):
+            changes=0
+            def visit_Assign(self,node):
+                if dump(node)==dump(old_read):
+                    self.changes+=1
+                    return copy.deepcopy(new_read)
+                return self.generic_visit(node)
         for name in ('run','validate_inputs','_owner_complete','reencode_records','Replay' if 'Replay'in old else 'decode_state'):
-            self.assertEqual(current[name],old[name])
+            expected=copy.deepcopy(old[name])
+            if name=='reencode_records':
+                # Numerical refusals stay per root; retain the original requested-seat validation independently.
+                rewrite=RequestedOnly();expected=rewrite.visit(expected)
+                self.assertEqual(rewrite.changes,1)
+            self.assertEqual(dump(current[name]),dump(expected))
+        requested=copy.deepcopy(old['_boundary']);requested.name='_requested'
+        self.assertEqual(dump(requested.body[-1]),dump(ast.parse("return decode_state(packet['state']),requested").body[0]))
+        requested.body[-1]=ast.parse('return requested').body[0]
+        self.assertEqual(dump(current['_requested']),dump(requested))
+        boundary=ast.parse("def _boundary(packet):\n requested=_requested(packet)\n return decode_state(packet['state']),requested").body[0]
+        self.assertEqual(dump(current['_boundary']),dump(boundary))
 
 
 if __name__=='__main__':unittest.main()

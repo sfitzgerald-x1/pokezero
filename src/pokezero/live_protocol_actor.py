@@ -7,7 +7,7 @@ actor game leaves player-wire, full-encoder and B3 qualification false.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import threading
@@ -151,6 +151,9 @@ class ActorContract:
     showdown_revision: str
     categorical_vocab_size: int = 916
     token_type_vocab_size: int = 16
+    # V2 self_moves: the served checkpoint's declaration (its model config / archive metadata). Recorded in the contract
+    # identity only when on (namespace omits it when False), so every existing contract hash is unchanged.
+    self_moves: bool = False
 
     def __post_init__(self):
         _require(all(_hex(v) for v in (self.checkpoint_sha256,
@@ -172,6 +175,7 @@ class ActorContract:
         masks = dict(self.feature_masks)
         _require(masks['transition_token_budget'] == 0 and not masks['investment_belief_narrowing'],
                  'installed one-frame V4 masks required')
+        _require(type(self.self_moves) is bool, 'self_moves must be a bool')
 
     @classmethod
     def champion(cls):
@@ -180,9 +184,24 @@ class ActorContract:
             c['model_config_sha256'], tuple((k, c['feature_masks'][k]) for k in MASK_NAMES),
             'f76228a1354b5d0f307ca2d16101294ad3a2308b')
 
+    def identity(self):
+        """The contract's identity document: every field, self_moves only when on (off: the pre-self_moves identity, byte
+        for byte). THE serialization of a contract: the namespace hashes it, and anything that records a contract (a study
+        prespec, a provenance document) records it, never asdict(contract) or contract.__dict__."""
+        identity = dict(self.__dict__)
+        if not identity['self_moves']:del identity['self_moves']
+        return identity
+
     @property
     def namespace(self):
-        return _sha(_canonical(self.__dict__))
+        return _sha(_canonical(self.identity()))
+
+    def encoder_masks(self):
+        """The mask dict every v4_encoder.compile_encoder call for this contract passes: the declared feature_masks plus each
+        OPTIONAL key, here self_moves, always declared (so an OBS_SELF_MOVES measurement override cannot flip a served
+        catalog). THE single place optional mask keys are added. See gpu_engine.v4_encoder OPTIONAL_KEYS / ENCODE_ONLY: a
+        future optional key that changes the fold (e.g. set-posterior narrowing) must stay IN the fold binding."""
+        return dict(self.feature_masks, self_moves=self.self_moves)
 
 
 def _vocab_sha(vocab):
@@ -226,6 +245,19 @@ class RawPolicy(OwnedProvider):
         self._validate()
         return decision
 
+    def reselect(self, original, observation, *, rng):
+        """Replace the first inference's history entry on a rejected attempt."""
+        self._validate()
+        if self._transformer_policy is not None:
+            from .neural_policy import _observation_player_key
+            history = self._history[_observation_player_key(original)]
+            _require(history and history[-1] is original, 'rejected choice is not the latest raw inference')
+            history.pop()
+        return self.select_action(observation, rng=rng)
+
+    def confirm_choice(self, choice):
+        """Receive a transport acknowledgement for the selected action."""
+
     def claim(self, contract):
         super().claim(contract)
         if self._transformer_policy is not None:
@@ -264,8 +296,11 @@ class RawPolicy(OwnedProvider):
             item_belief_narrowing=config.item_belief_narrowing, stats_block=config.stats_block_enabled,
             tier2_investment=config.tier2_investment, tier2_residuals=config.tier2_residuals,
             transition_token_budget=config.transition_token_budget)
-        _require(tuple((k, mask_values[k]) for k in MASK_NAMES) == contract.feature_masks,
-                 'raw feature masks differ')
+        _require(tuple((k, mask_values[k]) for k in MASK_NAMES) == contract.feature_masks
+                 and bool(getattr(config, 'self_moves', False)) == contract.self_moves, 'raw feature masks differ')
+        # V2 self_moves: a serving actor encodes what its checkpoint declares; OBS_SELF_MOVES is for measurement tools.
+        from .observation import require_declared_self_moves
+        require_declared_self_moves(bool(getattr(config, 'self_moves', False)), context='live protocol actor')
         _require(config.categorical_vocab_size == contract.categorical_vocab_size
             and config.token_type_vocab_size == contract.token_type_vocab_size
             and config.observation_schema_version == 'pokezero.observation.v4'
@@ -302,7 +337,8 @@ class RawPolicy(OwnedProvider):
                 and _sha(_canonical(config.category_vocab)) == contract.category_vocab_sha256,
                 'raw model/config/vocabulary binding drift')
             _require(tuple((k, getattr(config, {'exact_state':'exact_state_enabled',
-                'stats_block':'stats_block_enabled'}.get(k,k))) for k in MASK_NAMES) == contract.feature_masks,
+                'stats_block':'stats_block_enabled'}.get(k,k))) for k in MASK_NAMES) == contract.feature_masks
+                and bool(getattr(config, 'self_moves', False)) == contract.self_moves,
                 'raw feature mask binding drift')
             _require(tuple((type(getattr(policy,k)),getattr(policy,k)) for k in fields) == selection
                 and _same_callable(policy.forward_fn, forward)
@@ -335,6 +371,7 @@ class PythonBackend(OwnedProvider):
             and _vocab_sha(config.category_vocab) == contract.category_vocab_sha256
             and config.category_vocab.size == contract.categorical_vocab_size
             and _mask_values(config.feature_masks) == contract.feature_masks
+            and bool(getattr(config.feature_masks, 'self_moves', False)) == contract.self_moves
             and config.set_belief_source is True, 'Python encoder contract differs')
         self.owner, self.env = owner, LocalShowdownEnv(config)
         _require(self.env._process is None and self.env._battle_token is None
@@ -368,6 +405,7 @@ class PythonBackend(OwnedProvider):
             and self.env._belief_set_source.metadata.source_hash == self.contract.belief_set_source_hash
             and _vocab_sha(self.env.config.category_vocab) == self.contract.category_vocab_sha256
             and _mask_values(self.env.config.feature_masks) == self.contract.feature_masks
+            and bool(getattr(self.env.config.feature_masks, 'self_moves', False)) == self.contract.self_moves
             and self.env._parser.hp_visibility == {self.owner:'exact',
                 'p2' if self.owner=='p1' else 'p1':'percentage'}, 'Python namespace drift')
 
@@ -386,7 +424,8 @@ class JaxBackend(OwnedProvider):
             and catalog.source.source_hash == contract.belief_set_source_hash
             and _vocab_sha(catalog.vocabulary) == contract.category_vocab_sha256
             and catalog.vocabulary.size == contract.categorical_vocab_size
-            and tuple((k,getattr(catalog.masks,k)) for k in MASK_NAMES) == contract.feature_masks,
+            and tuple((k,getattr(catalog.masks,k)) for k in MASK_NAMES) == contract.feature_masks
+            and bool(getattr(catalog.masks,'self_moves',False)) == contract.self_moves,
             'JAX encoder contract differs')
         _require(owner in ('p1','p2'), 'absolute owning side required')
         self.catalog, self.owner = catalog, owner
@@ -410,6 +449,7 @@ class JaxBackend(OwnedProvider):
             and self.catalog.source.source_hash == self.contract.belief_set_source_hash
             and _vocab_sha(self.catalog.vocabulary) == self.contract.category_vocab_sha256
             and tuple((k,getattr(self.catalog.masks,k)) for k in MASK_NAMES) == self.contract.feature_masks
+            and bool(getattr(self.catalog.masks,'self_moves',False)) == self.contract.self_moves
             and np.array_equal(np.asarray(self.catalog.binding),self._catalog_binding), 'JAX namespace drift')
         _require(not self.adapter.jax.config.jax_enable_x64
             and self.adapter.jax.config.jax_default_matmul_precision == 'highest', 'JAX precision drift')
@@ -486,10 +526,18 @@ class NoAction(ValueError):
     """A legitimate absent/waiting own request; no policy call is permitted."""
 
 
+TRAPPED_CHOICE_ERRORS = (
+    "|error|[Unavailable choice] Can't switch: The active Pokémon is trapped",
+    "|error|[Invalid choice] Can't switch: The active Pokémon is trapped",
+)
+
+
 class LiveProtocolActor:
-    def __init__(self, contract, *, backend_factory, policy_factory):
+    def __init__(self, contract, *, backend_factory, policy_factory, allow_maybe_trapped_switches=False):
         _require(type(contract) is ActorContract and callable(backend_factory)
             and callable(policy_factory), 'contract and fresh providers required')
+        _require(type(allow_maybe_trapped_switches) is bool, 'typed maybe-trapped serving flag required')
+        self.allow_maybe_trapped_switches = allow_maybe_trapped_switches
         self.contract, self.backend_factory, self.policy_factory = contract, backend_factory, policy_factory
         self.status, self._seen_battles, self._seen_streams = 'IDLE', set(), set()
         self._backend = self._policy = None
@@ -507,6 +555,8 @@ class LiveProtocolActor:
         self._decision_generation, self._choice, self.error, self.close_error = None, None, None, None
         self._decision_observation, self._decision_snapshot = None, None
         self._decision_request_count, self._terminal = None, False
+        self._trapped_rejection_pending = False
+        self._unconfirmed_choice = None
         self._terminal_lifecycle_line = None
         self._backend = self._policy = None
         self.status = 'ACTIVE'
@@ -558,12 +608,25 @@ class LiveProtocolActor:
             requests = [line for line in lines if line.startswith('|request|')]
             for line in requests:
                 _packet(line,self.owner)
-            self._backend.ingest(lines)
+            feature_lines = lines
+            if self._trapped_rejection_pending:
+                for index, line in enumerate(lines):
+                    if line.startswith('|request|'):
+                        break
+                    if line in TRAPPED_CHOICE_ERRORS:
+                        # A matched private choice error is wire control only.
+                        # Its literal bytes remain in the owning prefix.
+                        feature_lines = lines[:index] + lines[index + 1:]
+                        self._trapped_rejection_pending = False
+                        break
+            if feature_lines:
+                self._backend.ingest(feature_lines)
             for line in lines:
                 self._prefix.update(line.encode()+b'\n')
             self._lines.extend(lines)
             self._request_count += len(requests)
             if requests:
+                self._trapped_rejection_pending = False
                 self._request_line = requests[-1]
             self._terminal = terminal_seen
             self._terminal_lifecycle_line = terminal_line
@@ -596,11 +659,12 @@ class LiveProtocolActor:
             encoded, targets = self._backend.encode(snapshot)
             observation = self._observation(encoded,snapshot)
             from .showdown import _legal_action_mask
-            _require(observation.legal_action_mask == _legal_action_mask(_packet(snapshot.own_request_line,self.owner)),
-                     'encoded own legal mask differs')
+            request = _packet(snapshot.own_request_line, self.owner)
+            _require(observation.legal_action_mask == _legal_action_mask(request), 'encoded own legal mask differs')
             targets = tuple(targets)
-            _require(targets == _request_targets(_packet(snapshot.own_request_line,self.owner)),
-                     'encoded own switch targets differ')
+            _require(targets == _request_targets(request), 'encoded own switch targets differ')
+            if self.allow_maybe_trapped_switches:
+                observation = replace(observation, legal_action_mask=_legal_action_mask(request, allow_maybe_trapped=True))
             decision = self._policy.select_action(observation,rng=rng)
             self._active()
             _require(type(decision) is PolicyDecision and type(decision.action_index) is int
@@ -608,9 +672,48 @@ class LiveProtocolActor:
             action = decision.action_index
             self._choice = f'move {action+1}' if action < 4 else f'switch {targets[action-4]+1}'
             _require(action < 4 or targets[action-4] >= 0, 'missing switch target')
+            if self.allow_maybe_trapped_switches:
+                self._unconfirmed_choice = self._choice
             self._decision_generation = self.generation
             self._decision_request_count = self._request_count
             self._decision_observation, self._decision_snapshot = observation, snapshot
+            return decision
+        except BaseException as error:
+            self._poison(error); raise
+
+    def confirm_choice(self, choice):
+        self._active()
+        _require(self._unconfirmed_choice is not None and choice == self._unconfirmed_choice,
+                 'acknowledgement does not match the pending owning choice')
+        self._policy.confirm_choice(choice)
+        self._unconfirmed_choice = None
+
+    def tentative_switch(self, snapshot):
+        self._current(snapshot)
+        if not self.allow_maybe_trapped_switches or not self.choice(snapshot).startswith('switch '):
+            return False
+        from .showdown import _active_request, _request_kind
+        request = _packet(snapshot.own_request_line, self.owner)
+        active = _active_request(request)
+        return (_request_kind(request) == 'move' and active is not None
+                and active.get('maybeTrapped') is True and active.get('trapped') is not True)
+
+    def retry_trapped_switch(self, snapshot, *, rng):
+        original = self.decision_observation(snapshot)
+        _require(self.tentative_switch(snapshot), 'expected a rejected maybe-trapped switch')
+        moves = original.legal_action_mask[:4]
+        _require(any(moves), 'trapped request has no legal move fallback')
+        observation = replace(original, legal_action_mask=moves + (False,) * 5)
+        try:
+            decision = self._policy.reselect(original, observation, rng=rng)
+            self._active()
+            action = decision.action_index
+            _require(type(decision) is PolicyDecision and type(action) is int and 0 <= action < 4
+                     and moves[action], 'illegal trapped fallback')
+            self._choice = f'move {action + 1}'
+            self._unconfirmed_choice = self._choice
+            self._decision_observation = observation
+            self._trapped_rejection_pending = True
             return decision
         except BaseException as error:
             self._poison(error); raise

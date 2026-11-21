@@ -182,7 +182,7 @@ def champion_actor_factory(config):
             _require(source.metadata.source_hash == c.belief_set_source_hash, 'JAX source hash differs')
             catalog = v4_encoder.compile_encoder(public_belief.compile_source(source),
                 load_showdown_dex_cached(config.showdown_root), env_config.category_vocab,
-                checkpoint_sha256=c.checkpoint_sha256, feature_masks=dict(c.feature_masks))
+                checkpoint_sha256=c.checkpoint_sha256, feature_masks=c.encoder_masks())
             bound['functions'] = CompiledEncoderFunctions(catalog)
         functions = bound['functions']
         return JaxBackend(c, catalog=functions.catalog, compiled_functions=functions, **identity)
@@ -204,7 +204,8 @@ def champion_actor_factory(config):
             checkpoint_path=checkpoint, weights_sha256=contract.checkpoint_sha256)
         return RawPolicy.from_transformer(c, raw)
 
-    factory = OwningActorFactory(kind, contract, backend, policy)
+    factory = OwningActorFactory(kind, contract, backend, policy,
+                                 getattr(config, 'owning_allow_maybe_trapped_switches', False))
     from .owning_worker_runtime import register_factory
     register_factory(factory, lambda: {} if 'functions' not in bound else {
         'fold': bound['functions'].step, 'encode': bound['functions'].encode_step})

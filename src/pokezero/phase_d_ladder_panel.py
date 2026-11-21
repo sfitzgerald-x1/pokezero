@@ -86,6 +86,11 @@ def configuration(base,cell,*,checkpoint,cpu_pair):
         raise ValueError('one dedicated actor/FP physical-core pair required')
     values=dict(base,checkpoint=checkpoint,games=1,seed_start=cell['seed'],foulplay_random_seed=cell['fp_seed'],
         pokezero_player=('p1','p2')[cell['seat']],foulplay_cpu_affinity=cpu_pair[1])
+    revision = values.pop('screen_revision', None)
+    if revision is not None:
+        if type(revision) is not int or revision < 6:
+            raise ValueError('explicit serving defaults are available for screen revision 6 and later')
+        values.setdefault('owning_allow_maybe_trapped_switches', True)
     for field in fields(ControlledFoulPlayConfig):
         if values.get(field.name)is not None and 'Path'in str(field.type):values[field.name]=Path(values[field.name])
     config=ControlledFoulPlayConfig(**values);validate_encoder_config(config)

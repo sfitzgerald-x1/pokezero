@@ -83,14 +83,12 @@ for(const [name,t] of Object.entries({
 })){const b=battle([mon('Snorlax',['splash'],'Thick Fat')],[mon('Blissey',['splash'],'Natural Cure')]);out.invalid[name]=turn(b,t).error;}
 {const b=battle([mon('Snorlax',['splash'],'Thick Fat')],[mon('Blissey',['splash'],'Natural Cure')]);out.v1_ok=turn(b,T('ok',{},'v1')).error;}
 // M2: an equal-Speed turn (eachEvent BeforeTurn/Update Pokemon-order ties with no handler are inert), the same with an
-// Update handler (Insomnia's onUpdate: since Transform an own-holder cure, inert; with Lum Berry's onUpdate beside it:
-// unresolved), and the Yawn residual pair (inert).
+// Update handler (Insomnia's own-holder cure, and Lum Berry's reviewed v4 callback), and the Yawn residual pair (inert).
 {const b=battle([mon('Snorlax',['splash'],'Thick Fat')],[mon('Snorlax',['splash'],'Thick Fat')]);out.eachevent=turn(b,T('ee'));}
 {const b=battle([mon('Hypno',['splash'],'Insomnia')],[mon('Hypno',['splash'],'Insomnia')]);out.eachevent_handler=turn(b,T('eh'));}
 {const lum=()=>({...mon('Hypno',['splash'],'Insomnia'),item:'Lum Berry'});out.eachevent_item=turn(battle([lum()],[lum()]),T('ei'));}
-// Transform's rules, mixed and negative cases: one own-holder cure against one unlisted Update handler (Lum Berry beside an
-// ability with no Update handler); a residual pair of Speed Boosts on distinct holders (inert), of Speed Boost against Truant
-// and of two Speed Boosts on one holder (both unresolved).
+// Reviewed mixed Update handlers commute. Synthetic residual callbacks remain
+// unresolved even when their labels name a reviewed ability.
 {const b=battle([mon('Hypno',['splash'],'Insomnia')],[{...mon('Hypno',['splash'],'Inner Focus'),item:'Lum Berry'}]);
  out.eachevent_mixed=turn(b,T('em'));}
 function abilityTie(ids,same=false){
@@ -178,34 +176,22 @@ class ChanceHooksV2Tests(unittest.TestCase):
         self.assertEqual(len(ties), 1);self.assertEqual(sorted(ties[0]['effects']), ['protect', 'stall'])
 
     def test_equal_speed_each_event_and_yawn_pair_ties(self):
-        """M2: an eachEvent Pokemon-order tie is inert when neither Pokemon has a handler for that event (both runEvent
-        calls do nothing). Transform adds one more inert Update tie: every handler is a Gen 3 own-holder cure ability
-        (Insomnia's onUpdate cures only its holder and draws nothing); any other handler beside it (Lum Berry's onUpdate)
-        still leaves the tie unresolved. The Yawn residual pair is inert (each countdown and sleep attempt touch only their
-        holder)."""
+        """Original own-holder Update callbacks commute, including the reviewed v4 berries."""
         r = self.out['eachevent'];self.assertResolved(r)
         ties = [e for e in r['events'] if e['kind'] == 'INERT_EACH_EVENT_TIE']
         self.assertTrue(ties);self.assertTrue({e['event'] for e in ties} <= {'BeforeTurn', 'Update'})
         self.assertEqual(coupled(r), [('move_tie', 0, 0)])
-        r = self.out['eachevent_handler'];self.assertResolved(r)
-        own = [e for e in r['events'] if e['kind'] == 'INERT_EACH_EVENT_TIE' and e.get('own_holder')]
-        self.assertTrue(own);self.assertEqual({e['event'] for e in own}, {'Update'})
-        self.assertIn('SPIKE_UNRESOLVED:TIE_ORDER', self.out['eachevent_item']['error'])
-        self.assertEqual(self.out['eachevent_item']['error_event'], 'Update')
+        for name in ('eachevent_handler', 'eachevent_item', 'eachevent_mixed'):
+            self.assertResolved(self.out[name])  # v4 reviewed own-holder cures, including berries
         r = self.out['yawntie'];self.assertResolved(r);self.assertEqual(coupled(r), [])
         self.assertEqual([e['effects'] for e in r['events'] if e['kind'] == 'INERT_RESIDUAL_TIE'], [['yawn', 'yawn']])
 
     def test_transform_inert_ties_cover_own_holder_handlers_only(self):
-        """chance_hooks.cjs's two Transform rules: an Update tie is inert only when EVERY handler on both Pokemon is a Gen 3
-        own-holder cure ability (OWN_UPDATE), so one cure holder against a Lum Berry holder stays unresolved at Update; a
-        residual tie is inert only for one OWN_RESIDUAL ability (Truant or Speed Boost) on distinct holders, so Speed Boost
-        against Truant, or two Speed Boost handlers on one holder, stay unresolved."""
-        r = self.out['eachevent_mixed']
-        self.assertIn('SPIKE_UNRESOLVED:TIE_ORDER', r['error']);self.assertEqual(r['error_event'], 'Update')
-        self.assertFalse([e for e in r['events'] if e.get('own_holder')])
-        r = self.out['abilitytie'];self.assertIsNone(r['error'], r)
-        self.assertEqual([e['effects'] for e in r['events'] if e['kind'] == 'INERT_RESIDUAL_TIE'], [['speedboost', 'speedboost']])
-        for name in ('abilitytie_mixed', 'abilitytie_same'):
+        """Synthetic or wrong-context residual handlers must not inherit an inert proof.
+
+        Real Residual callbacks and both execution orders are covered by chance_hooks_v4.cjs.
+        """
+        for name in ('abilitytie', 'abilitytie_mixed', 'abilitytie_same'):
             with self.subTest(name=name):
                 r = self.out[name]
                 self.assertIn('SPIKE_UNRESOLVED:TIE_ORDER', r['error'])

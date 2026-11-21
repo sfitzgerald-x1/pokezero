@@ -107,6 +107,19 @@ def pre_arrays(L):
 
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
 class DigestAndRuleTests(unittest.TestCase):
+    def test_invalid_saved_effect_blocks_override_full_allowances_and_waivers(self):
+        from gpu_engine.v2e_regress import lane_verdict, EFFECT_DRAWS
+        for effect in ('cutecharm','attract','infatuated'):
+            for side in (0,1):
+                for cascade in (None,dict(ko_sides=[True,True],mon_ok=lambda *_:True,families=('residual',))):
+                    with self.subTest(effect=effect,side=side,cascade=bool(cascade)):
+                        checks=[True,True];checks[side]=False
+                        changed={(EFFECT_DRAWS,side),('state.hp',1-side)}
+                        self.assertEqual(lane_verdict(changed,{effect:[0]},None,cascade=cascade,
+                            effect_ok=checks,waive=('.*',)),([(EFFECT_DRAWS,side)],[],[]))
+                        self.assertEqual(lane_verdict(changed,{effect:[0]},None,cascade=cascade,
+                            effect_ok=[True,True]),([],[],[]))
+
     def test_lane_digest_sees_every_single_element_change(self):
         import jax.numpy as j
         from gpu_engine.v2e_regress import lane_digest
@@ -144,6 +157,15 @@ class DigestAndRuleTests(unittest.TestCase):
         self.assertTrue((named['state.new'] == -1).all())
         self.assertEqual(named['trackers.public_order'][2, 1].tolist(), list(range(6)))       # declared identity, not lane 0
         self.assertTrue((named["trackers.mon_features['wrap_trap_turns']"] == 0).all())
+        history = 'trackers.type_changed'
+        template[history] = np.ones((1, 2), bool)
+        migrated, filled = migrate(['state.a', 'actions'], leaves, template, defaults=defaults)
+        self.assertIn(history, filled)
+        np.testing.assert_array_equal(migrated[history], np.zeros((3, 2), bool))
+        captured = np.asarray([[True, False], [True, True], [False, True]])
+        migrated, filled = migrate(['state.a', 'actions', history], leaves + [captured], template, defaults=defaults)
+        self.assertNotIn(history, filled)
+        np.testing.assert_array_equal(migrated[history], captured)
         with self.assertRaises(MigrationError):migrate(['state.a', 'actions'], [leaves[0].astype(np.int16), leaves[1]], template, defaults=defaults)
         with self.assertRaises(MigrationError):migrate(['state.a', 'actions'], [np.ones((3, 3), np.int32), leaves[1]], template, defaults=defaults)
         with self.assertRaises(MigrationError):migrate(['state.a', 'actions', 'state.gone'], leaves + [leaves[0]], template, defaults=defaults)
@@ -300,6 +322,135 @@ class DigestAndRuleTests(unittest.TestCase):
         self.assertFalse(d['pinch'](Pre(named, vocab, callable_, np.zeros((L, 2), bool), moves=rows))[8, 1])
         self.assertTrue(all(e in ALLOWED for e in d))
 
+    def test_dm_plug_in_predicates(self):
+        """DM: a type item's holder with a damaging move of its type (Hidden Power by its own type; not Struggle's ???), or a
+        side a foe's Trick hands it to; the attacker into a Marvel Scale holder with a physical move, and the holder itself
+        when it may hit itself in confusion; a Plus (Minus) active facing a possible Minus (Plus) with a special move. Every
+        DM effect has the damage allowance, and anything on a KO cascade."""
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, CASCADE_ALLOWED, lane_verdict
+        types = ['_none', 'normal', 'fighting', 'flying', 'poison', 'ground', 'rock', 'bug', 'ghost', 'steel', 'fire', 'water',
+                 'grass', 'electric', 'psychic', 'ice', 'dragon', 'dark']
+        extra = ['extremespeed', 'shadowball', 'psychic', 'thunderbolt', 'hiddenpowerghost', 'signalbeam', 'trick']
+        ES, SB, PSY, TB, HPG, SIG, TRICK = range(len(VOCAB['moves']), len(VOCAB['moves']) + len(extra))
+        MARVEL, PLUS, MINUS = 4, 5, 6
+        SCARF, SPOON = 3, 4
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + extra, types=types,
+                     abilities=VOCAB['abilities'] + ['marvelscale', 'plus', 'minus'], items=VOCAB['items'] + ['silkscarf', 'twistedspoon'])
+        row = lambda name, typ, category: dict(id=name, type=typ, category=category, flags={})
+        rows = [None, row('curse', 0, 'Status'), row('tackle', 1, 'Physical'), row('sleeptalk', 1, 'Status'),
+                row('spore', 12, 'Status'), row('struggle', 1, 'Physical'), row('encore', 1, 'Status'),
+                row('magiccoat', 14, 'Status'), row('batonpass', 1, 'Status'), row('extremespeed', 1, 'Physical'),
+                row('shadowball', 8, 'Physical'), row('psychic', 14, 'Special'), row('thunderbolt', 13, 'Special'),
+                row('hiddenpowerghost', 8, 'Physical'), row('signalbeam', 7, 'Physical'), row('trick', 14, 'Status')]
+        L = 16;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32);s['hidden_power_type'] = np.zeros((L, 2, 6), np.int32)
+        struggle = np.zeros((L, 2), bool)
+        s['item'][0, 0, 0] = SCARF                                                         # 0: Tackle (Normal)
+        s['item'][1, 0, 0] = SCARF;s['moves'][1, 0, 0] = SB                                 # 1: Shadow Ball only
+        s['item'][2, 0, 0] = SCARF;s['moves'][2, 0, 0] = CURSE;struggle[2, 0] = True        # 2: Struggle's ???
+        s['item'][3, 1, 0] = SCARF;s['moves'][3, 1, 0] = TRICK                              # 3: the foe Tricks it over
+        s['item'][4, 0, 0] = SPOON;s['moves'][4, 0, 0] = PSY                                # 4: Psychic
+        s['item'][5, 0, 0] = SPOON;s['moves'][5, 0, 0] = TB                                 # 5: Thunderbolt only
+        s['item'][6, 0, 0] = SPOON;s['moves'][6, 0, 0] = HPG;s['hidden_power_type'][6, 0, 0] = 14   # 6: HP Psychic
+        s['ability'][7, 1, 0] = MARVEL                                                     # 7: Tackle into Marvel Scale
+        s['ability'][8, 1, 0] = MARVEL;s['moves'][8, 0, 0] = PSY                            # 8: special only
+        s['ability'][9, 0, 0] = MARVEL;s['confusion_counter'][9, 0, 0] = 2;s['moves'][9, 1, 0] = PSY   # 9: its self-hit
+        s['ability'][10, 0, 0] = MARVEL;s['moves'][10, 1, 0] = SIG                          # 10: Signal Beam (Bug: physical)
+        s['ability'][11, 0, 0] = PLUS;s['ability'][11, 1, 0] = MINUS;s['moves'][11, 0, 0] = TB   # 11: Plus vs Minus
+        s['ability'][12, 0, 0] = PLUS;s['ability'][12, 1, 0] = PLUS;s['moves'][12, 0, 0] = TB    # 12: Plus vs Plus
+        s['ability'][13, 0, 0] = PLUS;s['ability'][13, 1, 3] = MINUS;s['moves'][13, 0, 0] = TB;actions[13, 1] = 6  # 13: Minus enters
+        s['ability'][14, 0, 0] = PLUS;s['ability'][14, 1, 0] = MINUS                       # 14: Tackle only
+        s['ability'][15, 1, 0] = MARVEL;s['moves'][15, 0, 0] = CURSE;struggle[15, 0] = True     # 15: Struggle (physical) into it
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
+        p = Pre(named, vocab, np.append(CALLABLE, [False] * len(extra)), struggle, moves=rows)
+        dm = PLUGINS['DM'];no = [False, False];t0 = [True, False]
+        self.assertEqual(dm['silkscarf'](p).tolist(), [t0, no, no, t0] + [no] * 12)
+        self.assertEqual(dm['twistedspoon'](p).tolist(), [no] * 4 + [t0, no, t0] + [no] * 9)
+        self.assertEqual(dm['marvelscale'](p).tolist(), [no] * 7 + [t0, no, t0, [True, True]] + [no] * 4 + [t0])
+        self.assertEqual(dm['plusminus'](p).tolist(), [no] * 11 + [t0, no, t0, no, no])
+        # Without move rows every move counts (a superset): lane 1's Shadow Ball and lane 14's Tackle count.
+        q = Pre(named, vocab, np.append(CALLABLE, [False] * len(extra)), struggle)
+        self.assertTrue(dm['silkscarf'](q)[1, 0] and dm['plusminus'](q)[14, 0])
+        self.assertTrue(all(e in ALLOWED and e in CASCADE_ALLOWED for e in dm))
+        self.assertEqual(lane_verdict({('state.hp', 0), ('state.hp', 1), ('state.item', 1), ('state.boosts', 0)},
+                                      {'marvelscale': [0]}, None)[0], [])
+        self.assertEqual(lane_verdict({('state.status', 1)}, {'silkscarf': [0]}, None)[0], [('state.status', 1)])
+        cascade = dict(ko_sides=[False, False], mon_ok=lambda leaf, side: False, families=())
+        self.assertEqual(lane_verdict({('state.status', 1)}, {'silkscarf': [0]}, None, cascade=cascade)[0], [])
+
+    def test_stick_plug_in_predicate(self):
+        """STICK: a Farfetch'd active holding Stick (or facing a Stick holder's Trick) with a damaging candidate; another
+        species holding Stick, a bare Farfetch'd or a Status-only Farfetch'd with PP is not involved. Exhausted PP makes
+        even a selected Status slot execute Struggle, which can receive the Stick critical-hit boost."""
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, CASCADE_ALLOWED
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['trick'], items=VOCAB['items'] + ['stick'],
+                     species=['_none', 'farfetchd', 'mew'], types=['_none', 'normal', 'dark', 'grass', 'psychic'])
+        TRICK, STICK, FARFETCHD, MEW = len(VOCAB['moves']), 3, 1, 2
+        row = lambda name, typ, category: dict(id=name, type=typ, category=category, flags={})
+        rows = [None, row('curse', 0, 'Status'), row('tackle', 1, 'Physical'), row('sleeptalk', 1, 'Status'),
+                row('spore', 3, 'Status'), row('struggle', 1, 'Physical'), row('encore', 1, 'Status'),
+                row('magiccoat', 4, 'Status'), row('batonpass', 1, 'Status'), row('trick', 4, 'Status')]
+        L = 9;s = pre_arrays(L);s['species'] = np.full((L, 2, 6), MEW, np.int32)
+        s['species'][0, 0, 0] = FARFETCHD;s['item'][0, 0, 0] = STICK                       # 0: Farfetch'd + Stick, Tackle
+        s['species'][1, 0, 0] = MEW;s['item'][1, 0, 0] = STICK                             # 1: another species
+        s['species'][2, 0, 0] = FARFETCHD                                                  # 2: no Stick
+        s['species'][3, 0, 0] = FARFETCHD;s['item'][3, 1, 0] = STICK;s['moves'][3, 1, 0] = TRICK   # 3: the foe's Trick
+        s['species'][4, 0, 0] = FARFETCHD;s['item'][4, 0, 0] = STICK;s['moves'][4, 0, 0] = CURSE   # 4: Status only
+        s['pp'] = np.full(s['moves'].shape, 10, np.int32)
+        s['moves'][6:, 0, 0] = CURSE;s['pp'][6:, 0, 0] = 0
+        s['species'][6, 0, 0] = FARFETCHD;s['item'][6, 0, 0] = STICK                       # 6: Struggle + Stick
+        s['item'][7, 0, 0] = STICK                                                        # 7: Struggle, another species
+        s['species'][8, 0, 0] = FARFETCHD                                                 # 8: Struggle, no Stick
+        struggle = np.zeros((L, 2), bool);struggle[6:, 0] = True
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = np.zeros((L, 2), np.int32)
+        p = Pre(named, vocab, np.append(CALLABLE, False), struggle, moves=rows)
+        no = [False, False];t0 = [True, False]
+        self.assertEqual(PLUGINS['STICK']['stick_crit'](p).tolist(), [t0, no, no, t0, no, no, t0, no, no])
+        self.assertTrue('stick_crit' in ALLOWED and 'stick_crit' in CASCADE_ALLOWED)
+
+    def test_ko_timing_lane_accepts_only_witnessed_actor_bookkeeping(self):
+        """DM (GPU pass, shard-000294 lane 741): with the faint set unchanged, a damage change moved a faint within the step
+        (a Double-Edge user's recoil KO before the target's move in one tree, the target's own KO of it after its move in
+        the other), so the target's move bookkeeping differs. A timing witness permits only that actor's bookkeeping,
+        not arbitrary effects of a move or the other actor's bookkeeping."""
+        from gpu_engine.v2e_regress import lane_verdict
+        moved = {('state.pp', 0), ('step.placeholder_moves', None), ("trackers.mon_features['moves_shown']", 0),
+                 ('trackers.pp_used', 0), ('trackers.tendency.opportunities', 0)}
+        for effect in ('marvelscale', 'pinch', 'silkscarf', 'plusminus', 'twistedspoon', 'stick_crit'):
+            self.assertEqual(lane_verdict(moved, {effect: [1]}, None)[0], sorted(moved, key=lambda x: (x[0], -1 if x[1] is None else x[1])))
+            self.assertEqual(lane_verdict(moved, {effect: [1]}, None, timing=(0,))[0], [], effect)
+            accepted = [];lane_verdict(moved, {effect: [1]}, None, timing=(0,), cascade_accepted=accepted)
+            self.assertEqual(sorted(accepted, key=str), sorted(moved, key=str))
+        self.assertEqual(len(lane_verdict(moved, {'irontail': [1]}, None, timing=(0,))[0]), len(moved))
+        # A same-set faint is not a timing witness. Even a valid action witness cannot mask these unrelated writes.
+        unrelated = {('state.moves', 0), ('state.stats', 1), ('state.status', 0), ('state.pp', 1)}
+        for timing in (True, (), (0,)):
+            self.assertEqual(set(lane_verdict(unrelated, {'marvelscale': [1]}, None, timing=timing)[0]), unrelated)
+        # No KO-consequence rule on a timing lane: a fainted-mon leaf with a non-cascade effect stays unexpected.
+        self.assertEqual(lane_verdict({('state.forced_switch', 0)}, {'irontail': [1]}, None, timing=(0,))[0], [('state.forced_switch', 0)])
+
+    def test_ko_timing_requires_selected_pp_and_matching_move_count(self):
+        from gpu_engine.v2e_regress import Pre, ko_timing_sides, lane_digest
+        L = 9;s = pre_arrays(L);s['pp'] = np.full(s['moves'].shape, 10, np.int32)
+        s['pending_residual'][5] = True
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = np.zeros((L, 2), np.int32)
+        pre = Pre(named, VOCAB, CALLABLE, np.zeros((L, 2), bool))
+        faint = np.zeros((L, 2, 6), bool);faint[:, 1, 0] = True;base_faint = faint.copy();base_faint[8] = False
+        pp = s['pp'].copy();base_pp = pp.copy();pp[[0, 4, 5, 6, 8], 0, 0, 0] = 9
+        pp[2, 0, 1, 0] = 9;pp[3, 0, 0, 0] = 8;base_pp[7, 0, 0, 0] = 9
+        active = s['active'].copy();active[6, 0] = 1
+        count = np.full(L, 2);base_count = np.ones(L, np.int32);base_count[[4, 7]] = 2;count[7] = 1
+        expected = np.zeros((L, 2), bool);expected[[0, 7], 0] = True
+        got = ko_timing_sides(pre, faint, base_faint, pp, base_pp, active, s['active'], count, base_count)
+        np.testing.assert_array_equal(got, expected)
+        self.assertFalse(ko_timing_sides(pre, faint, base_faint, pp, base_pp, active, None, count, base_count).any())
+        # Identify the old base's recorded scalar count without rerunning or replacing the shared base pass.
+        digests = np.asarray(lane_digest(np.arange(5, dtype=np.int32), 5))
+        recorded = np.repeat(digests[[2, 0, 4], None], 2, axis=1)
+        matches = (recorded[:, None] == digests[None, :, None, :]).all((-2, -1))
+        np.testing.assert_array_equal(matches.argmax(-1), [2, 0, 4])
+        recorded[0, 1, 0] ^= np.uint32(1)
+        self.assertFalse((recorded[0, None] == digests[:, None, :]).all((-2, -1)).any())
+
     def test_tier_d_pinch_accepts_anything_only_on_a_ko_cascade(self):
         """D: a pinch-boosted KO that moved within the step decides whether the target's action ran (the GPU pass's 13
         lane-steps: a status on the pinch user, the target's PP and action bookkeeping). Without a cascade the damage
@@ -380,6 +531,44 @@ class DigestAndRuleTests(unittest.TestCase):
                          [('state.types', 1), ('trackers.shown_types', 1)])
 
 
+class ForecastPluginTests(unittest.TestCase):
+    """FC (gpu_engine/forecast.py): the involvement predicate on synthetic pre-states (numpy only), with its controls."""
+    def test_forecast_involvement_and_controls(self):
+        from gpu_engine.v2e_regress import Pre, PLUGINS, ALLOWED, ALL, lane_verdict
+        RAIN_DANCE = len(VOCAB['moves']);ROAR = RAIN_DANCE + 1
+        FORECAST, DRIZZLE, CLOUD = 4, 5, 6
+        vocab = dict(VOCAB, moves=VOCAB['moves'] + ['raindance', 'roar'],
+                     abilities=VOCAB['abilities'] + ['forecast', 'drizzle', 'cloudnine'], species=['_none', 'castform', 'golduck'])
+        L = 10;s = pre_arrays(L);actions = np.zeros((L, 2), np.int32)
+        s['species'] = np.full((L, 2, 6), 2, np.int32);s['weather'] = np.zeros(L, np.int32)
+        cast = lambda lane, side, slot: (s['species'].__setitem__((lane, side, slot), 1), s['ability'].__setitem__((lane, side, slot), FORECAST))
+        cast(0, 0, 0);s['weather'][0] = 1                                    # lane 0: active Castform in rain
+        cast(1, 0, 0)                                                        # lane 1: active, no weather, no setter: control
+        cast(2, 1, 0);s['moves'][2, 0, 0, 0] = RAIN_DANCE                    # lane 2: the foe's Rain Dance
+        cast(3, 0, 2);s['weather'][3] = 2;actions[3, 0] = 5                  # lane 3: a switch may bring it into sun
+        cast(4, 0, 2);s['weather'][4] = 2                                    # lane 4: benched, no install: control
+        cast(5, 0, 0);s['ability'][5, 1, 3] = DRIZZLE;actions[5, 1] = 6      # lane 5: a Drizzle holder may switch in
+        cast(6, 0, 0);s['ability'][6, 1, 3] = DRIZZLE                        # lane 6: a benched Drizzle holder only: control
+        s['species'][7, 0, 0] = 1;s['weather'][7] = 1                        # lane 7: Castform without Forecast: control
+        cast(8, 0, 0);s['hp'][8, 0, 0] = 0;s['weather'][8] = 1               # lane 8: a fainted Castform: control
+        cast(9, 1, 3);s['weather'][9] = 1;s['moves'][9, 0, 0, 0] = ROAR      # lane 9: the foe's Roar may drag it in
+        s['ability'][0, 1, 0] = CLOUD
+        named = {f'state.{k}': v for k, v in s.items()};named['actions'] = actions
+        p = Pre(named, vocab, np.append(CALLABLE, [False, False]), np.zeros((L, 2), bool))
+        got = PLUGINS['FC']['forecast'](p)
+        no = [False, False]
+        self.assertEqual(got.tolist(), [[True, False], no, [False, True], [True, False], no, [True, False], no, no, no,
+                                        [False, True]])
+        self.assertIs(ALLOWED['forecast'], ALL)
+        # Negative controls: a changed lane-step the plug-in does not cover stays unexpected; covered, anything goes.
+        changed = {('state.types', 0), ('trackers.shown_types', 0), ('state.hp', 1)}
+        self.assertEqual(lane_verdict(changed, {}, None)[0], sorted(changed))
+        self.assertEqual(lane_verdict(changed, {'forecast': [0]}, None)[0], [])
+        # A vocabulary without Castform involves nothing.
+        bare = Pre(named, dict(vocab, species=['_none', 'golduck']), np.append(CALLABLE, [False, False]), np.zeros((L, 2), bool))
+        self.assertFalse(PLUGINS['FC']['forecast'](bare).any())
+
+
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
 class TwoPassTests(unittest.TestCase):
     """base -> patched end to end on three synthetic shards, without a V2 runtime."""
@@ -426,6 +615,45 @@ class TwoPassTests(unittest.TestCase):
         code = v2e_regress.patched_pass(self.args(out=out, base=str(self.base), pr=pr, faint_clear=faint_clear, **extra),
             step_override=step, prepared=(self.context, template or self.template))
         return code, json.loads((out / 'report.json').read_text()), [json.loads(x) for x in (out / 'changed.jsonl').read_text().splitlines()]
+
+    def test_shed_skin_cure_cannot_clear_an_unrelated_benched_member(self):
+        import jax
+        import jax.numpy as j
+        from gpu_engine import v2e_regress as r
+        from gpu_engine.v2e_capture import leaf_paths
+        root=self.tmp/'ss-members';shards=root/'cap'/'shards';shards.mkdir(parents=True)
+        state=lanes_state(self.LANES,154)
+        names=('status','status_counter','sleep_skipped','rest_origin')
+        state=state._replace(**{name:j.ones_like(getattr(state,name)) for name in names})
+        tree=(state,j.zeros((self.LANES,2),j.int32),trackers(self.LANES))
+        template=jax.tree.map(lambda x:x[:1],tree)
+        np.savez_compressed(shards/'shard-000000.npz',tick=np.int64(0),level=np.int64(0),
+            **{f'l{i:03d}':np.asarray(x) for i,x in enumerate(jax.tree.leaves(tree))})
+        (shards.parent/'capture.json').write_text(json.dumps(dict(shards=1,paths=leaf_paths(template))))
+        vocab={**VOCAB,'abilities':['shedskin',*VOCAB['abilities'][1:]]}
+        context={**self.context,'pool':SimpleNamespace(metadata=lambda:dict(vocabulary=vocab))}
+        base=root/'base'
+        self.assertEqual(r.base_pass(self.args(out=base,shards=str(shards),pad_lanes=self.LANES),
+            step_override=base_step,prepared=(context,template)),0)
+        def cure(s,a,t,*,wide):
+            out=base_step(s,a,t);changes={}
+            for name in names:
+                value=getattr(out.step.state,name)
+                for member in ((0,1) if wide else (0,)):
+                    value=value.at[:,0,member].set(j.where(s.done,value[:,0,member],j.zeros_like(value[:,0,member])))
+                changes[name]=value
+            return result(out.step.state._replace(**changes),out.trackers)
+        for wide in (False,True):
+            out=root/('bench-mutant' if wide else 'holder-only')
+            code=r.patched_pass(self.args(out=out,base=str(base),shards=str(shards),pr='SS',faint_clear=False),
+                step_override=lambda s,a,t:cure(s,a,t,wide=wide),prepared=(context,template))
+            report=json.loads((out/'report.json').read_text())
+            self.assertEqual(code,int(wide),report['counts'])
+            self.assertEqual(report['counts']['changed_but_uninvolved'],0)
+            if wide:
+                self.assertGreater(report['counts']['changed_involved_unexpected_fields'],0)
+                self.assertEqual(set(report['by_effect']['shedskin']['unexpected_fields']),
+                    {'state.'+name+'@user' for name in names})
 
     def test_base_pass_manifest(self):
         m = self.manifest
@@ -554,8 +782,13 @@ class TwoPassTests(unittest.TestCase):
         code, report, _ = self.patched('partial', base_step, pr='A1,A2', limit=1)
         self.assertEqual(code, 2);self.assertTrue(report['partial']);self.assertIsNone(report['passed'])
         self.assertTrue(report['warnings']);self.assertEqual(report['plug_ins'], ['A1', 'A2'])
-        with self.assertRaises(SystemExit):self.patched('undeclared', base_step, pr='C')   # the PR's own plug-in must declare
         from gpu_engine import v2e_regress
+        for index, pr in enumerate(('C', 'A1,C', 'ENC,C')):
+            with self.subTest(pr=pr), mock.patch.object(v2e_regress, 'context_and_template',
+                    side_effect=AssertionError('undeclared effects reached preparation')), \
+                    self.assertRaisesRegex(SystemExit, 'psychoboost'):
+                v2e_regress.patched_pass(self.args(out=self.tmp / ('undeclared-%d' % index),
+                    base=str(self.base), pr=pr, faint_clear=False), step_override=base_step)
         with self.assertRaises(SystemExit):         # a base pass that is not this PR's merge base
             v2e_regress.patched_pass(self.args(out=self.tmp / 'nobase', base=str(self.base), pr='A1', faint_clear=False,
                 allow_base_mismatch=False), step_override=base_step, prepared=(self.context, self.template))
@@ -634,6 +867,16 @@ def saved_block(state, post):
     return j.where(post.pending_residual[:, None, None], block, 0)
 
 
+def saved_cure_block(state, post):
+    """Synthetic steps preserve the independently saved residual cure input too."""
+    import jax
+    import jax.numpy as j
+    from gpu_engine import transition
+    fresh=transition.shed_skin_chance(jax.vmap(lambda k:jax.random.split(k,2))(state.keys)[:,1])
+    used=j.where(state.pending_residual[:,None],state.shed_skin_draws,fresh)
+    return j.where(post.pending_residual[:,None],used,0)
+
+
 @unittest.skipUnless(HAS_JAX, 'requires JAX')
 class EffectAndResidualRuleTests(unittest.TestCase):
     """R: a capture predating state.effect_draws, the saved effect block checked against the design derivation;
@@ -647,7 +890,7 @@ class EffectAndResidualRuleTests(unittest.TestCase):
         from gpu_engine.state import BattleState
         from gpu_engine.v2e_capture import leaf_paths
         cls.tmp = Path(tempfile.mkdtemp(prefix='v2e-regress-r-test-'))
-        legacy_type = NamedTuple('LegacyState', [(n, object) for n in BattleState._fields if n != 'effect_draws'])
+        legacy_type = NamedTuple('LegacyState', [(n, object) for n in BattleState._fields if n not in ('effect_draws','shed_skin_draws')])
         legacy = lambda s: legacy_type(**{n: getattr(s, n) for n in legacy_type._fields})
         shards = cls.tmp / 'cap' / 'shards';shards.mkdir(parents=True)
         first = lambda tree: jax.tree.map(lambda x: x[:1], tree)
@@ -701,7 +944,8 @@ class EffectAndResidualRuleTests(unittest.TestCase):
             out = pending_step(state, actions, t);s = out.step.state
             block = transition.effect_chance(jax.vmap(lambda k: jax.random.split(k, 2))(state.keys)[:, 1])
             block = (block + 1) % 2 if wrong else block
-            return result(s._replace(effect_draws=j.where(s.pending_residual[:, None, None], block, 0)), out.trackers)
+            return result(s._replace(effect_draws=j.where(s.pending_residual[:, None, None], block, 0),
+                shed_skin_draws=saved_cure_block(state,s)), out.trackers)
         np.testing.assert_array_equal(np.asarray(saving(*self.inputs())[0].state.effect_draws),
             np.asarray(saved_block(self.inputs()[0], saving(*self.inputs())[0].state)))
         code, report, listing = self.patched('effect', clocked(saving, even))
@@ -713,20 +957,53 @@ class EffectAndResidualRuleTests(unittest.TestCase):
         code, report, _ = self.patched('effect-unsaved', clocked(pending_step, even))   # deferred lanes left at zero
         self.assertEqual(code, 1);self.assertIn('state.effect_draws', report['uninvolved_leaves'])
 
+    def test_strict_baseline_reports_saved_draw_changes_on_done_lanes(self):
+        import jax.numpy as j
+        from gpu_engine import v2e_regress as regress
+
+        def save_cure(state, actions, trackers):
+            out = pending_step(state, actions, trackers)
+            after = out.step.state
+            return result(after._replace(shed_skin_draws=saved_cure_block(state, after)), out.trackers)
+
+        def change_done(state, actions, trackers):
+            out = save_cure(state, actions, trackers)
+            after = out.step.state
+            draws = after.effect_draws.at[:, 0, 4].add(j.asarray(state.done, after.effect_draws.dtype))
+            return result(after._replace(effect_draws=draws), out.trackers)
+
+        args = TwoPassTests.args.__func__
+        base = self.tmp / 'strict-base'
+        prepared = (self.context, self.new)
+        self.assertEqual(regress.base_pass(args(type(self), out=base, pad_lanes=self.LANES),
+            step_override=clocked(save_cure, even), prepared=prepared), 0)
+        out = self.tmp / 'strict-done'
+        code = regress.patched_pass(args(type(self), out=out, base=base, pr='none', strict_baseline=True,
+            faint_clear=False, integration='HEAD', allow_base_mismatch=False), step_override=clocked(change_done, even),
+            prepared=prepared)
+        report = json.loads((out / 'report.json').read_text())
+        self.assertEqual(code, 1)
+        self.assertEqual(report['failures'], 2)
+        self.assertEqual(report['counts']['done_skipped'], 0)
+        self.assertEqual(report['uninvolved_leaves'], {'state.effect_draws': 2})
+
     def test_a_phase_shift_changes_the_saved_effect_block_only_by_the_derivation(self):
         """M1 GPU pass (2 lanes of 1.1M): once the base pass has state.effect_draws it is compared bitwise, and a
-        phase shift (the deferral moved) saves or drops the block. Accepted per side only where this tree's block
-        is the design derivation (effect_ok); a wrong block on the same lanes stays unexpected."""
+        phase shift (the deferral moved) saves or drops the block. The five-column block is independently checked
+        even when present at base; a wrong old or appended coordinate stays unexpected."""
         import jax.numpy as j
         from gpu_engine import v2e_regress
 
-        def saving(state, actions, t, *, shift=False, wrong=False):
+        def saving(state, actions, t, *, shift=False, wrong=False, wrong_column=None):
             out = pending_step(state, actions, t);s = out.step.state
             uses = curse_users(state, actions)
             if shift:s = s._replace(pending_residual=s.pending_residual ^ uses)      # Curse lanes move the deferral
             block = saved_block(state, s)
             if wrong:block = j.where(uses[:, None, None], (block + 1) % 2, block)
-            return result(s._replace(effect_draws=block), out.trackers)
+            if wrong_column is not None:
+                column=block[:,:,wrong_column]
+                block=block.at[:,:,wrong_column].set(j.where(uses[:,None],(column+1)%2,column))
+            return result(s._replace(effect_draws=block,shed_skin_draws=saved_cure_block(state,s)), out.trackers)
         args = lambda **extra: TwoPassTests.args.__func__(type(self), **extra)
         base = self.tmp / 'base-with-effect'
         code = v2e_regress.base_pass(args(out=base, pad_lanes=self.LANES), step_override=clocked(saving, even),
@@ -734,19 +1011,57 @@ class EffectAndResidualRuleTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn('state.effect_draws', json.loads((base / 'manifest.json').read_text())['output_names'])
 
-        def run(name, **kind):
+        def run(name, pr='A1', **kind):
             out = self.tmp / name
-            code = v2e_regress.patched_pass(args(out=out, base=str(base), pr='A1', faint_clear=False),
+            code = v2e_regress.patched_pass(args(out=out, base=str(base), pr=pr, faint_clear=False),
                 step_override=clocked(lambda s, a, t: saving(s, a, t, **kind), even), prepared=(self.context, self.new))
             return code, json.loads((out / 'report.json').read_text()), [json.loads(x) for x in (out / 'changed.jsonl').read_text().splitlines()]
         code, report, listing = run('effect-shift', shift=True)
-        self.assertEqual(code, 0, report['counts']);self.assertFalse(report['effect_rule'])
+        self.assertEqual(code, 0, report['counts']);self.assertTrue(report['effect_rule'])
+        self.assertGreater(report['counts']['effect_draws_saved'],0)
         shifted = [x for x in listing if x['phase_shift']]
         self.assertTrue(shifted);self.assertEqual(len(shifted), len(listing))
-        self.assertTrue(all({'state.effect_draws@0', 'state.effect_draws@1'} <= set(x['ko_consequences']) for x in shifted))
+        self.assertTrue(all(not {'state.effect_draws@0', 'state.effect_draws@1'} & set(x['ko_consequences']) for x in shifted))
         code, report, _ = run('effect-shift-wrong', shift=True, wrong=True)
         self.assertEqual(code, 1)
         self.assertEqual(set(report['by_effect']['curse']['unexpected_fields']), {'state.effect_draws@user', 'state.effect_draws@target'})
+        for column in (0,4):
+            code, report, _ = run('effect-shift-wrong-column-'+str(column),shift=True,wrong_column=column)
+            self.assertEqual(code,1)
+            self.assertEqual(set(report['by_effect']['curse']['unexpected_fields']),{'state.effect_draws@user','state.effect_draws@target'})
+
+        # Isolate each CC allowance from its predicate: involved, non-cascade lanes
+        # must still reject corruption in both an old coordinate and the new fifth one.
+        for effect in ('cutecharm','attract','infatuated'):
+            with mock.patch.dict(v2e_regress.PLUGINS,{'CC':{effect:lambda pre:np.broadcast_to(np.array([True,False]),(pre.lanes,2))}}):
+                for column in (0,4):
+                    code,report,_=run('cc-corrupt-'+effect+'-'+str(column),pr='CC',wrong_column=column)
+                    self.assertEqual(code,1)
+                    self.assertEqual(set(report['by_effect'][effect]['unexpected_fields']),
+                        {'state.effect_draws@user','state.effect_draws@target'})
+
+    def test_bad_cure_bank_fails_even_when_an_effect_allows_every_leaf(self):
+        import jax.numpy as j
+        from gpu_engine import v2e_regress as r
+        def saving(state,actions,t,wrong=False):
+            out=pending_step(state,actions,t);post=out.step.state
+            block=saved_cure_block(state,post)
+            if wrong:block=j.where((curse_users(state,actions)&post.pending_residual)[:,None],(block+1)%100,block)
+            return result(post._replace(effect_draws=saved_block(state,post),shed_skin_draws=block),out.trackers)
+        args=lambda **kw:TwoPassTests.args.__func__(type(self),**kw)
+        base=self.tmp/'base-with-cure'
+        self.assertEqual(r.base_pass(args(out=base,pad_lanes=self.LANES),step_override=clocked(saving,even),
+            prepared=(self.context,self.new)),0)
+        for suffix,base_dir in [('new-leaf',self.base),('existing-leaf',base)]:
+            out=self.tmp/('bad-cure-'+suffix)
+            with mock.patch.dict(r.ALLOWED,{'curse':r.ALL}):
+                code=r.patched_pass(args(out=out,base=str(base_dir),pr='A1',faint_clear=False),
+                    step_override=clocked(lambda s,a,t:saving(s,a,t,True),even),prepared=(self.context,self.new))
+            report=json.loads((out/'report.json').read_text())
+            self.assertEqual(code,1)
+            self.assertGreater(report['counts']['shed_skin_integrity_failures'],0)
+            self.assertEqual(report['counts']['changed_but_uninvolved'],0)
+            self.assertEqual(report['counts']['changed_involved_unexpected_fields'],0)
 
     def test_a_moved_ko_retypes_only_a_color_change_holder(self):
         """M1 GPU pass (shard 176 lane 1687: a Trick-given Choice Band KOs Kecleon in the action phase, so Color Change
@@ -803,7 +1118,7 @@ class EffectAndResidualRuleTests(unittest.TestCase):
             s = s._replace(done=s.done | uses,
                 truant_loaf=s.truant_loaf.at[:, 1, 0].set(j.where(uses, ~s.truant_loaf[:, 1, 0], s.truant_loaf[:, 1, 0])))
             if item:s = s._replace(item=s.item.at[:, 1, 0].set(j.where(uses, 2, s.item[:, 1, 0])))
-            return result(s._replace(effect_draws=saved_block(state, s)), out.trackers)
+            return result(s._replace(effect_draws=saved_block(state, s),shed_skin_draws=saved_cure_block(state,s)), out.trackers)
         code, report, listing = self.patched('terminal-same', clocked(ending, even))
         curse = [x for x in listing if 'curse' in x['involved']]
         self.assertTrue(curse);self.assertTrue(all(x['terminal'] and not x['terminal_residual'] for x in curse))

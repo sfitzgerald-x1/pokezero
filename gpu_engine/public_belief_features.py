@@ -10,6 +10,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -218,6 +219,6 @@ def project_opponent(states,summary,mons,context,tables,*,observer_side,expected
     categorical=jnp.zeros((batch,6,41),jnp.int32).at[:,:,jnp.asarray(CATEGORY_COLUMNS)].set(jnp.where(visible[...,None],cats,0))
     patch=TeamFeaturePatch(numeric,categorical,jnp.zeros(132,bool).at[jnp.asarray(NUMERIC_COLUMNS)].set(True),
         jnp.zeros(41,bool).at[jnp.asarray(CATEGORY_COLUMNS)].set(True),ok)
-    weights=selected.astype(jnp.float32)/jnp.maximum(summary.count[rows,obs][...,None],1)
+    weights=en.ratio(selected.astype(jnp.int32), summary.count[rows,obs][...,None], limit=64)
     return BeliefFeaturePatch(patch,jnp.where(visible[...,None],move_buckets,0),
         jnp.where(visible[...,None],weights,0),summary.reason[rows,obs])

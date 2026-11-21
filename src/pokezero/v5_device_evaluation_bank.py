@@ -51,8 +51,10 @@ def declaration(reference):
     required = {'schema','role','stop_rule','source_commit','source_sha256','pool_sha256',
         'category_vocabulary_sha256','category_count','label_vocabulary','actors','batches',
         'max_requests','output_directory','training_roster_index','cost_recipe_seed','cost_selectors'}
-    if set(value) != required or value['schema'] != DECLARATION or value['role'] != 'NONTRAINING_EVALUATION' or value['stop_rule'] != STOP_RULE:
+    if set(value) - {'self_moves'} != required or value['schema'] != DECLARATION or value['role'] != 'NONTRAINING_EVALUATION' or value['stop_rule'] != STOP_RULE:
         raise ValueError('explicit prospective nontraining device-bank declaration required')
+    if 'self_moves' in value and value['self_moves'] is not True:
+        raise ValueError('device-bank self_moves must be omitted or declared as true')
     if (type(value['source_commit']) is not str or len(value['source_commit']) != 40
             or any(ch not in '0123456789abcdef' for ch in value['source_commit'])):
         raise ValueError('exact frozen device source required')
@@ -132,6 +134,7 @@ class BankData:
     positions: tuple
     groups: tuple
     declaration: object
+    self_moves: bool = False    # V2: the bank's encoding (header key, written only when on)
 
 
 def _records(reference, schema):
@@ -154,7 +157,12 @@ def resolve_device_bank(protocol, request):
     if (ph['split']!='PHASE_C_FIXED_HELDOUT' or sh['split']!=ph['split']
             or any(ph[k] != sh[k] for k in ('device_bank','device_source','category_vocabulary_sha256','label_vocabulary_sha256','category_count'))):
         raise ValueError('positions/siblings name different device banks')
+    from .v5_evaluation import bank_self_moves
+    encoded = bank_self_moves(ph)
+    if bank_self_moves(sh) != encoded: raise ValueError('positions/siblings name different device-bank encodings')
     plan, _, games, labels = declaration(ph['device_bank']); expected = selectors(games)
+    if encoded != plan.get('self_moves', False):
+        raise ValueError('device-bank header encoding differs from the declaration')
     if (ph['device_source'] != plan['source_commit'] or ph['category_vocabulary_sha256'] != plan['category_vocabulary_sha256']
             or ph['label_vocabulary_sha256'] != labels.sha256 or labels.sha256 != protocol['label_vocabulary_sha256']
             or ph['category_count'] != plan['category_count'] or len(positions) != 1024 or len(groups) != 1024):
@@ -200,7 +208,7 @@ def resolve_device_bank(protocol, request):
                 elif branch['status'] not in ('REFUSED','FAILED') or branch['observation'] is not None or branch['terminal'] is not None: raise ValueError('unknown sibling disposition required')
         elif group['branches'] or group['status'] not in ('UNREACHED','REFUSED','FAILED','NOT_ATTEMPTED'):
             raise ValueError('unknown root cannot manufacture sibling branches')
-    return BankData(tuple(resolved), tuple(_freeze(g) for g in groups), _freeze(plan))
+    return BankData(tuple(resolved), tuple(_freeze(g) for g in groups), _freeze(plan), encoded)
 
 
 def evaluate_device_bank(protocol, factory, data):
@@ -210,6 +218,10 @@ def evaluate_device_bank(protocol, factory, data):
     from gpu_engine.v5_live_protocol import check_factory
     import numpy as np
     if type(data) is not BankData: raise ValueError('resolved fixed device bank required')
+    from .v5_evaluation import unmeasured_self_moves
+    unmeasured = unmeasured_self_moves(data.self_moves, factory, heldout_positions=len(data.positions), sibling_groups=len(data.groups),
+        bank_role='NONTRAINING_EVALUATION')
+    if unmeasured is not None: return unmeasured
     labels = factory.config.label_vocabulary
     header = dict(category_vocabulary_sha256=factory.config.category_vocabulary_sha256, category_count=factory.config.category_vocab_size)
     def predict(observations):

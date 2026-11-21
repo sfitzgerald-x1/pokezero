@@ -4,7 +4,7 @@ single DOMAIN_SHA256 / KERNEL_SHA256 literals they replaced refused, and now nam
 - Equivalence at the change. At its base (0ea558eb) each aggregate literal is the digest of the base's domain bytes;
   at the change (ccfb1486) every per-module pin is the sha256 of those same bytes, in the same module order. So the
   per-module gates admit exactly the tree the aggregate gates admitted.
-- A one-byte change to ANY of the 27 domain modules, as the real gate code reads it, refuses in all four gates and names
+- A one-byte change to ANY of the 29 domain modules, as the real gate code reads it, refuses in all four gates and names
   that module.
 - A pin that does not match its source (the table edited, not the module) refuses. So does a module list that the
   table no longer names in order, since the aggregate bound names and order as well as bytes.
@@ -72,7 +72,7 @@ class DomainGateTests(unittest.TestCase):
         cl._source_certificate()   # no native build in it; ordinary_law's needs one, so its domain gate is shown refusing below
 
     def test_a_one_byte_change_to_any_domain_module_refuses_in_every_gate_naming_it(self):
-        self.assertEqual(len(cc.DOMAIN_MODULES), 27)
+        self.assertEqual(len(cc.DOMAIN_MODULES), pins.PIN_COUNTS[('chance_consumers_pins.py', 'DOMAIN_PINS')])
         self.assertEqual(cc.DOMAIN_MODULES, pd.DOMAIN_MODULES)
         self.assertEqual(cc.DOMAIN_MODULES, cl.KERNEL_MODULES)
         for name in cc.DOMAIN_MODULES:

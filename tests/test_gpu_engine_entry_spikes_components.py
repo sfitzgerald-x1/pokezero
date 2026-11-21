@@ -113,14 +113,16 @@ class EntrySpikesComponentTests(unittest.TestCase):
     np.testing.assert_array_equal(got,expected)
   _,good=ex.join_consumed_owners(*closed,tables=self.account.device);self.assertTrue(bool(good.all()))
  def test_static_default_physics_prefix_and_original_callback(self):
+  from gpu_engine_transition_certification import CURRENT_TRANSITION
   old=ast.parse(subprocess.check_output(['git','show','ad7ecc8987d849921aea7db9c10c46d363507674:gpu_engine/entry.py'],text=True));new=ast.parse(Path('gpu_engine/entry.py').read_text())
-  for name in('enter','depart','speed_modifier','restore_sleep'):
-   a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name)
-   if name=='depart':b=ordinary.strip_m2_volatiles(ordinary.strip_m1_recharge(ordinary.strip_transform_depart(deepcopy(b),required=True),required=True),required=True)     # fidelity M1's and M2's approved clears and Transform's revert only
-   if name=='enter':b=ordinary.strip_transform_enter(deepcopy(b),required=True)     # Transform's approved Truant-clock gate only
+  certified=ast.parse(subprocess.check_output(['git','show',CURRENT_TRANSITION+':gpu_engine/entry.py'],text=True))
+  for name in('enter','depart','speed_modifier','switch_in_status'):
+   a=next(n for n in certified.body if isinstance(n,ast.FunctionDef)and n.name==name);b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name==name)
    self.assertEqual(dump_default_program(a),dump_default_program(b))
   a=next(n for n in old.body if isinstance(n,ast.FunctionDef)and n.name=='from_metadata');b=next(n for n in new.body if isinstance(n,ast.FunctionDef)and n.name=='from_metadata')
-  self.assertEqual([ast.dump(x)for x in a.body[-1].value.args],[ast.dump(x)for x in b.body[-1].value.args[:-3]])
+  # The three Spikes lookups and the residual Shed Skin flag are appended to the original metadata prefix.
+  self.assertEqual([ast.dump(x)for x in a.body[-1].value.args],[ast.dump(x)for x in b.body[-1].value.args[:-4]])
+  self.assertEqual(ast.dump(b.body[-1].value.args[-1]),ast.dump(ast.parse("flag({'shedskin'})",mode='eval').body))
   script="const{Dex}=require(process.argv[1]+'/dist/sim/dex.js');const c=Dex.mod('gen3').conditions.get('spikes');const rows=[];for(let layers=1;layers<=3;layers++)for(const grounded of[false,true])for(const boots of[false,true]){const calls=[];c.onEntryHazard.call({effectState:{layers},damage:x=>calls.push(x)},{maxhp:254,isGrounded:()=>grounded,hasItem:x=>{if(x!=='heavydutyboots')throw Error('wrong guard');return boots;}});rows.push({layers,grounded,boots,calls});}process.stdout.write(JSON.stringify(rows));"
   rows=json.loads(subprocess.check_output(['node','-e',script,showdown_root_str()],text=True))
   for row in rows:self.assertEqual(row['calls'],[[0,3,4,6][row['layers']]*254/24]if row['grounded']and not row['boots']else[])

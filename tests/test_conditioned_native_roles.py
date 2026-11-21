@@ -77,7 +77,7 @@ class ConditionedRoleTests(unittest.TestCase):
         # the same complete represented physical/carry key before resumption.
         # The JAX-only saved effect block (fidelity R) joins the key; the native side takes the bound input's.
         native_key=c._complete_key(self.f._canonical_native_future(native_paused,
-            original.certificate,boundary='suspended'),bound.capsule,c._saved_block(dict(bound.raw_jax)))
+            original.certificate,boundary='suspended'),bound.capsule,c._saved_block(dict(bound.raw_jax)),c._saved_cure(dict(bound.raw_jax)))
         jax_key=c.canonical_resumed_jax(paused,0,self.meta,native_input=bound)
         self.assertNotIsInstance(native_key,self.f.Refused,native_key)
         self.assertNotIsInstance(jax_key,self.f.Refused,jax_key)

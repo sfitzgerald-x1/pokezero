@@ -19,7 +19,7 @@ from pokezero.gen3_damage import gen3_hp_stat, gen3_stat
 from pokezero.v5_gumbel import Recipe
 from . import device_public_worlds as plans
 from .public_active import NAMES as VOLATILES
-from .state import empty_state, BattleState, LEECH_SEED, ROOTED
+from .state import empty_state, BattleState, LEECH_SEED, ROOTED, ATTRACT
 
 
 @dataclass(frozen=True)
@@ -266,11 +266,11 @@ def materialize_host(root, start, tables, recipe, *, keys):
     return _materialize(root, start, tables, recipe, host_keys=keys)
 
 
-def materialize(root, start, tables, recipe):
-    return _materialize(root, start, tables, recipe)
+def materialize(root, start, tables, recipe, *, transform_mapper=None):
+    return _materialize(root, start, tables, recipe, transform_mapper=transform_mapper)
 
 
-def _materialize(root, start, tables, recipe, host_keys=None):
+def _materialize(root, start, tables, recipe, host_keys=None, transform_mapper=None):
     """One declared draw -> current tensor world or named refused world slot.
 
     Only ordinary boundaries are represented in this first current-state port.
@@ -434,6 +434,7 @@ def _materialize(root, start, tables, recipe, host_keys=None):
                     name = VOLATILES[int(kind)]
                     if name == 'leechseed':arrays['volatile'][address] |= LEECH_SEED
                     elif name == 'ingrain':arrays['volatile'][address] |= ROOTED
+                    elif name == 'attract':arrays['volatile'][address] |= ATTRACT
                     elif name == 'trapped':arrays['trap_source'][address] = int(arrays['active'][0, owner])
                     else:raise ValueError('public volatile/latent clock not materialized: '+name)
                 last = view.get('last_moves')
@@ -463,7 +464,7 @@ def _materialize(root, start, tables, recipe, host_keys=None):
                 truant = tables.namespaces['abilities'].get('truant', 0)
                 if truant and arrays['ability'][address] == truant:
                     raise ValueError('public Truant phase not materialized')
-        _materialize_transform(root, tables, arrays, owner, foe, active, assignment)
+        (_materialize_transform if transform_mapper is None else transform_mapper)(root, tables, arrays, owner, foe, active, assignment)
         if arrays['hp'][0, foe, active] <= 0:
             raise ValueError('opposing faint/replacement boundary not materialized')
         fields = view.get('field_features')

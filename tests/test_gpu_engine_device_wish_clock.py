@@ -1,4 +1,8 @@
 """Actual public Wish clock algebra, no engine turn, model or replay run."""
+import os
+from pathlib import Path
+import shutil
+import subprocess
 import unittest
 import jax
 import jax.numpy as j
@@ -6,6 +10,9 @@ import numpy as np
 from gpu_engine import engine_device_public_hooks as h,engine_device_trackers as tr
 from gpu_engine.state import empty_state
 from pokezero import showdown as reference
+
+NODE=os.environ.get('NODE') or shutil.which('node')
+SHOWDOWN=os.environ.get('POKEZERO_SHOWDOWN_ROOT')
 
 def initial(batch=1):
     shape=(batch,2,6)
@@ -27,6 +34,35 @@ def source(lines,slot='p1'):
 
 
 class DeviceWishClockTests(unittest.TestCase):
+    @unittest.skipUnless(NODE and SHOWDOWN,'requires pinned Showdown')
+    def test_native_tied_wish_and_counter_pair(self):
+        subprocess.run([NODE,str(Path(__file__).with_name('gpu_residual_tie_oracle.cjs')),SHOWDOWN],check=True)
+
+    def test_wish_heals_commute_in_device_and_python_carry(self):
+        def finish(order):
+            s,_=initial()
+            s=s._replace(hp=s.hp.at[0,:,0].set(j.array([13,31])))
+            c=h.initialize(s)
+            for side in (0,1):
+                h.wish(c,side,True,start=True)
+            h.public_turn(c,s,j.ones(1,bool),j.array([2]))
+            for side in order:
+                s=s._replace(hp=s.hp.at[0,side,0].add(50))
+                h.wish(c,side,True,resolved=True)
+                h.hp_line(c,s,side,j.ones(1,bool),source_class=h.HP_PRE_ITEM)
+            h.public_turn(c,s,j.ones(1,bool),j.array([3]))
+            return c.trackers
+
+        first,second=finish((0,1)),finish((1,0))
+        for a,b in zip(jax.tree.leaves(first),jax.tree.leaves(second),strict=True):
+            np.testing.assert_array_equal(a,b)
+
+        casts=['|turn|1','|move|p1a: Fixture|Wish|p1a: Fixture','|move|p2a: Other|Wish|p2a: Other','|turn|2']
+        heals=['|-heal|p1a: Fixture|63/100|[from] move: Wish','|-heal|p2a: Other|81/100|[from] move: Wish']
+        for seat in ('p1','p2'):
+            self.assertEqual(source(casts+heals+['|turn|3'],seat),(0,False))
+            self.assertEqual(source(casts+heals[::-1]+['|turn|3'],seat),(0,False))
+
     def test_declaration_and_expired_clock_match_original_public_turns(self):
         s,c=initial();lines=['|turn|1','|move|p1a: Fixture|Wish|p1a: Fixture']
         h.wish(c,0,j.ones(1,bool),start=True)

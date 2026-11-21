@@ -12,7 +12,7 @@ import numpy as np
 
 from gpu_engine import device_selfplay_profile as p
 from gpu_engine.state import empty_state
-from gpu_engine.transition import ChanceInputs
+from gpu_engine.transition import ChanceInputs, EFFECT_BOUNDS
 from gpu_engine import engine_device_public_hooks as hooks
 
 
@@ -22,7 +22,7 @@ def fixture():
     s=s._replace(done=j.array([False,True,True,False]),species=mon(1),level=mon(80),
         hp=j.broadcast_to(j.arange(4,dtype=j.int32)[:,None,None]+50,(4,2,6)),max_hp=mon(100),gender=mon(1))
     public=hooks.initialize(s).trackers
-    chance=ChanceInputs(**{k:j.zeros((4,2,12)if k=='draws'else(4,)if k=='initial_tie'else(4,2,4)if k=='effect'else(4,2),j.int32)
+    chance=ChanceInputs(**{k:j.zeros((4,2,12)if k=='draws'else(4,)if k=='initial_tie'else(4,2,len(EFFECT_BOUNDS))if k=='effect'else(4,2),j.int32)
         for k in ChanceInputs._fields})
     return p.FixedInputs(s,public,j.zeros((4,2),j.int32),chance,~s.done)
 
@@ -47,6 +47,21 @@ class FakeJit:
 
 
 class DeviceSelfplayProfileTests(unittest.TestCase):
+    def test_six_field_chance_gather_preserves_optional_streams_and_literal_cure_bank(self):
+        snapshot=fixture()
+        for chance in (ChanceInputs(*snapshot.chance[:6]),snapshot.chance._replace(effect=None),
+                snapshot.chance._replace(shed_skin=None)):
+            original=p.FixedInputs(snapshot.state,snapshot.trackers,snapshot.actions,chance,snapshot.active_rows)
+            tail,meta=p.gather_tail(original,capacity=3)
+            for name in ('effect','shed_skin'):
+                value=getattr(chance,name)
+                if value is None:self.assertIsNone(getattr(tail.chance,name))
+                else:np.testing.assert_array_equal(getattr(tail.chance,name),np.asarray(value)[meta['source_rows']])
+        for value in (j.zeros((4,1),j.int32),j.zeros((4,2),j.float32)):
+            wrong=p.FixedInputs(snapshot.state,snapshot.trackers,snapshot.actions,
+                snapshot.chance._replace(shed_skin=value),snapshot.active_rows)
+            with self.assertRaisesRegex(ValueError,'shed_skin'):p.gather_tail(wrong)
+
     def test_one_lower_compile_repeated_identical_input_and_blocked_intervals(self):
         jit=FakeJit();blocks=[];value=np.array([1,2],np.int32)
         def f(x):self.assertIs(x,value);return x+1

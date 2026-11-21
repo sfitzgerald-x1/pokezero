@@ -174,8 +174,10 @@ class EvaluationTests(unittest.TestCase):
         config=old.ControlledFoulPlayConfig(checkpoint=Path('/fake'),showdown_root=Path('/fake-source'),games=5,seed_start=10,
             foulplay_random_seed=100,policy_mode='raw',device='cpu',encoder_kind='jax-owning',belief_set_source=True,
             allow_search_fallback=False,opponent_crash_retries=0)
-        factory=NS(contract=NS(checkpoint_sha256='c'*64,feature_masks=tuple(dict(exact_state=False,feature_pack_last_move=False,investment_belief_narrowing=False,
-            item_belief_narrowing=False,stats_block=False,tier2_investment=False,tier2_residuals=False,transition_token_budget=0).items())),
+        masks=tuple(dict(exact_state=False,feature_pack_last_move=False,investment_belief_narrowing=False,
+            item_belief_narrowing=False,stats_block=False,tier2_investment=False,tier2_residuals=False,transition_token_budget=0).items())
+        # The contract's declared encoder masks (ActorContract.encoder_masks: feature_masks plus self_moves, declared off).
+        factory=NS(contract=NS(checkpoint_sha256='c'*64,feature_masks=masks,encoder_masks=lambda:dict(masks,self_moves=False)),
             catalog=NS(vocabulary=object(),dex=object()))
         seen=[]
         async def source(cfg,**kwargs):
@@ -360,12 +362,12 @@ class EvaluationTests(unittest.TestCase):
     def test_original_run_journals_only_valid_completed_receipts_once_and_resume_validates(self):
         import test_v5_milestone_evaluation as milestone
         harness=milestone.MilestoneEvaluationTests();config=NS(pokezero_username='Unit',foulplay_username='Peer',pokezero_player='p1')
-        with patch.object(r,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp:
             path=Path(temp)/'run';base=run_fixture.plan()
             protocol=dict(schema=e.SCHEMA,model_sha256=r._sha(base.model.metadata()),panels=[dict(declared_games=count,
                 seeds=list(range(101,601)),configs=[dict(seed_start=101,foulplay_random_seed=1000,pokezero_player=seat,pokezero_username='Unit',foulplay_username='Peer')
                     for seat in ('p1','p2')]) for count in (2,4)])
-            ref=artifact(Path(temp)/'unit-progress-protocol.json',protocol);recipe=replace(base,evaluation=r.EvaluationProtocol(ref['sha256']))
+            ref=artifact(Path(temp)/'unit-progress-protocol.json',protocol);recipe=replace(base,evaluation=r.EvaluationProtocol(ref['sha256'], 2))
             source=game(config,101);receipt=r.EvaluationCompletion(0,0,101,'p1',3.,r._json(source),r._sha(source),'Unit','Peer',ref['path'],1000)
             def hook(request):
                 request.progress_callback(receipt)
@@ -399,12 +401,12 @@ class EvaluationTests(unittest.TestCase):
     def test_process_loss_redelivers_completed_source_without_new_game_progress(self):
         import test_v5_milestone_evaluation as milestone
         harness=milestone.MilestoneEvaluationTests()
-        with patch.object(r,'EVALUATION_INTERVAL_GAMES',2),tempfile.TemporaryDirectory()as temp:
+        with tempfile.TemporaryDirectory()as temp:
             path=Path(temp)/'run';base=run_fixture.plan()
             protocol=dict(schema=e.SCHEMA,model_sha256=r._sha(base.model.metadata()),panels=[dict(declared_games=count,
                 seeds=list(range(101,601)),configs=[dict(seed_start=101,foulplay_random_seed=1000,pokezero_player=seat,
                     pokezero_username='Unit',foulplay_username='Peer')for seat in ('p1','p2')])for count in (2,4)])
-            ref=artifact(Path(temp)/'protocol.json',protocol);recipe=replace(base,evaluation=r.EvaluationProtocol(ref['sha256']))
+            ref=artifact(Path(temp)/'protocol.json',protocol);recipe=replace(base,evaluation=r.EvaluationProtocol(ref['sha256'], 2))
             cfg=NS(pokezero_username='Unit',foulplay_username='Peer',pokezero_player='p1')
             def receipt(offset):
                 source=game(cfg,101+offset)
@@ -431,13 +433,13 @@ class EvaluationTests(unittest.TestCase):
                 protocol=dict(schema=e.SCHEMA,model_sha256=r._sha(base.model.metadata()),panels=[dict(declared_games=2,
                     seeds=list(range(101,601)),configs=[dict(seed_start=101,foulplay_random_seed=1000,pokezero_player=seat,pokezero_username='Unit',foulplay_username='Peer')
                         for seat in ('p1','p2')])])
-                ref=artifact(root/'unit-progress-protocol.json',protocol);recipe=replace(base,evaluation=r.EvaluationProtocol(ref['sha256']))
+                ref=artifact(root/'unit-progress-protocol.json',protocol);recipe=replace(base,evaluation=r.EvaluationProtocol(ref['sha256'], 2))
                 store=r.Store(root/'run',recipe);clock=[0.];published=False
                 cp=store.artifact('checkpoint.pt',b'unit-only-checkpoint',kind='CHECKPOINT',iteration=0,steps=3,rows=12)
                 arc=store.artifact('archive.npz',b'unit-only-archive',kind='UNIT_ARCHIVE')
                 snapshot=r.Snapshot(0,cp['path'],cp['sha256'],arc['path'],arc['sha256'],r._sha(recipe.model.metadata()))
                 store.emit('SNAPSHOT',**asdict(snapshot))
-                with patch.object(r,'EVALUATION_INTERVAL_GAMES',2):binding=r._evaluation_binding(store,snapshot)
+                binding=r._evaluation_binding(store,snapshot)
                 expected=dict(binding,evaluation_sha256=r._sha(binding));store.emit('EVALUATION_STARTED',**expected)
                 cfg=NS(pokezero_username='Unit',foulplay_username='Peer',pokezero_player='p1');source=game(cfg,101)
                 receipt=r.EvaluationCompletion(0,0,101,'p1',3.,r._json(source),r._sha(source),'Unit','Peer',ref['path'],1000)
@@ -454,7 +456,7 @@ class EvaluationTests(unittest.TestCase):
                         store.emit('EVALUATION_GAME_END',**expected,status=status,duration_seconds=3.,completion=asdict(receipt));published=True
                 def stop(process,*args,**kwargs):
                     if process.returncode is None:process.returncode=-15
-                with patch.object(r,'EVALUATION_INTERVAL_GAMES',2),patch.object(r.time,'monotonic',side_effect=lambda:clock[0]),patch.object(r,'_stop_owned_group',side_effect=stop):
+                with patch.object(r.time,'monotonic',side_effect=lambda:clock[0]),patch.object(r,'_stop_owned_group',side_effect=stop):
                     report=r.supervise_owned(['fake-never-spawned'],plan=recipe,path=store.path,popen=lambda *a,**k:child,sleep=sleep)
                 if status=='COMPLETE':self.assertEqual((report['exit_code'],report['stop_reason']),(0,None))
                 else:self.assertIn(report['stop_reason'],('PROGRESS_JOURNAL_CHANGED','NO_DURABLE_WORK_PROGRESS'))

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 
@@ -209,6 +210,17 @@ for _step in ('initial', 0, 1, 2, 3, 4):
 for _step in (3, 4):
     for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
         ALLOWLIST[('wonderguard_trace', 'base', _step, _field)] = _TRACE_TRACER
+# Approved extension of the same Trace B2 bug: retire these ability-display pins when Trace is fixed.
+# Engine state remains exact; no physics, gender or volatile fields are allowlisted.
+for _step in ('initial', 0, 1, 2, 3, 4):
+    ALLOWLIST[('cutecharm_trace', 'base', _step, '1:0:original_ability')] = _TRACE_TRACER
+for _field in ('1:0:borrowed_ability', '1:0:shown_ability'):
+    ALLOWLIST[('cutecharm_trace', 'base', 2, _field)] = _TRACE_TRACER
+# Damage modifiers: the same OPEN BUG in plusminus_trace, whose Gardevoir traces Minun's Minus at entry (|-ability|p1a:
+# Gardevoir|Minus|[from] ability: Trace|[of] p2a: Minun) and stays in: only the tracer's original ability differs.
+for _case in ('roll=0', 'roll=5', 'roll=10', 'roll=15'):
+    for _step in ('initial', 0, 1, 2):
+        ALLOWLIST[('plusminus_trace', _case, _step, '0:0:original_ability')] = _TRACE_TRACER
 # Fixed (history): OPEN BUG I, the upkeep's Lum and pinch-berry rules (engine_device_negative_items.upkeep), 140 entries retired.
 # B2 limit (explained, not a device fact): B2's fold refuses (PAYLOAD) a side's second encounter of one species, at the
 # repeat's arrival line (|switch|p2a: Gengar2|Gengar, L74, M|...: RAW_BEGIN, SWITCH_PRELUDE, MUDSHOT, SWITCH, NONPROC,
@@ -224,6 +236,13 @@ for _scenario, _cases, _step in (
         ('perishsong_last_faster', ('base',), 1), ('perishsong_tie', ('tie=0', 'tie=1'), 1), ('wrap_tie', ('tie=0', 'tie=1'), 1),
         ('wrap_trapper_dragged_back', ('base',), 1)):
     for _case in _cases:ALLOWLIST[(_scenario, _case, _step, 'b2_refusal')] = _REPEATED_SPECIES
+# OPEN BUG (reported with Forecast; pre-existing, not Forecast's): a temporary weather that the residual clock ends. B2's
+# field fold resets its upkeep count at |-weather|none (public_field.apply: `clear`); the device resets weather_upkeeps
+# only at a weather hook (a weather move, a weather ability), and the residual clock calls none, so the device keeps the
+# last count. The readout never shows it (weather_turns is 0 without weather, and the next weather resets the count).
+_WEATHER_END_UPKEEPS = 'OPEN BUG: the residual clock ends the weather; B2 resets its upkeep count, the device keeps the stale one'
+for _scenario, _steps in (('forecast_rain_ends', (4, 5)), ('forecast_switch_back', (4, 5, 6))):
+    for _step in _steps:ALLOWLIST[(_scenario, 'base', _step, 'field:weather_upkeeps')] = _WEATHER_END_UPKEEPS
 
 
 PINS_PATH = Path(__file__).with_name('effect_probe_device_pins.json')
@@ -342,8 +361,10 @@ def compile_b2(set_lists, showdown_root):
             labels |= {'belief:possible_move:' + normalize_id(m) for m in v.moves if m}
             if v.ability:labels |= {'ability:' + normalize_id(v.ability), 'belief:possible_ability:' + normalize_id(v.ability)}
             if v.item:labels |= {'item:' + normalize_id(v.item), 'belief:possible_item:' + normalize_id(v.item)}
+    # The champion's masks, self_moves declared off: the probe compares the public carry, never an override's encode.
+    if os.environ.get('OBS_SELF_MOVES', ''):raise ValueError('the device probe runs with self_moves declared off: unset OBS_SELF_MOVES')
     catalog = v4_encoder.compile_encoder(public_belief.compile_source(source), dex, CategoryVocabulary(tuple(sorted(labels))),
-        checkpoint_sha256=CHAMPION_CONTRACT['checkpoint_sha256'], feature_masks=dict(CHAMPION_CONTRACT['feature_masks']))
+        checkpoint_sha256=CHAMPION_CONTRACT['checkpoint_sha256'], feature_masks=dict(CHAMPION_CONTRACT['feature_masks'], self_moves=False))
     return catalog
 
 
@@ -576,28 +597,11 @@ def b2_view(b2, lane, catalog):
             'field': b2_field(b2, 2 * lane, catalog)}
 
 
-FLOAT_FIELDS = ('last_damage_taken', 'last_damage_dealt', 'damage_exact_taken', 'damage_exact_dealt', 'hazard_shown',
-                'hazard_exact')
-# OPEN BUG (numeric, reported to the coordinator): the device's shown-percent damage fractions divide a float32 by the
-# literal 100 (engine_device_damage_history.observe `.../100`, engine_device_public_port.spikes), which XLA compiles to a
-# multiply by float32(0.01), one ulp below the correctly rounded quotient for most percents (30 -> 0.29999998, B2
-# 0.30000001); B2 (public_damage.apply) divides by its hp_denominator array (100) and rounds correctly, and a round's sum
-# of several such fractions drifts by one ulp per line. A float field whose two values differ by less than
-# FLOAT_TOLERANCE is recorded in the step's `numeric` list, not as a diff: any real difference is at least one HP point
-# of the largest Gen 3 max HP (1/714, ~1.4e-3) or one shown percent (0.01), so the tolerance hides only rounding.
-FLOAT_TOLERANCE = 1e-6
-NUMERIC_NOTE = ('OPEN BUG: device shown-percent damage fraction divides by the literal 100 (XLA: multiply by '
-                'float32(0.01)), float32 ulps from B2\'s division by hp_denominator')
-
-
-def _within_tolerance(a, b):
-    if not isinstance(a, float) or not isinstance(b, float):return False
-    return abs(a - b) < FLOAT_TOLERANCE
+NUMERIC_NOTE = 'Python-rounded lookup fractions and compensated sums with zero tolerance'
 
 
 def compare_views(device, b2, numeric=None):
-    """Field-by-field differences, keyed side:slot:field (mon), side:active:field, side:field and field. A FLOAT_FIELDS
-    pair closer than FLOAT_TOLERANCE goes to `numeric` (a list), see NUMERIC_NOTE."""
+    """Report exact field differences. The optional numeric list supports legacy probe reports."""
     diffs = []
     for s in range(2):
         for part in ('active', 'side'):
@@ -609,10 +613,8 @@ def compare_views(device, b2, numeric=None):
     if set(device['field']) != set(b2['field']):
         raise ValueError(f'device and B2 field views differ in keys: {sorted(set(device["field"]) ^ set(b2["field"]))}')
     def check(key, want, got):
-        if want == got:return
-        if numeric is not None and key.rsplit(':', 1)[-1] in FLOAT_FIELDS and _within_tolerance(want, got):
-            numeric.append(dict(field=key, b2=want, device=got));return
-        diffs.append(dict(field=key, b2=want, device=got))
+        if want != got:
+            diffs.append(dict(field=key, b2=want, device=got))
     for s in range(2):
         d, b = device[s], b2[s]
         for k in range(6):

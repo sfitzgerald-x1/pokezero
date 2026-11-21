@@ -38,6 +38,9 @@ class Prepared:
 
 def prepare(inputs):
     """Read the literal pool, including IVs, without constructing any game."""
+    if getattr(inputs.plan,'self_moves',False):
+        from .v5_worker import SELF_MOVES_DEVICE_ONLY
+        raise ValueError(SELF_MOVES_DEVICE_ONLY)
     from .category_vocab import CategoryVocabulary
     from .dex import load_showdown_dex_cached
     from .randbat import load_gen3_randbat_source_cached
@@ -79,7 +82,7 @@ def prepare(inputs):
     source=load_gen3_randbat_source_cached(show['root'])
     if source.metadata.source_hash!=contract.belief_set_source_hash:
         raise ValueError('original public belief source differs')
-    masks=dict(contract.feature_masks)
+    masks=contract.encoder_masks()
     masks['opponent_tendency_stats_block']=masks.pop('stats_block')
     config=LocalShowdownConfig(showdown_root=show['root'],node_binary=show['node']['path'],
         observation_spec=V4_REPLAY_OBSERVATION_SPEC,feature_masks=ObservationFeatureMasks(**masks),
@@ -173,7 +176,7 @@ def _factory(prepared,snapshot,store):
     contract=replace(prepared.contract,checkpoint_sha256=snapshot['checkpoint_sha256'],
         model_config_sha256=snapshot['model_sha256'])
     catalog=v4_encoder.compile_encoder(prepared.compiled_source,prepared.dex,prepared.vocabulary,
-        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=dict(contract.feature_masks))
+        checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
     return load_factory(store.resolve(snapshot['archive'],snapshot['archive_sha256']),
         catalog=catalog,contract=contract,expected_archive_sha256=snapshot['archive_sha256'],
         expected_checkpoint_sha256=snapshot['checkpoint_sha256'],
@@ -238,6 +241,10 @@ class RuntimeBackend:
         metadata=json.loads(factory.metadata)
         if factory.config!=store.plan.model or metadata['checkpoint_sha256']!=snapshot['checkpoint_sha256']:
             raise ValueError('cached immutable actor checkpoint differs')
+        # V2 self_moves: load_factory serves an archive as declared; this route's plans are off, so an on archive is refused.
+        from gpu_engine.private_self_moves import check_run_actor
+        iteration=snapshot.get('iteration') if isinstance(snapshot,dict) else getattr(snapshot,'iteration',None)
+        check_run_actor(metadata,plan_self_moves=bool(getattr(store.plan,'self_moves',False)),iteration=iteration,context='python backend actor')
         return factory
 
     def prepare_batch(self,plan,batch,current,assignments,store):

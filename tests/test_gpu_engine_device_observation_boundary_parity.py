@@ -56,10 +56,10 @@ class DeviceBoundaryParityTests(unittest.TestCase):
             n,_,_=f.project_mon(j.zeros((2,6,132),j.float32),j.zeros((2,6,41),j.int32),view.mon_features,
                 active=view.active,present=view.present,tables=self.tables.features,status=view.status)
             stat,cat,on,bad=f.project_stats(view.stats_features,self.tables.features,2)
-            np.testing.assert_allclose(n[...,j.asarray(ref.MON_COLUMNS)],expected.numeric[...,j.asarray(ref.MON_COLUMNS)],atol=1e-7)
+            np.testing.assert_allclose(n[...,j.asarray(ref.MON_COLUMNS)],expected.numeric[...,j.asarray(ref.MON_COLUMNS)],rtol=0,atol=0)
             for key in ('opp_switch_count','opp_decision_opportunities','my_switch_turns'):
                 col=s.v4_numeric_index(getattr(s,'NUMERIC_'+f.STATS_FIELDS[key][0]))
-                np.testing.assert_allclose(stat[:,col],expected.stats_numeric[:,col],atol=1e-7)
+                np.testing.assert_allclose(stat[:,col],expected.stats_numeric[:,col],rtol=0,atol=0)
             np.testing.assert_array_equal(cat[:,s.CATEGORY_ROLE],expected.stats_role)
             self.assertTrue(bool(on.all()));self.assertFalse(bool(bad.any()))
             self.assertFalse(any(key in view.own_mon_features for key in f.TENDENCY_FIELDS))
@@ -198,10 +198,10 @@ class DeviceBoundaryParityTests(unittest.TestCase):
             n,cat,_=f.project_mon(j.zeros((2,6,132),j.float32),j.zeros((2,6,41),j.int32),view.mon_features,
                 active=view.active,present=view.present,tables=self.tables.features,volatiles=view.volatiles)
             slot=int(trackers.active_slot[0,seat])
-            same &= bool(np.allclose(n[0,slot,cols],expected.numeric[0,seat,cols],atol=1e-7))
+            same &= bool(np.allclose(n[0,slot,cols],expected.numeric[0,seat,cols],rtol=0,atol=0))
             same &= bool(np.array_equal(cat[0,slot,cats],expected.categorical[0,seat,cats]))
             if equal:
-                np.testing.assert_allclose(n[0,slot,cols],expected.numeric[0,seat,cols],atol=1e-7,err_msg=str(seat))
+                np.testing.assert_allclose(n[0,slot,cols],expected.numeric[0,seat,cols],rtol=0,atol=0,err_msg=str(seat))
                 np.testing.assert_array_equal(cat[0,slot,cats],expected.categorical[0,seat,cats],err_msg=str(seat))
         return same
 
@@ -458,7 +458,7 @@ console.log(JSON.stringify(orders));"""
         cols=j.asarray(a.NUMERIC_COLUMNS);clock=a.NUMERIC_COLUMNS[a.CORE.index('CONFUSION_TURNS')]
         expected=project();self.compare_active(c.trackers,expected,a);self.assertTrue(bool(expected.numeric[0,1,clock]))
         def attempt(before,left):
-            return BeforeMove(before.status[:,1,0],before.status_counter[:,1,0],j.full(2,left,j.int32),yes,no)
+            return BeforeMove(before.status[:,1,0],before.status_counter[:,1,0],j.full(2,left,j.int32),yes,no,no)
         one=self.confused(state,1,1)
         h.before_move(c,two,1,attempt(two,1),yes);self.b2_lines(a,catalog,fact,'|-activate|p2a: Absol|confusion')
         self.compare_active(c.trackers,project(),a)
@@ -595,7 +595,7 @@ console.log(JSON.stringify(orders));"""
         self.compare_active(c.trackers,project(),a);self.assertFalse(bool(project().numeric[0,1,locked]))
         move(after,1,'|move|p2a: Absol|Tackle|p1a: Snorlax')
         got=project();self.compare_active(c.trackers,got,a);self.assertTrue(bool(got.numeric[0,1,locked]))
-        h.turn_end(c,after,after,yes);fact(a.TURN,-1,1);self.compare_active(c.trackers,project(),a)
+        h.turn_end(c,after,after._replace(turn=c.trackers.turn),yes);fact(a.TURN,-1,1);self.compare_active(c.trackers,project(),a)
         # Snorlax Tricks again: Absol gives the Band back and gets nothing (-enditem [silent]: ITEM_END).
         move(after,0,'|move|p1a: Snorlax|Trick|p2a: Absol')
         back=after._replace(item=after.item.at[:,0,0].set(2).at[:,1,0].set(1))
@@ -636,12 +636,12 @@ console.log(JSON.stringify(orders));"""
         hit=state._replace(recharge_counter=state.recharge_counter.at[:,0,0].set(2))
         h.public_move_state(c,state,hit,0,j.ones(2,j.int32),yes);self.b2_lines(a,catalog,fact,'|-mustrecharge|p1a: Snorlax')
         got=project();self.compare_active(c.trackers,got,a);self.assertTrue(bag(got))
-        h.turn_end(c,hit,hit,yes);fact(a.TURN,-1,1);self.compare_active(c.trackers,project(),a)
+        h.turn_end(c,hit,hit._replace(turn=c.trackers.turn),yes);fact(a.TURN,-1,1);self.compare_active(c.trackers,project(),a)
         h.recharge_turn(c,state,0,yes);self.b2_lines(a,catalog,fact,'|cant|p1a: Snorlax|recharge')
         got=project();self.compare_active(c.trackers,got,a);self.assertFalse(bag(got))
         h.public_move_state(c,state,hit,0,j.ones(2,j.int32),yes);self.b2_lines(a,catalog,fact,'|-mustrecharge|p1a: Snorlax')
-        h.turn_end(c,hit,hit,yes);fact(a.TURN,-1,2)
-        h.turn_end(c,hit,state,yes);fact(a.TURN,-1,3)                              # silent expiry: no line, no hook
+        h.turn_end(c,hit,hit._replace(turn=c.trackers.turn),yes);fact(a.TURN,-1,2)
+        h.turn_end(c,hit,state._replace(turn=c.trackers.turn),yes);fact(a.TURN,-1,3) # silent expiry: no recharge line or hook
         got=project();self.compare_active(c.trackers,got,a);self.assertTrue(bag(got))
         h.destiny_bond(c,state,0,yes);h.move(c,state,0,j.ones(2,j.int32),yes,pp_use=True)
         self.b2_lines(a,catalog,fact,'|move|p1a: Snorlax|Surf|p2a: Absol')
@@ -668,7 +668,7 @@ console.log(JSON.stringify(orders));"""
         self.assertEqual(list(source.legal_action_mask),[True]+[False]*8)
         nums=[[0.]*s_.V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT for _ in range(23)];cats=[['']*60 for _ in range(23)]
         s_._encode_action_tokens(cats,nums,source,dex=self.catalog.dex)
-        np.testing.assert_allclose(out.numeric_features[0,13:22],s_._project_v4_numeric_rows(nums)[13:22],rtol=0,atol=1e-6)
+        np.testing.assert_allclose(out.numeric_features[0,13:22],np.asarray(s_._project_v4_numeric_rows(nums)[13:22],np.float32),rtol=0,atol=0)
         expected=[[self.catalog.vocabulary.encode(label) for label in row[:41]] for row in cats[13:22]]
         np.testing.assert_array_equal(out.categorical_ids[0,13:22],expected)
         self.assertEqual(int(out.categorical_ids[0,13,0]),self.catalog.vocabulary.encode('move:recharge'))
@@ -749,9 +749,9 @@ class KnockOffLedgerBoundaryParityTests(unittest.TestCase):
         self.assertEqual((quiet['shown'],quiet['removed']),(0,plain['removed']))
         # Columns 119/120 for both observers: the victim's side (p2) is credited one removal of six.
         for observer in (0,1):
-            np.testing.assert_allclose(device['credits'][observer],knocked['credits'][observer],atol=1e-7)
-            np.testing.assert_allclose(quiet['credits'][observer],plain['credits'][observer],atol=1e-7)
-        np.testing.assert_allclose(knocked['credits'][1],[1/6,0.],atol=1e-7);np.testing.assert_allclose(knocked['credits'][0],[0.,1/6],atol=1e-7)
+            np.testing.assert_allclose(device['credits'][observer],knocked['credits'][observer],rtol=0,atol=0)
+            np.testing.assert_allclose(quiet['credits'][observer],plain['credits'][observer],rtol=0,atol=0)
+        np.testing.assert_allclose(knocked['credits'][1],np.asarray([1/6,0.],np.float32),rtol=0,atol=0);np.testing.assert_allclose(knocked['credits'][0],np.asarray([0.,1/6],np.float32),rtol=0,atol=0)
 
     def test_white_herb_consumption_matches_b2_consume_and_clear_negative(self):
         """WH's white_herb producer against B2's own fold of -enditem|X|White Herb and -clearnegativeboost|X|[silent]:

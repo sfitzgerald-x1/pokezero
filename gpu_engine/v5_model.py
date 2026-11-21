@@ -22,8 +22,14 @@ from pokezero.v5_model import EXPERT_ROLES, MODEL_INPUTS, TOKEN_ROLES, V5ModelCo
 
 ARCHIVE_SCHEMA = 'pokezero.gpu_actor.v5'
 CHECKPOINT_SCHEMA = 'pokezero.checkpoint.v5'
-TORCH_SOURCE_SHA256 = 'f593bc5f41fa72d12d78fa57c8ff94b9cadff824f3a3a52cc026743fbd6e3d9b'
+TORCH_SOURCE_SHA256 = 'eee095f5894a11bcf47ea0fb6ef7b8e1ed3e775158f0e81359d1a279222dc16b'
 CONTRACT_SOURCE_SHA256 = 'b6a823195350ff3fed68699ea70bd925c4e9df1ff4f65e222928098d75080170'
+# The class-family cache changed construction identity, preserving initialized
+# state, schema and inference math. Only these two archive producers share that
+# contract. This compatibility set never admits a different installed source.
+LEGACY_ARCHIVE_TORCH_SOURCE_SHA256 = 'f593bc5f41fa72d12d78fa57c8ff94b9cadff824f3a3a52cc026743fbd6e3d9b'
+ACCEPTED_ARCHIVE_TORCH_SOURCE_SHA256 = frozenset((
+    TORCH_SOURCE_SHA256, LEGACY_ARCHIVE_TORCH_SOURCE_SHA256))
 
 
 def _sha(value):
@@ -104,16 +110,23 @@ def _config(metadata):
     return config
 
 
-def export(checkpoint, out, *, expected_checkpoint_sha256, enable_v5=False):
-    """Export an explicit v5 checkpoint snapshot; Torch is imported only here."""
+def export(checkpoint, out, *, expected_checkpoint_sha256, enable_v5=False, self_moves=None, off_provenance=None):
+    """Export an explicit v5 checkpoint snapshot; Torch is imported only here.
+
+    ``self_moves`` is an optional expectation of the digest-bound checkpoint
+    declaration. Legacy OFF requires retained checkpoint-bound provenance;
+    callers cannot relabel weights. OFF archive bytes remain unchanged."""
+    if self_moves is not None and type(self_moves) is not bool:
+        raise ValueError('explicit bool self_moves required')
     if enable_v5 is not True:
         raise ValueError('explicit v5 actor enablement required')
     contract._binding(expected_checkpoint_sha256); _sources()
-    blob, digest = _snapshot(checkpoint)
-    if digest != expected_checkpoint_sha256:
-        raise ValueError('original v5 checkpoint SHA256 differs')
+    from pokezero.checkpoint_self_moves import checked_checkpoint, resolve_self_moves
+    checked = checked_checkpoint(checkpoint, expected_checkpoint_sha256=expected_checkpoint_sha256)
+    self_moves = resolve_self_moves(checked, expected_self_moves=self_moves, off_provenance=off_provenance)
+    digest = checked.sha256
     import torch
-    payload = torch.load(io.BytesIO(blob), map_location='cpu', weights_only=True)
+    payload = checked.payload
     metadata = payload.get('metadata', {})
     if (metadata.get('schema') != CHECKPOINT_SCHEMA
             or payload.get('metadata_sha256') != _sha(metadata)
@@ -142,6 +155,8 @@ def export(checkpoint, out, *, expected_checkpoint_sha256, enable_v5=False):
         actor='RAW_POLICY', view='PUBLIC', auxiliary_heads=False, evaluation=True,
         parameter_count=sum(a.size for a in params.values()),
         tensor_sha256={name: hashlib.sha256(a.tobytes()).hexdigest() for name, a in params.items()})
+    if self_moves:
+        result['self_moves'] = True
     encoded = np.frombuffer(json.dumps(result, sort_keys=True, allow_nan=False).encode(), np.uint8)
     archive = io.BytesIO()
     np.savez_compressed(archive, metadata_json=encoded, **params)
@@ -165,12 +180,15 @@ def load(path, *, expected_archive_sha256, expected_checkpoint_sha256, expected_
         raise ValueError('caller-trusted v5 actor archive SHA256 differs')
     with np.load(io.BytesIO(blob), allow_pickle=False) as archive:
         metadata = json.loads(archive['metadata_json'].tobytes())
+        from pokezero.checkpoint_self_moves import archive_self_moves
+        archive_self_moves(metadata)
         params = {name: archive[name] for name in archive.files if name != 'metadata_json'}
     if (metadata.get('schema') != ARCHIVE_SCHEMA or metadata.get('actor') != 'RAW_POLICY'
             or metadata.get('view') != 'PUBLIC' or metadata.get('auxiliary_heads') is not False
             or metadata.get('evaluation') is not True
             or metadata.get('checkpoint_sha256') != expected_checkpoint_sha256
-            or metadata.get('torch_source_sha256') != TORCH_SOURCE_SHA256
+            or type(metadata.get('torch_source_sha256')) is not str
+            or metadata.get('torch_source_sha256') not in ACCEPTED_ARCHIVE_TORCH_SOURCE_SHA256
             or metadata.get('contract_source_sha256') != CONTRACT_SOURCE_SHA256
             or metadata.get('source_contract_sha256') != _sha(contract.contract_descriptor())):
         raise ValueError('explicit original public v5 actor archive required')
@@ -184,7 +202,9 @@ def load(path, *, expected_archive_sha256, expected_checkpoint_sha256, expected_
                 for name, a in params.items()}):
         raise ValueError('v5 actor tensor digest/count differs')
     import jax.numpy as j
-    return {name: j.asarray(value) for name, value in params.items()}, config, dict(metadata, weights_archive_sha256=digest)
+    return {name: j.asarray(value) for name, value in params.items()}, config, dict(metadata,
+        weights_archive_sha256=digest, loader_torch_source_sha256=TORCH_SOURCE_SHA256,
+        loader_contract_source_sha256=CONTRACT_SOURCE_SHA256)
 
 
 def prepare_inputs(columns, config):

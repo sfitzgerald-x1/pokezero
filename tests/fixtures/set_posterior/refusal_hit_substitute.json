@@ -1,0 +1,135 @@
+{
+ "beliefs": [
+  {
+   "condition": "100/100",
+   "gender": "M",
+   "item_mutated": false,
+   "revealed_ability": null,
+   "revealed_item": null,
+   "revealed_moves": [
+    "Shadow Ball"
+   ],
+   "ruled_out_abilities": [],
+   "ruled_out_items": [],
+   "showdown_slot": "p2",
+   "species": "Slaking"
+  }
+ ],
+ "census": {
+  "species": {
+   "slaking": {
+    "census_lik": [
+     1.0,
+     1.0
+    ],
+    "census_n": 2,
+    "census_n_after": 2,
+    "census_strikes": 0,
+    "survivor_ids": [
+     "slaking-1-variant-1",
+     "slaking-1-variant-2"
+    ],
+    "true_variant": "slaking-1-variant-1"
+   }
+  },
+  "strikes": [
+   {
+    "attacker": "Slaking",
+    "crit": false,
+    "eff": null,
+    "hp_before": 183,
+    "ko": false,
+    "line": 29,
+    "move": "shadowball",
+    "n_excluded_universe": null,
+    "n_variants_with_move": null,
+    "observed": null,
+    "reason": "hit-substitute",
+    "true_match": null,
+    "true_variant": null
+   }
+  ]
+ },
+ "decision_index": 1,
+ "format_id": "gen3randombattle",
+ "name": "refusal_hit_substitute",
+ "note": "Census refusal: hit_substitute",
+ "ordinal": 3776,
+ "owner": "p1",
+ "posterior": {
+  "slaking": {
+   "hard": [
+    0,
+    1
+   ],
+   "provenance": "f12a5b74a3d9b83f814c63934fe378e71e76d8e792daab1d38b77b6fa87008ba",
+   "strikes": [
+    {
+     "admitted": false,
+     "counts": null,
+     "crit": false,
+     "ko": false,
+     "line": 29,
+     "move": "shadowball",
+     "observed": null,
+     "reason": "hit-substitute"
+    }
+   ],
+   "weights": [
+    1,
+    1
+   ]
+  }
+ },
+ "prefix_sha256": "38fa86a371c9dbfba62550e093e1ed9a5daf24ad099fdc95d8e3864423ba5a61",
+ "request": {
+  "battle_id": "battle-gen3randombattle-controlled-2103400629",
+  "decision_index": 1,
+  "generation": 4,
+  "lines": [
+   "|t:|1794605701",
+   "|gametype|singles",
+   "|player|p1|PokeZeroBot||",
+   "|player|p2|FoulPlayBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794605701",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Rapidash|Rapidash, L83, F|244/244",
+   "|switch|p2a: Slaking|Slaking, L78, M|100/100",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Grass 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Rapidash\",\"details\":\"Rapidash, L83, F\",\"condition\":\"244/244\",\"active\":true,\"stats\":{\"atk\":172,\"def\":164,\"spa\":180,\"spd\":180,\"spe\":222},\"moves\":[\"fireblast\",\"hiddenpowergrass\",\"substitute\",\"toxic\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Miltank\",\"details\":\"Miltank, L77, F\",\"condition\":\"273/273\",\"active\":false,\"stats\":{\"atk\":168,\"def\":206,\"spa\":106,\"spd\":152,\"spe\":199},\"moves\":[\"bodyslam\",\"earthquake\",\"milkdrink\",\"toxic\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Tropius\",\"details\":\"Tropius, L95, F\",\"condition\":\"341/341\",\"active\":false,\"stats\":{\"atk\":182,\"def\":211,\"spa\":190,\"spd\":218,\"spe\":151},\"moves\":[\"synthesis\",\"leechseed\",\"hiddenpowerflying\",\"toxic\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"earthquake\",\"rockslide\",\"thunderwave\",\"overheat\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sharpedo\",\"details\":\"Sharpedo, L85, F\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":252,\"def\":116,\"spa\":209,\"spd\":116,\"spe\":210},\"moves\":[\"doubleedge\",\"hiddenpowerflying\",\"hydropump\",\"earthquake\"],\"baseAbility\":\"roughskin\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Blastoise\",\"details\":\"Blastoise, L82, M\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":141,\"def\":211,\"spa\":187,\"spd\":219,\"spe\":175},\"moves\":[\"protect\",\"refresh\",\"toxic\",\"surf\"],\"baseAbility\":\"torrent\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+   "|",
+   "|t:|1794605704",
+   "|move|p1a: Rapidash|Substitute|p1a: Rapidash",
+   "|-start|p1a: Rapidash|Substitute",
+   "|-damage|p1a: Rapidash|183/244",
+   "|move|p2a: Slaking|Shadow Ball|p1a: Rapidash",
+   "|-end|p1a: Rapidash|Substitute",
+   "|",
+   "|-heal|p1a: Rapidash|198/244|[from] item: Leftovers",
+   "|upkeep",
+   "|turn|2",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Grass 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":15,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Rapidash\",\"details\":\"Rapidash, L83, F\",\"condition\":\"198/244\",\"active\":true,\"stats\":{\"atk\":172,\"def\":164,\"spa\":180,\"spd\":180,\"spe\":222},\"moves\":[\"fireblast\",\"hiddenpowergrass\",\"substitute\",\"toxic\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Miltank\",\"details\":\"Miltank, L77, F\",\"condition\":\"273/273\",\"active\":false,\"stats\":{\"atk\":168,\"def\":206,\"spa\":106,\"spd\":152,\"spe\":199},\"moves\":[\"bodyslam\",\"earthquake\",\"milkdrink\",\"toxic\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Tropius\",\"details\":\"Tropius, L95, F\",\"condition\":\"341/341\",\"active\":false,\"stats\":{\"atk\":182,\"def\":211,\"spa\":190,\"spd\":218,\"spe\":151},\"moves\":[\"synthesis\",\"leechseed\",\"hiddenpowerflying\",\"toxic\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"earthquake\",\"rockslide\",\"thunderwave\",\"overheat\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sharpedo\",\"details\":\"Sharpedo, L85, F\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":252,\"def\":116,\"spa\":209,\"spd\":116,\"spe\":210},\"moves\":[\"doubleedge\",\"hiddenpowerflying\",\"hydropump\",\"earthquake\"],\"baseAbility\":\"roughskin\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Blastoise\",\"details\":\"Blastoise, L82, M\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":141,\"def\":211,\"spa\":187,\"spd\":219,\"spe\":175},\"moves\":[\"protect\",\"refresh\",\"toxic\",\"surf\"],\"baseAbility\":\"torrent\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Fire Blast\",\"id\":\"fireblast\",\"pp\":8,\"maxpp\":8,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Hidden Power Grass 70\",\"id\":\"hiddenpower\",\"pp\":24,\"maxpp\":24,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":15,\"maxpp\":16,\"target\":\"self\",\"disabled\":false},{\"move\":\"Toxic\",\"id\":\"toxic\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false}]}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Rapidash\",\"details\":\"Rapidash, L83, F\",\"condition\":\"198/244\",\"active\":true,\"stats\":{\"atk\":172,\"def\":164,\"spa\":180,\"spd\":180,\"spe\":222},\"moves\":[\"fireblast\",\"hiddenpowergrass\",\"substitute\",\"toxic\"],\"baseAbility\":\"flashfire\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Miltank\",\"details\":\"Miltank, L77, F\",\"condition\":\"273/273\",\"active\":false,\"stats\":{\"atk\":168,\"def\":206,\"spa\":106,\"spd\":152,\"spe\":199},\"moves\":[\"bodyslam\",\"earthquake\",\"milkdrink\",\"toxic\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Tropius\",\"details\":\"Tropius, L95, F\",\"condition\":\"341/341\",\"active\":false,\"stats\":{\"atk\":182,\"def\":211,\"spa\":190,\"spd\":218,\"spe\":151},\"moves\":[\"synthesis\",\"leechseed\",\"hiddenpowerflying\",\"toxic\"],\"baseAbility\":\"chlorophyll\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Groudon\",\"details\":\"Groudon, L69\",\"condition\":\"252/252\",\"active\":false,\"stats\":{\"atk\":247,\"def\":234,\"spa\":178,\"spd\":165,\"spe\":165},\"moves\":[\"earthquake\",\"rockslide\",\"thunderwave\",\"overheat\"],\"baseAbility\":\"drought\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Sharpedo\",\"details\":\"Sharpedo, L85, F\",\"condition\":\"257/257\",\"active\":false,\"stats\":{\"atk\":252,\"def\":116,\"spa\":209,\"spd\":116,\"spe\":210},\"moves\":[\"doubleedge\",\"hiddenpowerflying\",\"hydropump\",\"earthquake\"],\"baseAbility\":\"roughskin\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Blastoise\",\"details\":\"Blastoise, L82, M\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":141,\"def\":211,\"spa\":187,\"spd\":219,\"spe\":175},\"moves\":[\"protect\",\"refresh\",\"toxic\",\"surf\"],\"baseAbility\":\"torrent\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}",
+  "owner": "p1",
+  "prefix_sha256": "38fa86a371c9dbfba62550e093e1ed9a5daf24ad099fdc95d8e3864423ba5a61",
+  "request_id": "battle-gen3randombattle-controlled-2103400629:1",
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "stream_id": 1
+ },
+ "source_hash": "f5a5265143d423af"
+}

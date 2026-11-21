@@ -43,6 +43,9 @@ def encoder_provenance(kind):
 def validate_encoder_config(config):
     kind=config.encoder_kind
     encoder_provenance(kind)
+    uncertain = getattr(config, 'owning_allow_maybe_trapped_switches', False)
+    _require(type(uncertain) is bool and (not uncertain or kind == 'jax-owning'),
+             'maybe-trapped switches require explicit JAX owning opt-in')
     if kind=='legacy-mixed':
         _require(getattr(config,'owning_decision_timeout_seconds',None) is None
             and getattr(config,'owning_public_single_line',False) is False,
@@ -56,10 +59,10 @@ def validate_encoder_config(config):
         and config.checkpoint is not None and config.value_checkpoint is None
         and config.opponent_policy_mode=='foul-play' and config.format_id=='gen3randombattle'
         and config.device=='cpu' and config.temperature==1. and config.belief_set_source is True
-        and config.opponent_legal_mask_mode=='hidden' and config.search_time_ms==1000
+        and config.opponent_legal_mask_mode=='hidden' and config.search_time_ms in (100,1000)
         and config.foulplay_mcts_iterations is None and config.opponent_crash_retries==0
         and config.allow_search_fallback is False,
-        'owning encoder requires raw champion/checkpoint/CPU/public source/FoulPlay1000 without retry or fallback')
+        'owning encoder requires raw champion/checkpoint/CPU/public source/FP100 or FP1000 without retry or fallback')
     _require(not any(getattr(config,name) for name in (
         'engine_oracle_belief','engine_policy_opponent','engine_opponent_priors',
         'engine_override_telemetry','engine_root_selector_shadow','engine_early_stop',
@@ -82,10 +85,12 @@ class OwningActorFactory:
     contract: ActorContract
     backend_factory: Callable
     policy_factory: Callable
+    allow_maybe_trapped_switches: bool = False
 
     def __post_init__(self):
         _require(self.encoder_kind in ENCODERS[1:] and type(self.contract) is ActorContract
-            and callable(self.backend_factory) and callable(self.policy_factory),
+            and callable(self.backend_factory) and callable(self.policy_factory)
+            and type(self.allow_maybe_trapped_switches) is bool,
             'explicit owning encoder and bound factories required')
 
     def actor(self, runtime):
@@ -100,13 +105,16 @@ class OwningActorFactory:
                 raise ValueError('factory backend differs from encoder axis')
             return value
         return LiveProtocolActor(self.contract,backend_factory=backend,
-            policy_factory=lambda contract:self.policy_factory(contract,model=model,result=result))
+            policy_factory=lambda contract:self.policy_factory(contract,model=model,result=result),
+            allow_maybe_trapped_switches=self.allow_maybe_trapped_switches)
 
 
 def require_actor_factory(config, factory, *, actor_version='champion-v4'):
     validate_encoder_config(config)
     _require(type(actor_version) is str and actor_version in ('champion-v4','v5','canary-v4'), 'explicit owning actor version required')
+    uncertain = getattr(config, 'owning_allow_maybe_trapped_switches', False)
     if actor_version=='canary-v4':
+        _require(not uncertain, 'maybe-trapped switches are unavailable for the canary')
         from .b4_device_canary_runtime import check_factory
         check_factory(config,factory)
         _require(not os.environ.get('POKEZERO_TRAIT_CAPTURE'),'omniscient trait capture forbidden in owning path')
@@ -114,7 +122,8 @@ def require_actor_factory(config, factory, *, actor_version='champion-v4'):
     if actor_version=='v5':
         from gpu_engine.v5_live_protocol import Factory, check_factory
         _require(config.encoder_kind=='jax-owning' and type(factory) is Factory
-            and config.owning_decision_timeout_seconds==60. and factory.learner_seconds==60.,
+            and config.owning_decision_timeout_seconds==60. and factory.learner_seconds==60.
+            and factory.allow_maybe_trapped_switches == uncertain,
             'explicit v5 JAX owning actor and60s learner bound required')
         check_factory(factory)
         _require(not os.environ.get('POKEZERO_TRAIT_CAPTURE'), 'omniscient trait capture forbidden in owning path')
@@ -123,7 +132,8 @@ def require_actor_factory(config, factory, *, actor_version='champion-v4'):
         _require(factory is None, 'legacy-mixed cannot silently use an owning actor factory')
         return None
     _require(type(factory) is OwningActorFactory and factory.encoder_kind==config.encoder_kind
-        and factory.contract==ActorContract.champion(), 'matching exact champion owning actor factory required')
+        and factory.contract==ActorContract.champion()
+        and factory.allow_maybe_trapped_switches == uncertain, 'matching exact champion owning actor factory required')
     _require(not os.environ.get('POKEZERO_TRAIT_CAPTURE'), 'omniscient trait capture forbidden in owning path')
     return factory
 
@@ -198,6 +208,8 @@ class OwningWireSession:
                 and type(event['choice']) is str and event['choice']==self.pending_choices[event['player']],
                 'foreign, stale, duplicate or mismatched owning choice acknowledgement')
             self.wait_timeout()
+            if self.config.owning_allow_maybe_trapped_switches and event['player'] == self.owner:
+                self.actor.confirm_choice(event['choice'])
             del self.pending_choices[event['player']]
             self.acknowledged+=1
             if not self.pending_choices:self.ack_deadline=None
@@ -358,6 +370,8 @@ class OwningWireSession:
                 if self.actor_version=='v5' else {}),
             **(dict(actor_version='canary-v4',canary_checkpoint_sha256=self.factory.contract.checkpoint_sha256)
                 if self.actor_version=='canary-v4' else {}),
+            **({'owning_allow_maybe_trapped_switches': True}
+               if getattr(self.config, 'owning_allow_maybe_trapped_switches', False) else {}),
             actor_namespace=self.factory.contract.namespace,
             status='FAILED_CLOSED_UNQUALIFIED' if failed else 'CLOSED_UNQUALIFIED',
             actual_owner_terminal_seen=self.terminal_seen,

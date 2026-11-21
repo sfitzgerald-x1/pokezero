@@ -30,6 +30,10 @@ class CombatTable(NamedTuple):
     wonder_guard: jax.Array      # [A], gen4 wonderguard onTryHit (inherited by Gen 3)
     pinch_type: jax.Array        # [A], the type Blaze/Torrent/Overgrow/Swarm boost (0: none)
     status_move: jax.Array       # [M], category Status (exempt from Wonder Guard)
+    # Damage modifiers (appended): Marvel Scale (ModifyDef) and Gen 3's Plus/Minus (ModifySpA).
+    marvel_scale: jax.Array      # [A], base abilities.ts marvelscale onModifyDef (no gen3-8 override)
+    plus: jax.Array              # [A], data/mods/gen3/abilities.ts plus onModifySpA
+    minus: jax.Array             # [A], data/mods/gen3/abilities.ts minus onModifySpA
 
 
 PINCH_TYPES = {"blaze": "fire", "torrent": "water", "overgrow": "grass", "swarm": "bug"}
@@ -58,18 +62,45 @@ def from_metadata(metadata):
         flag("wonderguard"),
         jnp.asarray([vocab["types"].index(PINCH_TYPES[name]) if name in PINCH_TYPES else 0
             for name in vocab["abilities"]],jnp.int32),
-        jnp.asarray(status_move,bool))
+        jnp.asarray(status_move,bool),
+        flag("marvelscale"),flag("plus"),flag("minus"))
 
 
-def attack_modifier(table,ability,status,physical,*,item_num=1,item_den=1):
-    """One Atk-event chain, not sequentially rounded Guts/item damage.
+def attack_modifier(table,ability,status,physical,*,item_num=1,item_den=1,foe_ability=None,foe_hp=None):
+    """One ModifyAtk/ModifySpA event chain, not sequentially rounded ability/item damage. Returns (q, 4096).
 
-The selected multipliers are exact Q12 fractions (1, 1.5, 2). Their rational
-product is the same chain as the pinned event; damage applies it once to Atk.
-"""
-    activated = table.guts[ability] & (status != m.NONE) & jnp.asarray(physical)
-    doubled = table.doubled_attack[ability] & jnp.asarray(physical)
-    return item_num*jnp.where(activated,3,jnp.where(doubled,2,1)),item_den*jnp.where(activated,2,1)
+    runEvent sorts the handlers by priority (sim/battle.ts comparePriority): the ability (Guts, Huge Power, Pure Power:
+    onModifyAtkPriority 5) before the item (priority 1); on SpA the item (Light Ball, Soul Dew: priority 1) before Plus/Minus
+    (data/mods/gen4/abilities.ts clears their priority: 0). Each handler's chainModify folds into the event modifier as
+    (prev*next + 2048) >> 12 (sim/battle.ts chainModify), and runEvent applies it once to the stat. At most one ability
+    factor applies (Guts/Huge Power are physical, Plus/Minus special), so the chain is (ability_q*item_q + 2048) >> 12.
+    For the exact factors (4096, 6144, 8192) it is the rational product; Silk Scarf's 4505 is not exact, so the item
+    fraction (items.attack_modifier) is taken to Q12 first (num*4096//den, as chainModify truncates it) and chained.
+
+    Damage modifiers: Gen 3's Plus/Minus (data/mods/gen3/abilities.ts:115-134) chainModify(1.5) on SpA when any active
+    in getAllActive() (both sides; !fainted) has the partner ability: in singles the OPPOSING active. foe_ability is the
+    foe active's current ability (a Trace copy included) and foe_hp its HP (> 0: not fainted); without them Plus/Minus
+    do not apply (the confusion self-hit, which is physical)."""
+    physical = jnp.asarray(physical)
+    activated = table.guts[ability] & (status != m.NONE) & physical
+    doubled = table.doubled_attack[ability] & physical
+    partner = jnp.zeros_like(activated)
+    if foe_ability is not None:
+        partner = (~physical & (jnp.asarray(foe_hp) > 0)
+            & ((table.plus[ability] & table.minus[foe_ability]) | (table.minus[ability] & table.plus[foe_ability])))
+    ability_q = jnp.where(activated | partner,6144,jnp.where(doubled,8192,4096))
+    item_q = jnp.asarray(item_num)*4096//jnp.asarray(item_den)
+    return (ability_q*item_q+2048)>>12,jnp.full_like(ability_q,4096)
+
+
+def defense_modifier(table,ability,status,physical,*,item_num=1,item_den=1):
+    """Damage modifiers: Marvel Scale (base abilities.ts:2488-2498, no gen3-8 override): onModifyDefPriority 6,
+    `if (pokemon.status) return this.chainModify(1.5)`: any major status (par, brn, psn, tox, slp, frz), Def only, so a
+    physical hit (Gen 3's category by type). The holder's own confusion self-hit runs getDamage(pokemon, pokemon, 40)
+    (data/mods/gen4/conditions.ts confusion), so ModifyDef applies there too. It composes with the item's (Soul Dew SpD)
+    fraction, which never shares the stat, so the product stays exact. Explosion's halving follows (gen3_damage)."""
+    scaled = table.marvel_scale[ability] & (status != m.NONE) & jnp.asarray(physical)
+    return item_num*jnp.where(scaled,3,1),item_den*jnp.where(scaled,2,1)
 
 
 def base_power(table,ability,move_type,power,*,attacker_ability=None,hp=None,max_hp=None):

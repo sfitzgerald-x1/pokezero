@@ -21,46 +21,48 @@ from .finite_law import Axis, COORDINATES, DRAW_BOUNDS, EFFECT_BOUNDS, Cardinali
 
 # Complete transition-domain proof, including the copy/zero assignments in
 # transition.step_with_chance (the four saved blocks and, since §6, the effect
-# block at :2770-2771). A numeric representative alone is not proof.
+# block at :2969-2970). A numeric representative alone is not proof.
 # One whole-file sha256 per module, in chance_consumers.DOMAIN_MODULES order (it replaced a single DOMAIN_SHA256 over
 # them; _source_certificate still returns that digest, computed from the same bytes).
 DOMAIN_PINS = {
-    'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407',
     'absorption.py': '2d684602eb9aa69bc470b215c188533b0e1c4d8495dd5b71ca2508dc38f20623',
+    'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407',
     'baton.py': 'f86ad12ae0d59c1c8f89eb3f84f2d0519e1214ae4a4506d5cb700c6e0c20fa01',
-    'combat.py': 'bf7ed1fb632e95bc632d75a202fc067553ff3d7b5a6aa8788c9c543401b84ae3',
-    'critical.py': 'b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e',
+    'combat.py': '2d3ad693aebf879dc4b26cd992e9357fcc0e7a9fcf22bf1274e33869cd684aa7',
+    'critical.py': '7f8be9394e5a5473df5e6e9e9dcd242947ac0970cf5f46d50e27b27658e58f72',
     'damage_moves.py': 'c2427b88dc7f7b643625659f12498e1c06412c6875c60d548fa573f6e7a45e72',
     'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2',
     'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd',
-    'entry.py': '317536e3d6c1813d0d313308e8c8a87f109dbebda5b2cc6da4a8c60b4d1021f1',
+    'entry.py': '688cc4eaa0266f71faf22c78fa2d91f2ee0fd8b875171e88fe4c2304c66aa285',
     'focus_punch.py': '881bd17a84dc22576aa618256ada2b0f67bee29224dbb50508925b55e119585f',
-    'items.py': 'e6813b7460655965e194a058c4f279ef5cb684281c30f918ef5bc89beb030bfe',
+    'forecast.py': '3c08324c4012ab60b8aa33f1a3d217c820783c4b85e0e0f5b0bdc2feade97bcf',
+    'infatuation.py': '6d25d2cfe1f45e0cee4334e89b66ae2ff3ca92de141b2825d9345aec04bc3ffa',
+    'items.py': '4a936d5d4e92036155bce8a1ae19005ca7555996cb23a6359cdd4c128fa93490',
     'linked_traps.py': '743c01ee69509162e7829ae555b85f069f1c20ec9bd19cec0779d066894bade4',
-    'mechanics.py': 'e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661',
-    'phazing.py': 'c27039f267bd18660adb3c2bd826e58a7da953eea0e79677de5428f042447969',
+    'mechanics.py': 'fa63643594e8e01cae573c324fbd442fd82ddf63e4514bc23c2e3a4c337e3444',
+    'phazing.py': '8004d4880991a074480b6a7e9be6f6cb980577a61d2388c4c8c56d9a1ab2f26a',
     'pressure.py': '73eefb16678fedf1885a4e11cbc8954d15706592742caa6b0b673fb4d63d698c',
-    'pursuit.py': '5b966584634b5230b3efaf16609699484d29966ff8f7ebaf6d160864dba8c2e5',
-    'residual_order.py': '7b1a958d4ce27cf8fe7560d8f5a4f95d5cb54a17adbe23ba72dccc00e35bf454',
-    'secondary.py': '68f74574caab36e5f8e8be3426f96b5858964fb24346b2c4641eb6196640e532',
+    'pursuit.py': '31a6805d9a6b0032c849877efcb2b5a2447b9abc29fbe5170e687b0abe1fbb55',
+    'residual_order.py': 'd49fbd0f47ffe4fa1c98bba49eeaacfb5e16518c2ef938aa7ff311d996a0df94',
+    'secondary.py': 'a3058e796b8affc38f5aa0d188bf52cc554d6c07cc8b4e83ac792ed70734001a',
     'self_destruct.py': 'b3c9df0ea093eca7c0960b4c4ffd4277e289a0ded6f32f914466c0752fa9b739',
     'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154',
     'solar_beam.py': '5463e103392e24df7cc560003740b7e425aba766a0d1bba90ff4428606849155',
-    'state.py': 'c39b77308bdf7b7d69e0fdfeeb880bb8f98752738e02428dd551cb566c73e080',
+    'state.py': '4cb9d910e8eb8cd70e80185fe4352132fd8933321a9fb00132623077b5993387',
     'sustain.py': '0b575a55f091312679058e0ab990116b1f2348f163654ae777e293c1e7b51b24',
     'transform.py': '5ff5f4613ec84b6ca7a72efec3ffd6b64dcf28d1f1672c633428a8e5dc45e20b',
-    'transition.py': 'b72fb15560bdb1cfdcc57d7486225fb7f774f4f3abe38d3bf50fbe001143e752',
+    'transition.py': 'e86226e51f4ec2941d8ce793c6eaadae6deafaf591e2bd057eac1f03ce0e0a97',
     'variable_moves.py': '0d3655aac5b547782457be46ebfee0b8b66ece3a360d05d4ec34cebbf801ea6d',
     'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5',
 }
 # Filled only after reviewed implementation stabilizes; drift must refuse.
 MAPPING_PINS = {
     'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e',
-    'chance_consumers.py': '3fa94811a1536681a0fa40a625399701e2ac146e4afc1708c7be30de8645a908',
-    'conditioned_future.py': '95e86f5a019850cea2507305221754fde2fb9456e15a2c6f5cf21d9ea624ffbd',
+    'chance_consumers.py': 'fbc62ed9ecd186c6456324f9fd353838c248192a3ad119190b0f61a6e39a326c',
+    'conditioned_future.py': 'bee60d69d535f4d9982c027f75ea6c49906787fc6c1754a9ac4d1a4548c2b8d6',
     'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f',
-    'finite_law.py': '49c5f0060683814ba182028e4ab54669314aa40e032b2dabee7d71338062e141',
-    'future_state.py': '7de2072f2797d1fd801b9b8247a1b03c0c6801d95ab1d965f5f41d766b54bf0b',
+    'finite_law.py': '6adba87e46cc027d0b45fe4e4d5602dd36ac3bb00e66156774e0705fcabb8231',
+    'future_state.py': 'a79bc6e0b9e18bf679404444e7d6ac5a148bd4e3a893b5628c909e307ed30bd2',
 }
 NATIVE_BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
     for s in range(2) for i,bound in enumerate(DRAW_BOUNDS)]
@@ -69,11 +71,13 @@ NATIVE_BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
 # §6: the saved effect block (fidelity R) is the bank's last rows. It is JAX-only: the native wire (CAPSULE_FIELDS, the
 # ordinary-step chance and bank) has no effect stream, so a native output takes it by the engine's save rule.
 EFFECT_BANK = tuple((f'{conditioned_future.SAVED_BLOCK}.{s}.{c}', f'effect.{s}.{c}', bound)
-    for s in range(2) for c,bound in enumerate(EFFECT_BOUNDS))
+    for s in range(2) for c,bound in enumerate(EFFECT_BOUNDS[:4])) + tuple(
+        (f'{conditioned_future.SAVED_BLOCK}.{s}.4',f'effect.{s}.4',2) for s in range(2)) + tuple(
+        (f'{conditioned_future.SAVED_CURE}.{s}',f'shed_skin.{s}',100) for s in range(2))
 BANK = NATIVE_BANK + EFFECT_BANK
 SPACE = algebra.OutputSpace(tuple((name,bound) for name,_,bound in BANK))
-BANK_FIELDS = {'residual_draws','phazing_draws','secondary_draws','sleep_talk_draws',conditioned_future.SAVED_BLOCK}
-CAPSULE = (*conditioned_future.CAPSULE_FIELDS,conditioned_future.SAVED_BLOCK)
+BANK_FIELDS = {'residual_draws','phazing_draws','secondary_draws','sleep_talk_draws',conditioned_future.SAVED_BLOCK,conditioned_future.SAVED_CURE}
+CAPSULE = (*conditioned_future.CAPSULE_FIELDS,conditioned_future.SAVED_BLOCK,conditioned_future.SAVED_CURE)
 
 
 def _source_certificate():
@@ -195,14 +199,15 @@ def _native_output(branch,certificate,values):
     if isinstance(physical,mapping.Refused):
         raise WholeSlotUnknown('UNSUPPORTED_POSITIVE_NATIVE_OUTPUT',asdict(physical))
     native_capsule=branch['capsule']
-    if type(native_capsule) is not dict or conditioned_future.SAVED_BLOCK in native_capsule:
+    if type(native_capsule) is not dict or set(native_capsule)!={*conditioned_future.CAPSULE_FIELDS,'version','schema'}:
         raise ValueError('ORDINARY_CAPSULE_FIELDS')
-    # The engine's save rule (transition.py:2770-2771): a suspended successor saves the case's effect block, any other
+    # The engine's save rule (transition.py:2969-2970): a suspended successor saves the case's effect and cure blocks, any other
     # carries 0. The native engine draws no effect stream, so its output takes the block by that rule.
     pending=native_capsule.get('pending_residual') is True
     effect=chance_fields(values)['effect']
     saved=[[value if pending else 0 for value in row] for row in effect]
-    capsule=_capsule({**native_capsule,conditioned_future.SAVED_BLOCK:saved})
+    capsule=_capsule({**native_capsule,conditioned_future.SAVED_BLOCK:saved,
+        conditioned_future.SAVED_CURE:[values[f'shed_skin.{side}'] if pending else 0 for side in range(2)]})
     if type(branch['bank']) is not list or len(branch['bank'])!=len(NATIVE_BANK):
         raise ValueError('COMPLETE_NATIVE_BANK_OUTPUT_REQUIRED')
     expressions=[]
@@ -333,9 +338,9 @@ def compare_plan(plan,state,actions,table,*,cap,batch_size,max_nodes,retain_evid
                 validate_output_address(output,plan.address)
                 reference.append(output.term(plan.law,cell))
                 v=dict(cell.case.values)
-                # The native ordinary-step wire carries the six original fields only (no effect stream); the JAX
-                # executor above received the case's effect block explicitly.
-                chance={name:value for name,value in chance_fields(v).items() if name!='effect'}
+                # The native ordinary-step wire carries only the six original fields. The JAX executor
+                # receives both JAX-only banks explicitly; their native carry is supplied by _native_output.
+                chance={name:value for name,value in chance_fields(v).items() if name not in ('effect','shed_skin')}
                 request={'version':1,'schema':'pokezero.ordinary-step','actions':plan.native_actions.raw_actions,
                     'chance':chance,'address':dict(plan.address)}
                 report=json.loads(module.conditioned_step(plan.native_input.raw_native,json.dumps(request)))

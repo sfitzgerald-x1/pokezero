@@ -1,0 +1,188 @@
+name: Premerge
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: premerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    if: ${{ !github.event.pull_request.draft }}
+    name: Core (${{ matrix.lane }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: turn
+            showdown: true
+            selectors: |
+              tests.test_gpu_engine_state
+              tests.test_gpu_engine_transition
+              tests.test_gpu_engine_primary_execution
+              tests.test_gpu_engine_chance_consumers
+              tests.test_gpu_engine_absorption
+              tests.test_gpu_engine_residual_order.ConstantsTests.test_a_wider_tie_draw_still_sorts_inside_the_gating_sets
+          - lane: collect
+            showdown: false
+            selectors: |
+              tests.test_gpu_engine_v2_collector
+              tests.test_gpu_engine_v5_device_actor_bank
+              tests.test_gpu_engine_v5_device_rollout
+              tests.test_gpu_engine_v5_model
+              tests.test_gpu_engine_v2_search_head_to_head
+          - lane: encode
+            showdown: true
+            selectors: |
+              tests.test_gpu_engine_device_observation
+              tests.test_gpu_engine_device_trackers
+              tests.test_gpu_engine_device_public_hooks
+              tests.test_gpu_engine_transition_batch
+              tests.test_gpu_engine_device_self_moves.DeviceSelfMovesTests.test_on_writes_engine_moves_and_pp_and_nothing_else
+          - lane: encode-parity
+            showdown: true
+            selectors: |
+              tests.test_gpu_engine_device_observation_boundary_parity.DeviceBoundaryParityTests.test_initial_and_next_boundary_literal_columns_original_writers
+          - lane: search
+            showdown: false
+            selectors: |
+              tests.test_gpu_engine_depthn_live_search
+              tests.test_gpu_engine_depthn_pricer
+              tests.test_gpu_engine_depthn_reduce
+              tests.test_gpu_engine_search_hedge
+          - lane: oracle
+            showdown: true
+            selectors: |
+              tests.test_gpu_engine_accuracy_events
+              tests.test_gpu_engine_ability_ident_lexical
+          - lane: learn
+            showdown: false
+            selectors: |
+              tests.test_v2_trainer.V2TrainerTests.test_reference_mode_with_v5_optimizer_is_bitwise_train_caches_including_schedule
+              tests.test_v2_trainer.V2TrainerTests.test_checkpoint_resume_is_bitwise_uninterrupted_run
+              tests.test_v2_trainer.V2TrainerTests.test_v2_checkpoint_exports_and_loads_as_jax_actor
+              tests.test_v2_trainer.V2TrainerTests.test_static_eager_update_matches_original_update_loss_and_parameters
+              tests.test_v2_head_to_head_self_moves
+              tests.test_v2_distributed.LayoutTests
+              tests.test_v2_fused_options
+          - lane: serve
+            showdown: true
+            selectors: |
+              tests.test_depthn_live_server.PipelinedServerTests
+              tests.test_depthn_live_actor.FactoryTests.test_illegal_or_out_of_range_searched_action_falls_back
+              tests.test_local_showdown.LocalShowdownRequestTest
+              tests.test_foulplay_bridge.FoulPlayBridgeTest.test_node_bridge_snapshot_round_trip_echoes_request_id
+              tests.test_foulplay_bridge.FoulPlayBridgeTest.test_stream_forwards_requests_for_the_configured_foulplay_seat
+              tests.test_foulplay_bridge.FoulPlayBridgeTest.test_stream_never_forwards_the_configured_pokezero_seat
+              tests.test_belief_running_ability_effects
+              tests.test_fullgame_phase_progress
+
+    env:
+      JAX_PLATFORMS: cpu
+      PYTHONPATH: src:.:tests:scripts
+      OMP_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '2'
+      XLA_FLAGS: '--xla_cpu_parallel_codegen_split_count=1 --xla_backend_optimization_level=3'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install 'jax==0.12.0' 'numpy==2.5.4' 'scipy==1.18.1' 'websockets==15.0.1'
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch==2.13.0+cpu'
+      - uses: actions/checkout@v5
+        if: matrix.showdown
+        with:
+          repository: smogon/pokemon-showdown
+          ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
+          path: .ci/pokemon-showdown
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        if: matrix.showdown
+        with:
+          node-version: '22.22.2'
+          cache: npm
+          cache-dependency-path: .ci/pokemon-showdown/package-lock.json
+      - name: Build pinned Showdown
+        if: matrix.showdown
+        run: |
+          npm ci --prefix .ci/pokemon-showdown
+          npm run build --prefix .ci/pokemon-showdown
+          test -f .ci/pokemon-showdown/dist/sim/dex.js
+          echo "POKEZERO_SHOWDOWN_ROOT=$PWD/.ci/pokemon-showdown" >> "$GITHUB_ENV"
+      - name: Generate real-team fixture
+        if: matrix.lane == 'turn'
+        run: |
+          pool="$RUNNER_TEMP/premerge-teams.npz"
+          python -m gpu_engine.team_pool --showdown-root "$POKEZERO_SHOWDOWN_ROOT" \
+            --source-commit-label f76228a1354b5d0f307ca2d16101294ad3a2308b \
+            --teams 1024 --seed-start 650200000 --out "$pool"
+          echo "POKEZERO_GPU_TEAM_POOL=$pool" >> "$GITHUB_ENV"
+      - name: Run core tests without skips
+        env:
+          SELECTORS: ${{ matrix.selectors }}
+        run: |
+          log="$RUNNER_TEMP/premerge.log"
+          tested=false
+          while IFS= read -r selector; do
+            [[ -n "$selector" ]] || continue
+            python -B -m unittest -v "$selector" 2>&1 | tee "$log"
+            if ! grep -Eq '^Ran [1-9][0-9]* tests? in ' "$log" ||
+                grep -Eq '^(OK|FAILED) \(.*skipped=[1-9]|\.\.\. skipped ' "$log"; then
+              echo "::error::Expected a nonempty test result with no skips for $selector"
+              exit 1
+            fi
+            tested=true
+          done <<< "$SELECTORS"
+          test "$tested" = true
+
+  hygiene:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Check Python syntax floor and premerge policy
+        run: |
+          python -m pip install --quiet 'ruff==0.16.2' 'PyYAML==6.0.3'
+          python scripts/check_python_floor_syntax.py
+          python -m unittest tests.test_ci_premerge_policy
+      - name: Scan Git history for credentials
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
+        env:
+          GITLEAKS_VERSION: '8.30.1'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  premerge:
+    if: ${{ always() && !cancelled() }}
+    needs: [core, hygiene]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require the complete ready-PR core
+        env:
+          DRAFT: ${{ github.event.pull_request.draft }}
+          CORE: ${{ needs.core.result }}
+          HYGIENE: ${{ needs.hygiene.result }}
+        run: test "$DRAFT" = false && test "$CORE" = success && test "$HYGIENE" = success

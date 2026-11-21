@@ -49,6 +49,33 @@ def table(meta):
 
 
 class ChanceConsumerTests(unittest.TestCase):
+    def test_infatuation_axis_in_both_planners_and_same_turn_closure(self):
+        import sys
+        from gpu_engine import phase_d_chance
+        for planner in (c,phase_d_chance):
+            with self.subTest(planner=planner.__name__),patch.object(sys.modules[__name__],'c',planner):
+                data,meta=fixture();meta['vocabulary']['moves'].append('attract')
+                data['gender']=[[1]*6,[2]*6]
+                t=table(meta);names=meta['vocabulary']['moves']
+                t['infatuation']=dict(attract=[n=='attract' for n in names],
+                    cute_charm=[False]*len(meta['vocabulary']['abilities']))
+                plain=self.plan(data,meta,kernel_table=t)
+                self.assertIsInstance(plain,planner.ConsumerPlan,plain)
+                self.assertEqual(len(self.cells(plain,'effect.0.4')),1)
+                data['volatile'][0][0]|=128
+                held=self.plan(data,meta,kernel_table=t)
+                self.assertIsInstance(held,planner.ConsumerPlan,held)
+                self.assertEqual([x.mass for x in self.cells(held,'effect.0.4')],[Fraction(1,2)]*2)
+                data['volatile'][0][0]=0
+                self.choose(data,meta,1,'attract')
+                same_turn=self.plan(data,meta,kernel_table=t)
+                self.assertIsInstance(same_turn,planner.ConsumerPlan,same_turn)
+                self.assertEqual(len(self.cells(same_turn,'effect.0.4')),2)
+                self.choose(data,meta,1,'sleeptalk');self.choose(data,meta,1,'attract',slot=1)
+                called=self.plan(data,meta,kernel_table=t)
+                self.assertIsInstance(called,planner.ConsumerPlan,called)
+                self.assertEqual(len(self.cells(called,'effect.0.4')),2)
+
     def test_plain_binary64_threshold_refines_actual_integer_rolls(self):
         data,meta=fixture();self.choose(data,meta,0,'return');move=meta['vocabulary']['moves'].index('return')
         t=table(meta);t['accuracy'][move]=80
@@ -580,6 +607,60 @@ class ChanceConsumerTests(unittest.TestCase):
         self.assertEqual([x.members for x in self.cells(high, 'effect.0.0')], [(0, 1), tuple(range(2, 16))])
         # Only the attacker's own side: the foe's Splash reads no effect column.
         self.assertFalse(any(a.observations for a in high.axes if a.coordinate.startswith('effect.1.')))
+
+    def test_stick_farfetchd_cuts_its_critical_roll_below_four(self):
+        """Stick (critical.ratio 3, 1/4): the kernel table's stick / farfetchd columns decide; here they mark item 1 and
+        species 1 (the fixture's own names do not matter to the plan). Ratio 4 (a high-crit move) refuses. Both planner
+        copies (chance_consumers and phase_d_chance's plan_for_state)."""
+        from gpu_engine import phase_d_chance
+        for module in (c, phase_d_chance):
+            with self.subTest(module=module.__name__), patch.object(self, 'module', module, create=True):
+                self._stick_case()
+
+    def _stick_case(self):
+        def plan_with(data, meta, actions, kernel_table):
+            construct = partial(mapping.native_input_from_jax, module=FAKE)
+            with patch.object(self.module.mapping, "native_input_from_jax", side_effect=construct):
+                return self.module.plan_for_state(data, None, actions, kernel_table, meta, cap=100_000_000)
+        data, meta = self.effect_fixture('slash', 'bonemerang')
+        names = meta['vocabulary']['moves']
+        count = lambda key: len(meta['vocabulary'][key])
+        t = table(meta);t['power'][names.index('slash')] = 70;t['power'][names.index('bonemerang')] = 50
+        t['critical'] = {'high': [n == 'slash' for n in names], 'armor': [False] * count('abilities'),
+                         'stick': [i == 1 for i in range(count('items'))], 'farfetchd': [i == 1 for i in range(count('species'))]}
+        self.choose(data, meta, 0, 'tackle')
+        members = lambda plan: [x.members for x in self.cells(plan, 'draws.0.4')]
+        three, four = [(0,), (1,), tuple(range(2, 16))], [(0,), (1,), (2, 3), tuple(range(4, 16))]
+        self.assertEqual(data['species'][0][data['active'][0]], 1)
+        self.assertEqual(members(plan_with(data, meta, (0, 1), t)), three)   # no Stick held
+        data['item'][0][data['active'][0]] = 1
+        plan = plan_with(data, meta, (0, 1), t)
+        self.assertEqual(members(plan), four)
+        self.assertEqual([x.mass for x in self.cells(plan, 'draws.0.4')],
+                         [Fraction(1, 16), Fraction(1, 16), Fraction(2, 16), Fraction(12, 16)])
+        self.assertEqual(sum(case.mass for case in plan.bounded_cases()), 1)
+        self.assertFalse(any(a.observations for a in plan.axes if a.coordinate == 'draws.1.4'))   # the foe's Splash
+        # Without the table's Stick columns (a pre-Stick host table) nothing changes.
+        legacy = deepcopy(t);del legacy['critical']['stick'], legacy['critical']['farfetchd']
+        self.assertEqual(members(plan_with(data, meta, (0, 1), legacy)), three)
+        # Another species holding Stick: unchanged.
+        data['species'][0][data['active'][0]] = 2
+        self.assertEqual(members(plan_with(data, meta, (0, 1), t)), three)
+        # A Farfetch'd facing a Stick-holding foe (a Trick may hand it over): the superset cut.
+        data['species'][0][data['active'][0]] = 1;data['item'][0][data['active'][0]] = 0;data['item'][1][data['active'][1]] = 1
+        self.assertEqual(members(plan_with(data, meta, (0, 1), t)), four)
+        # A second hit (Bonemerang) cuts effect.0.0 below 4 too.
+        data['item'][1][data['active'][1]] = 0;data['item'][0][data['active'][0]] = 1
+        t['damage_moves'] = {'hits': [2 if n == 'bonemerang' else 1 for n in names]}
+        self.choose(data, meta, 0, 'bonemerang')
+        bone = plan_with(data, meta, (0, 1), t)
+        self.assertEqual([x.members for x in self.cells(bone, 'effect.0.0')], [(0,), (1, 2, 3), tuple(range(4, 16))])
+        self.assertEqual(members(bone), four)
+        # Stick on a high-crit move is critRatio 4 (1/3): no [0,16) cut, refused.
+        self.choose(data, meta, 0, 'slash')
+        out = plan_with(data, meta, (0, 1), t)
+        self.assertIsInstance(out, mapping.Refused)
+        self.assertEqual(out.gaps[0].code, 'CRIT_RATIO_UNREPRESENTABLE')
 
     def test_yawn_holder_at_one_enumerates_its_own_sides_duration(self):
         data, meta = self.effect_fixture()

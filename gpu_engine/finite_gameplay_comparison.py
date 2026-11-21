@@ -19,11 +19,16 @@ import numpy as np
 
 from . import engine_gameplay_trace as trace
 from . import finite_stream_comparison as original, owning_python_reference, fidelity, public_wire, v4_encoder
+from .future_state import SHAPES, TRANSFORM_FIELDS
 from .state import BattleState
 from pokezero.showdown import showdown_choice_for_action
 
 SCHEMA = 'pokezero.B4-conditional-gameplay-stream-comparison.v1'
 MAX_RECORD_BYTES = 16*1024**2
+STATE_FIELDS = frozenset(BattleState._fields)
+PRE_CURE_FIELDS = STATE_FIELDS - {'shed_skin_draws'}
+PRE_TRANSFORM_FIELDS = PRE_CURE_FIELDS - set(TRANSFORM_FIELDS)
+STATE_SCHEMAS = (STATE_FIELDS, PRE_CURE_FIELDS, PRE_TRANSFORM_FIELDS)
 
 
 class ChanceControl:
@@ -53,7 +58,7 @@ class ChanceControl:
     def begin(self, captured, layout):
         state=decode_state(captured['before']['state'],layout);raw=captured['chance']
         legacy={'draws','phazing','secondary','sleep_talk','entry_ties','initial_tie'}
-        if set(raw) not in (legacy,legacy|{'effect'}):
+        if set(raw) not in (legacy,legacy|{'effect'},legacy|{'shed_skin'},legacy|{'effect','shed_skin'}):
             raise ValueError('complete original ChanceInputs required')
         # These are the original kernel's saved-array selectors on a suspended
         # action turn; not another RNG sample or reconstructed outcome.
@@ -70,17 +75,23 @@ class ChanceControl:
         value=dict(schema='pokezero.gpu_chance_tape.v1',nonce=f"{captured['stream_id']}:{captured['request']}",
             draws=draws.tolist(),secondary=secondary.tolist(),sleep_talk=sleep.tolist())
         if 'effect' in raw:
-            # Tape v2 (fidelity R): the appended effect stream, from the saved block on a suspended turn.
+            # Replay the saved block on a suspended turn and retain the original wire width otherwise.
             effect=state.effect_draws[0] if pending else arrays['effect'][0]
-            if (effect.shape!=(2,4) or effect.dtype.kind not in 'iu' or np.any(effect<0)
-                    or np.any(effect>=np.array([16,16,4,2]))):
+            if (effect.shape not in ((2,4), (2,5)) or effect.dtype.kind not in 'iu' or np.any(effect<0)
+                    or np.any(effect>=np.array(fidelity.EFFECT_BOUNDS[:effect.shape[1]]))):
                 raise ValueError('actual original finite chance operands required')
             # Tape v3 (fidelity tier D): phazing, the contact abilities' and the drag's auxiliary roll (the saved block on a
             # suspended turn), so Static / Poison Point / Flame Body / Effect Spore rolls resolve as the engine read them.
             phazing=state.phazing_draws[0] if pending else arrays['phazing'][0]
             if phazing.shape!=(2,) or phazing.dtype.kind not in 'iu' or np.any(phazing<0) or np.any(phazing>=60):
                 raise ValueError('actual original finite chance operands required')
-            value.update(schema='pokezero.gpu_chance_tape.v3',effect=effect.tolist(),phazing=phazing.tolist())
+            version = 'v3' if effect.shape[1] == 4 else 'v5'
+            value.update(schema=f'pokezero.gpu_chance_tape.{version}',effect=effect.tolist(),phazing=phazing.tolist())
+        if 'shed_skin' in raw:
+            cure=state.shed_skin_draws[0] if pending else arrays['shed_skin'][0]
+            if cure.shape!=(2,) or cure.dtype.kind not in 'iu' or np.any(cure<0) or np.any(cure>=100):
+                raise ValueError('actual original finite chance operands required')
+            value['shed_skin']=cure.tolist()
         self.control.write_text(json.dumps(value));return value
 
     def end(self):
@@ -88,18 +99,55 @@ class ChanceControl:
         return self.take_audit()
 
 
-def decode_state(packet, layout):
-    if set(packet) != set(BattleState._fields) or set(layout) != set(packet):
+def _state_values(packet, layout):
+    """Validate a complete known storage schema without creating operands."""
+    fields = set(packet)
+    layout_fields = set(layout)
+    if fields not in STATE_SCHEMAS or layout_fields not in (fields, STATE_FIELDS):
         raise ValueError('literal complete actual state packet required')
+    if fields != STATE_FIELDS and 'shed_skin_draws' in layout:
+        spec=layout['shed_skin_draws']
+        if tuple(spec['shape'])!=(2,) or np.dtype(spec['dtype'])!=np.dtype('int32'):
+            raise ValueError('actual state shape/type changed: shed_skin_draws')
     values = {}
     for name in BattleState._fields:
+        if name not in fields:
+            continue
         dtype = np.dtype(layout[name]['dtype']); value = np.asarray(packet[name])
-        if (dtype.kind not in 'iub' or value.shape != (1, *layout[name]['shape'])
+        shape = tuple(layout[name]['shape'])
+        if name == 'effect_draws':
+            if shape != (2, 4 if layout_fields == PRE_TRANSFORM_FIELDS else 5):
+                raise ValueError('actual state shape/type changed: effect_draws')
+            shape = (2, 4 if fields == PRE_TRANSFORM_FIELDS else 5)
+        if (dtype.kind not in 'iub' or value.shape != (1, *shape)
                 or value.dtype.kind not in ('b' if dtype.kind == 'b' else 'iu')):
             raise ValueError('actual state shape/type changed: '+name)
         if dtype.kind != 'b' and (np.any(value < np.iinfo(dtype).min) or np.any(value > np.iinfo(dtype).max)):
             raise ValueError('state integer outside original dtype: '+name)
         values[name] = value.astype(dtype)
+    return values, fields != STATE_FIELDS
+
+
+def _restore_closed_state(values):
+    # Both older layouts lack the saved cure bank. A closed turn has no saved
+    # residual operands. The pre-Transform kernel also has no Transform state.
+    if values['pending_residual'].any():
+        raise ValueError('legacy suspended state lacks saved Shed Skin draws')
+    if values.keys() == PRE_TRANSFORM_FIELDS:
+        effect = values['effect_draws']
+        if effect.shape != (1, 2, 4) or effect.dtype.kind not in 'iu' or np.any(effect):
+            raise ValueError('legacy closed state has an invalid saved effect block')
+        values = dict(values, effect_draws=np.zeros((1, 2, 5), np.int32))
+        for field in TRANSFORM_FIELDS:
+            dtype = np.bool_ if field == 'transformed' else np.int32
+            values[field] = np.zeros((1, *SHAPES[field]), dtype)
+    return BattleState(**values, shed_skin_draws=np.zeros((1, 2), np.int32))
+
+
+def decode_state(packet, layout):
+    values, old = _state_values(packet, layout)
+    if old:
+        return _restore_closed_state(values)
     return BattleState(**values)
 
 
@@ -437,7 +485,7 @@ def _spool(path, measured, expected_sha256, folder):
             if stream not in counts: raise ValueError('foreign stream in actual trace')
             if kind == 'INITIAL':
                 if stream in initials or counts[stream]: raise ValueError('duplicate/migrated constructor')
-                decode_state(payload['boundary']['state'], header['state_layout'])
+                _state_values(payload['boundary']['state'], header['state_layout'])
                 initials.add(stream); last[stream] = original._sha(payload['boundary'])
             elif kind == 'DECISION':
                 if (stream not in initials or payload['request'] != counts[stream]
@@ -445,7 +493,9 @@ def _spool(path, measured, expected_sha256, folder):
                         or original._sha(payload['before']) != last[stream]):
                     raise ValueError('actual decision history gap/reorder/before-state join changed')
                 before, after = payload['before'], payload['after']
-                for boundary in (before, after): decode_state(boundary['state'], header['state_layout'])
+                # Validate the literal historical schema here. Promotion to a
+                # current state (and any missing-operand refusal) is per root.
+                for boundary in (before, after): _state_values(boundary['state'], header['state_layout'])
                 if (after['frame'] != before['frame']+int(payload['executed'])
                         or before['cursor']['stream_id'] != stream or after['cursor']['stream_id'] != stream):
                     raise ValueError('actual executed frame/stream join changed')

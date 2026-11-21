@@ -13,6 +13,7 @@ from typing import Mapping, NamedTuple
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -241,7 +242,7 @@ def project_opponent(states,summary,mons,abilities,tables,*,observer_side,expect
         copied=jnp.stack((trans_hp,trans_hp,trans_hp,target[...,1],target[...,1],target[...,1],
             *(target[...,i] for i in range(2,6))),axis=-1)
         copied=jnp.where(complete[...,None],copied,0)
-    values=jnp.minimum(1.,jnp.where(transformed[...,None],copied,normal)/reference._ACTUAL_STAT_DIVISOR)
+    values=en.normalized(jnp.where(transformed[...,None],copied,normal), int(reference._ACTUAL_STAT_DIVISOR))
     values=jnp.where((present&exact[:,None]&ok[:,None])[...,None],values,0.)
     numeric=jnp.zeros((batch,6,132),jnp.float32).at[...,jnp.asarray(NUMERIC_COLUMNS)].set(values)
     return TeamFeaturePatch(numeric,jnp.zeros((batch,6,41),jnp.int32),

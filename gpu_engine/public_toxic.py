@@ -10,6 +10,7 @@ import json
 
 import jax
 import jax.numpy as jnp
+from . import encoder_numeric as en
 import numpy as np
 
 from pokezero import showdown as reference
@@ -260,7 +261,7 @@ def project_active(state,tables,*,expected_vocabulary):
     """
     b=_shape(state,tables);_binding(expected_vocabulary)
     ok=_coherent(state,tables)&jnp.all(expected_vocabulary==tables.vocabulary_binding)
-    values=jnp.minimum(1.,state.stage/15.)
+    values=en.normalized(state.stage, 15)
     numeric=jnp.zeros((b,2,132),jnp.float32).at[...,COLUMN].set(jnp.where(ok[:,None],values,0.))
     return ToxicPatch(numeric,jnp.zeros(132,bool).at[COLUMN].set(True),ok)
 

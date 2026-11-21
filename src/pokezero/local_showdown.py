@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, TextIO
+from typing import Collection, TYPE_CHECKING, Any, Mapping, Optional, Sequence, TextIO
 
 if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
@@ -1254,9 +1254,11 @@ class LocalShowdownEnv:
             payload={"type": "choices", "battleId": self._battle_token, "choices": choices},
         )
 
-    def _choices_for_actions(self, actions: Mapping[PlayerId, int]) -> dict[PlayerId, str]:
-        requested = self.requested_players()
-        if not requested:
+    def _choices_for_actions(
+        self, actions: Mapping[PlayerId, int], *, exclude: Collection[PlayerId] = (),
+    ) -> dict[PlayerId, str]:
+        requested = tuple(player for player in self.requested_players() if player not in exclude)
+        if not requested and not exclude:
             raise LocalShowdownError("Cannot step without requested players.")
         missing = [player for player in requested if player not in actions]
         if missing:
@@ -1669,6 +1671,9 @@ class LocalShowdownEnv:
                 return event
             self._apply_event(event)
 
+    def _expected_private_choice_error(self, stream: str, line: str) -> bool:
+        return False
+
     def _apply_event(self, event: Mapping[str, Any]) -> bool:
         event_type = event.get("type")
         # On a reused (warm) process, events from a finished battle still drain through the queue;
@@ -1696,7 +1701,7 @@ class LocalShowdownEnv:
             raise LocalShowdownError(f"Malformed bridge stream event: {event!r}")
         clean_lines = [str(line) for line in lines if str(line)]
         for line in clean_lines:
-            if line.startswith("|error|"):
+            if line.startswith("|error|") and not self._expected_private_choice_error(stream, line):
                 self._last_step_had_error = True
                 raise LocalShowdownError(f"Showdown emitted error: {line}")
         if stream == "omniscient":
@@ -1849,7 +1854,28 @@ class LocalShowdownEnv:
                     0.0, time.perf_counter() - annotation_started_at
                 )
                 self._root_puct_branch_observation_state_annotation_count += 1
+        # (getattr twice: timing tests drive this with a config double that has no masks; off = no attachment.)
+        if getattr(getattr(self.config, "feature_masks", None), "self_moves", False):
+            state = replace(state, self_move_states=self.self_move_states(player))
         return state
+
+    def self_move_states(self, player: PlayerId) -> tuple:
+        """V2 self_moves: ``player``'s own real movesets and exact PP (pokezero.own_moves.own_move_states) from this
+        env's line log (the protocol stream with ``player``'s requests; another seat's requests are ignored) and its
+        latest request. Attached to the player state by ``_state_for_player`` when the masks have self_moves; public so
+        a measurement can attach it to a state encoded under other masks."""
+        from .own_moves import own_move_states
+
+        request = self._latest_requests.get(player)
+        if request is None:
+            raise LocalShowdownError(f"self_moves: no request for {player}.")
+        dex = load_showdown_dex_cached(self.config.resolved_showdown_root())
+
+        def maximum(key: str) -> int:
+            info = dex.move_info(key)
+            return info.max_pp if info is not None else 0
+
+        return own_move_states(tuple(self._lines), request, maximum_pp=maximum)
 
     def tier2_residuals_active(self) -> bool:
         """Whether this env populates Tier-2 residuals into transition tokens.

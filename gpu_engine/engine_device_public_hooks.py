@@ -7,6 +7,7 @@ capture/admission system. Hard source masks are not refilled on inconsistency.
 from typing import NamedTuple
 import jax
 import jax.numpy as j
+from . import encoder_numeric as en
 from . import engine_device_trackers as tr
 from . import engine_device_negative_items as negative_items
 from .absorption import FLASH_FIRE
@@ -101,7 +102,7 @@ def _reset_item_narrowing(c,side,physical,use):
     """B2 stops narrowing by a mutated item (design 13 item 4).
 
     public_items.matching_item gives key 0 once an item is mutated while
-    item_belief_narrowing is False (src/pokezero/observation.py:382), so B2's
+    item_belief_narrowing is False (src/pokezero/observation.py:403), so B2's
     full belief is rebuilt from the facts that still narrow it: the species
     pool, the original ability, the revealed moves and the standing ability/
     item exclusions. _narrow's AND cannot be undone, so the subject's hard mask
@@ -223,6 +224,8 @@ def matchup(c,side,use,kind):
 
 def install(c,state,side,use,*,initial=False):
     t=c.trackers;b=len(t.error);use=_mask(use,b);r=j.arange(b);p=_li.take(state.active,r,side)
+    history=j.zeros((b,2),bool) if t.type_changed is None else t.type_changed
+    t=t._replace(type_changed=_li.put(history,r,(side,),j.where(use,False,_li.take(history,r,side))))
     old=_li.take(t.active_physical,r,side);fresh=_li.take(t.physical_to_public,r,side,j.clip(p,0,5))<0
     if not initial:
         # One actual installation, including intermediate drag/Baton installs.
@@ -278,7 +281,7 @@ def install(c,state,side,use,*,initial=False):
         if name in c.trackers.mon_features:c=feature(c,side,p,name,j.zeros(b,j.int32),use)
     # Every arrival (switch, replacement, drag, Baton target) clears the public Mean
     # Look flag on BOTH seats, matching B2 (public_active.py:246, ARRIVE ignores
-    # baton_pass) and the champion parser (src/pokezero/showdown.py:2752-2770).
+    # baton_pass) and the champion parser (src/pokezero/showdown.py:2756-2774).
     # Known B2 quirk, kept deliberately (lead decision, as for the stale recharge
     # bit): Showdown is right to release the trap on a switch or drag (the linked
     # trapped/trapper volatiles drop), but gen3 keeps it through Baton Pass in
@@ -376,7 +379,7 @@ def reveal_item(c,state,side,item,use,*,original=True):
     c=c._replace(trackers=_write(c.trackers,'shown_item',side,p,item,use))
     if not original:return _refresh(c,side,p,use)
     # Fidelity M1: B2 narrows by public_items.matching_item, which is 0 for a mutated item (Trick, Knock Off)
-    # while item_belief_narrowing is False (src/pokezero/observation.py:382): a later reveal of a Tricked-in
+    # while item_belief_narrowing is False (src/pokezero/observation.py:403): a later reveal of a Tricked-in
     # item (its Leftovers heal, its berry) never narrows the holder's belief.
     mutated=_mon_fact(c,'item_mutated',side,p)!=0
     c=_narrow(c,side,p,item,use&~mutated,'item')
@@ -409,7 +412,8 @@ def entry(c,before,after,side,table,use):
     c=weather(c,before,after,changed,permanent=True,side=side)
     if table.trace is not None:
         copied=starts&table.trace[ability]&(_get(before,'hp',1-side)>0)
-        c=reveal_ability(c,before,side,copied,ability=ability)
+        # Trace confirms the donor's ability and the tracer's running copy.
+        # B2/Python leave the tracer's original-ability observation untouched.
         c=reveal_ability(c,before,1-side,copied)
         p=_li.take(after.active,_r(after),side)
         c=c._replace(trackers=_write(c.trackers,'borrowed_ability',side,p,_get(after,'ability',side),copied))
@@ -794,15 +798,42 @@ def damage(c,state,side,dealt,taken,use):
     r=_r(state);foe=1-side;p=_li.take(state.active,r,foe);slot=j.clip(_li.take(c.trackers.physical_to_public,r,foe,p),0,5)
     previous=_li.take(c.trackers.hp_percent,r,foe,slot)
     current=tr._percent(_get(state,'hp',foe),_get(state,'max_hp',foe))
-    shown=j.maximum(0,previous-current).astype(j.float32)/100.0
-    exact=taken.astype(j.float32)/j.maximum(_get(state,'max_hp',foe),1).astype(j.float32)
+    shown=en.ratio(j.maximum(0,previous-current),100,limit=100,pair=True)
+    exact=en.ratio(taken,_get(state,'max_hp',foe),pair=True)
     if c.trackers.damage_history is not None:
         return c._replace(trackers=c.trackers._replace(damage_history=damage_history.direct(
-            c.trackers.damage_history,side,shown,exact,use & (taken>0))))
+            c.trackers.damage_history,side,shown,exact,use & (taken>0),pairs=True)))
+    shown,exact=en.value(shown),en.value(exact)
     c=c._replace(trackers=_write(c.trackers,'damage_exact_dealt',side,_li.take(state.active,r,side),exact,use))
     c=c._replace(trackers=_write(c.trackers,'damage_exact_taken',foe,p,exact,use))
     c=feature(c,side,_li.take(state.active,r,side),'last_damage_dealt',shown,use)
     return feature(c,foe,p,'last_damage_taken',shown,use)
+
+
+def set_posterior_enabled(c):
+    """Narrowing A: the damage reveal's set_posterior producer exists only with its tables (set_posterior_narrowing;
+    engine_device_belief.Tables.posterior). Off, no hook below is traced and every program is unchanged."""
+    return (c.belief_tables is not None and getattr(c.belief_tables,'posterior',None) is not None
+        and c.trackers.belief_mask is not None)
+
+
+def posterior_move_hard(c,state,side,move_id,use):
+    """Pursuit's tagged move declaration, evaluated without committing its public writes."""
+    evidence=Context(c.trackers,c.belief_tables,c.port_tables)
+    move(evidence,state,side,move_id,use,pp_use=True,from_tag=True)
+    return evidence.trackers.belief_mask
+
+
+def set_posterior_strike(c,state,side,move,caller_move,critical,hits_sub,endured,dealt,hp_before,hp_after,num,den,use,
+                         *,pursuit=False,hit_by=None,hard_mask=None):
+    """Narrowing A at one damage reveal: side's move hit the other side's active (device_set_posterior.in_tree). An
+    admitted strike's fitting variants narrow the attacker's standing pin (narrow_pin) and refresh it, as B2 installs
+    set_posterior's support. Reads only operands the step already computed; no draw."""
+    if not set_posterior_enabled(c):return c
+    from . import device_set_posterior
+    trackers,_=device_set_posterior.in_tree(c.trackers,c.belief_tables,state,side,move,caller_move,critical,hits_sub,
+        endured,dealt,hp_before,hp_after,num,den,use,pursuit=pursuit,hit_by=hit_by,hard_mask=hard_mask)
+    return c._replace(trackers=trackers)
 
 
 def negative_hp_line(c,state,side,use,*,source_class):
@@ -831,6 +862,9 @@ def faint_clear(c,before,after,use):
         hit.append(use&(_li.take(before.hp,r,side,j.clip(p,0,5))>0)&(_get(after,'hp',side)==0))
     for side in range(2):
         p=_li.take(after.active,r,side)
+        history=c.trackers.type_changed
+        c=c._replace(trackers=c.trackers._replace(type_changed=_li.put(history,r,(side,),
+            j.where(hit[side],False,_li.take(history,r,side)))))
         c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,j.zeros((b,len(VOLATILE_NAMES)),bool),hit[side]))
         for name in FAINT_CLEAR_KEYS:
             if name in c.trackers.mon_features:c=feature(c,side,p,name,j.zeros_like(p),hit[side])
@@ -890,9 +924,21 @@ def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None,residual=None,
 
 def color_change(c,before,after,side,use):
     changed=use&j.any(_get(before,'types',side)!=_get(after,'types',side),axis=1)
+    c=type_event(c,side,changed)
     c=reveal_ability(c,after,side,changed)
     p=_li.take(after.active,_r(after),side)
     return c._replace(trackers=_write(c.trackers,'shown_types',side,p,_get(after,'types',side),changed))
+
+
+def type_event(c,side,use):
+    """Record an emitted typechange or formechange event, even a return to native typing.
+
+    Transform alone is a separate host refusal and does not set this history. Producers pass their actual public
+    event mask; identity or current typing cannot reconstruct an earlier event. No inference consumes this yet.
+    """
+    t=c.trackers;r=j.arange(len(t.error));history=t.type_changed
+    return c._replace(trackers=t._replace(type_changed=_li.put(history,r,(side,),
+        _li.take(history,r,side)|_mask(use,len(r)))))
 
 
 def drag(c,before,after,side,table,use):
@@ -995,6 +1041,9 @@ def derived_volatiles(c,state,use):
         bag=bag.at[:,VOLATILE_NAMES.index('encore')].set((_get(state,'encore_counter',side)>0)&(_get(state,'hp',side)>0))
         bag=bag.at[:,VOLATILE_NAMES.index('flashfire')].set(
             ((_get(state,'volatile',side)&j.uint32(FLASH_FIRE))!=0)&(_get(state,'hp',side)>0))
+        from .state import ATTRACT
+        bag=bag.at[:,VOLATILE_NAMES.index('attract')].set(
+            ((_get(state,'volatile',side)&j.uint32(ATTRACT))!=0)&(_get(state,'hp',side)>0))
         c=c._replace(trackers=_write(c.trackers,'public_volatiles',side,p,bag,use))
     return c
 
@@ -1106,3 +1155,17 @@ def port_count(c,side,use,name):
 
 def port_protect(c,side,acts,accuracy_pass,protected,protectable):
     return c._replace(trackers=port.protect(c.trackers,side,acts,accuracy_pass,protected,protectable))
+
+
+def forecast(c,state,changed):
+    """Forecast's |-formechange|X|<forme>|[msg]|[from] ability: Forecast for each active the engine re-formed at one
+    WeatherChange event (changed [B,2], transition._forecast). B2 folds it as color_change's pair: the active's live-type
+    overlay (public_types: a weather forme is a TYPE fact; the forme back to Castform is the species itself, which clears
+    the overlay to its base types, the engine's revert value) and the ability reveal ([from] ability:,
+    _confirmed_ability_from_event). An arrival (install) and a departure (type_revert) end the overlay as before."""
+    for side in range(2):
+        use=changed[:,side]
+        c=type_event(c,side,use)
+        c=reveal_ability(c,state,side,use)
+        c=c._replace(trackers=_write(c.trackers,'shown_types',side,_li.take(state.active,_r(state),side),_get(state,'types',side),use))
+    return c

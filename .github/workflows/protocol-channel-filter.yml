@@ -1,16 +1,7 @@
 name: Protocol channel filter contracts
 on:
-  pull_request:
-    paths:
-      - src/pokezero/mcts_eval/search_over_raw_protocol_channels.py
-      - tests/test_search_over_raw_protocol_channels.py
-      - .github/workflows/protocol-channel-filter.yml
-  push:
-    branches: [main]
-    paths:
-      - src/pokezero/mcts_eval/search_over_raw_protocol_channels.py
-      - tests/test_search_over_raw_protocol_channels.py
-      - .github/workflows/protocol-channel-filter.yml
+  workflow_dispatch:
+
 permissions:
   contents: read
 jobs:

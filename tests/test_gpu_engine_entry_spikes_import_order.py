@@ -42,7 +42,7 @@ class EntrySpikesImportOrderTests(unittest.TestCase):
             isinstance(x,ast.ImportFrom)and any(a.asname=='ex'for a in x.names)for x in n.body)]
         self.assertEqual(local,['namespaces','claimed','begin','finish'])
 
-    def test_single_owned_pin_and_unchanged_twenty_six_module_domain(self):
+    def test_single_owned_pin_and_unchanged_twenty_seven_module_domain(self):
         gpu=ROOT/'gpu_engine'
         def assignment(path,name):
             return next(n.value for n in ast.parse(path.read_text()).body if isinstance(n,ast.Assign)

@@ -25,7 +25,7 @@ CONSUMERS = {
         (1, "mechanics.before_move: thaw<20"),
         (2, "mechanics.before_move: paralysis<25"),
         (3, "mechanics.before_move: confusion>=50"),
-        (4, "transition/pursuit: critical<1 or<2"),
+        (4, "transition/pursuit: critical<1 or<2, or <4 for a Farfetch'd holding Stick (critical.ratio 3)"),
         (5, "transition/pursuit: damage85+draw; confusion damage reuses draw"),
         (6, "mechanics.accuracy_hit: pinned binary64/Q12 integer-roll predicates"),
         (7, "transition primary sleep; encore.apply duration; secondary.apply_chance_effects Signal Beam confusion 2+draw; transition Wrap duration 3+draw"),
@@ -39,24 +39,26 @@ CONSUMERS = {
     "draws.0.11": ("transition switch installation ordering",),
     "draws.1.11": ("transition residual Encore ordering",),
     **{f"{name}.{s}": (use,) for s in range(2) for name, use in (
-        ("phazing", "phazing.choose_bench modulo bench count OR secondary.apply_contact Static/Poison Point/Flame Body<20, Effect Spore<6 then its status draw//2 (<2, <4); dispatched Gen3 moves are disjoint, and no contact move is multi-hit"),
+        ("phazing", "phazing.choose_bench modulo bench count OR secondary.apply_contact Static/Poison Point/Flame Body/Cute Charm<20, Effect Spore<6 then its status draw//2 (<2, <4); dispatched Gen3 moves are disjoint, and no contact move is multi-hit"),
         ("secondary", "secondary.apply and secondary.apply_chance_effects: shared draw<chance*SereneGrace"),
         ("sleep_talk", "sleep_talk.choose: draw modulo callable count before PP test"),
         ("entry_ties", "transition resumed switch/callback ordering"))},
     "initial_tie": ("transition.initialize unresolved initial entry ordering",),
+    **{f"shed_skin.{s}": ("transition residual Shed Skin: independent roll<33 of 100",) for s in range(2)},
     # Fidelity R (design 2.1): the appended effect stream's consumers, finite_law.COORDINATES' effect.{s}.{c} axes (§6).
     **{f"effect.{s}.{c}": (use,) for s in range(2) for c, use in (
-        (0, "transition Bonemerang second hit: critical<1 or<2 (critical.is_critical)"),
+        (0, "transition Bonemerang second hit: critical<1 or<2, or <4 with Stick (critical.is_critical)"),
         (1, "transition Bonemerang second hit: damage 85+draw"),
         # Fidelity M2: the reserved columns. Column 2 is the drowsy mon's own side; column 3 is a pair tie per row.
         (2, "transition residual Yawn sleep duration 2+draw (the drowsy mon's side); secondary.apply_contact Effect Spore sleep duration 2+draw (the attacker's side; fidelity tier D: a Yawn sleep of that side reads it again in one step only after a Lum Berry cured this sleep at once, which discards the first value)"))},
+    **{f"effect.{s}.4": ("mechanics.before_move: infatuation immobilizes before paralysis on draw<1",) for s in range(2)},
     "effect.0.3": ("transition residual partial-trap (Wrap) pair ordering, subOrder 9",),
     "effect.1.3": ("transition residual Perish pair ordering, order 12 (both ends resolve before faintMessages, so no Gen 3 outcome depends on it)",),
 }
 
 # Changing any source that supplies the consumer/domain proof requires review: SOURCE_PINS and DOMAIN_PINS (one
 # whole-file sha256 per domain module, in DOMAIN_MODULES order) live in chance_consumers_pins.py.
-DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather".split())
+DOMAIN_MODULES = tuple("absorption action_history baton combat critical damage_moves effects encore entry focus_punch forecast infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather".split())
 
 
 def _domain_certificate(root):
@@ -102,6 +104,16 @@ def _opt(table, family, field, index, default=0):
     group = table.get(family)
     values = None if group is None else group.get(field)
     return default if values is None else values[index]
+
+
+def _stick(table, data, side, active):
+    """Stick (critical.ratio): the side's active is a Farfetch'd that holds Stick, or that a foe active holding Stick may
+    Trick it to (a superset); a host table without the fields (pre-Stick) has none."""
+    group = table.get("critical") or {}
+    stick, farfetchd = group.get("stick"), group.get("farfetchd")
+    if stick is None or farfetchd is None or not farfetchd[data["species"][side][active[side]]]:
+        return False
+    return bool(stick[data["item"][side][active[side]]] or stick[data["item"][1-side][active[1-side]]])
 
 
 def _counter(data, name, side, slot):
@@ -337,6 +349,13 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             random_damage |= bool(observations[prefix+"3"])
             if random_damage:
                 use(prefix+"4", Observation("less_than", 1), Observation("less_than", 2))
+                # Stick: a Farfetch'd holding it crits below 4 (ratio 3, 1/4). With a high-crit move its ratio is 4 (1/3),
+                # which no [0,16) cut represents (critical.CRIT_THRESHOLD): refused; no randbats Farfetch'd has one.
+                if live_move[s] and _stick(t, data, s, active):
+                    if any(_at(t, "critical", "high", move) for move in selected[s]):
+                        return refuse("CRIT_RATIO_UNREPRESENTABLE",
+                                      "Stick on a high-crit move is Gen 3 critRatio 4 (1/3), not a [0,16) cut")
+                    use(prefix+"4", Observation("less_than", 4))
                 use(prefix+"5", Observation("identity"))
             accuracy = set()
             reachable_hustle = any(_at(t, "combat", "hustle", ability) for ability in abilities[s])
@@ -393,6 +412,8 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             # Fidelity tier D (secondary.apply_contact): Poison Point and Flame Body <20 as Static; Effect Spore's chance <6
             # and its slp/par/psn draw//2 (<2, <4); an Effect Spore sleep lasts 2+effect[s][2] (the attacker's side).
             if any(_at(t, 'secondary', 'contact', move) for move in selected[s]):
+                if any(_opt(t, 'infatuation', 'cute_charm', ability, False) for ability in abilities[1-s]):
+                    use(f'phazing.{s}', Observation('less_than', 20))
                 if any(_opt(t, 'secondary', 'contact_status', ability) for ability in abilities[1-s]):
                     use(f'phazing.{s}', Observation('less_than', 20))
                 if any(_opt(t, 'secondary', 'effect_spore', ability, False) for ability in abilities[1-s]):
@@ -427,6 +448,11 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         # §6: the appended effect stream (fidelity R, design 2.1; M2's residual consumers). transition.py:583-585 reads
         # ChanceInputs.effect; a resumed suspended turn reads the saved block instead (refused above).
         for s in range(2):
+            # Attract can land before the slower actor's move in this step.
+            # selected includes callable Sleep Talk and Encore closure.
+            if live_move[s] and (any(data['volatile'][s][p] & 128 for p in participants[s])
+                    or any(_opt(t, 'infatuation', 'attract', move, False) for move in selected[1-s])):
+                use(f'effect.{s}.4', Observation('less_than', 1))
             # Bonemerang's second hit (transition.py:1158-1198, run when damage_moves.hits>1 at :1385-1386): its own critical
             # roll effect[s][0] (critical.is_critical: below 2 for a high-crit move, else below 1; below 1 without the
             # table) and damage roll 85+effect[s][1]. Callers and Encore are already in the selected closure.
@@ -435,12 +461,19 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             if second_hit:
                 use(f"effect.{s}.0", *(Observation("less_than", 2 if critical is not None and critical[move] else 1)
                                        for move in sorted(second_hit)))
+                if _stick(t, data, s, active):
+                    use(f"effect.{s}.0", Observation("less_than", 4))
                 use(f"effect.{s}.1", Observation("identity"))
             # Yawn's residual sleep (transition.py:2643-2653): a holder whose count is 1 when this residual runs sleeps
             # for 2+effect[s][2], s the drowsy mon's own side. A Yawn landing this turn sets 2 (:1803-1811), which ends
             # at the next turn's residual, and only a holder that stays in keeps a count (entry.py, baton.py drop it).
             if not replacement and any(_counter(data, "yawn_counter", s, p) == 1 for p in participants[s]):
                 use(f"effect.{s}.2", Observation("identity"))
+        # Shed Skin may become statused or be copied by Trace during either action.
+        # Preserve the exact 33/100 partition even when the current holder is healthy.
+        for s in range(2):
+            if not replacement and any(_opt(t,'entry','shed_skin',a,False) for a in abilities[s]):
+                use(f'shed_skin.{s}',Observation('less_than',33))
         # The order-10 partial-trap pair (transition.py:2350-2357 with residual_order): effect[0][3] orders the two
         # Wrap holders' events at equal Speed. A seat holds a trap already or gets one from the other's Wrap (:2011-2016).
         trapped = [any(_counter(data, "partial_trap_counter", s, p) > 0 for p in participants[s])
@@ -453,7 +486,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         if not replacement and all(perish_song or any(_counter(data, "perish_counter", s, p) > 0 for p in participants[s])
                                    for s in range(2)):
             use("effect.1.3", Observation("identity"))
-        inactive("draws.1.0", "SpeedBoost paired callbacks change only own stage; neither can KO or alter the frozen residual ordering")
+        inactive("draws.1.0", "Speed Boost/Shed Skin paired callbacks change only their own holder; neither can KO or alter the frozen residual ordering")
         inactive("draws.0.9", "Selected item callbacks heal or boost only their own live holder; neither can KO, resurrect, or alter the frozen residual ordering or the other's callback")
         inactive("draws.1.11", "Encore residual callbacks change only own counter/lock and cannot KO or alter the other's callback")
         inactive("initial_tie", "Full input mapper refuses unresolved entry_pending; initialize has no eligible initial callback")

@@ -163,8 +163,8 @@ class TransitionObserverWiringTests(unittest.TestCase):
                 with self.subTest(binding=file, target=target):
                     actual = hashlib.sha256((ROOT / "gpu_engine" / target).read_bytes()).hexdigest()
                     self.assertEqual(actual, expected)
-        modules = ("action_history absorption baton combat critical damage_moves effects encore "
-                   "entry focus_punch items linked_traps mechanics phazing pressure pursuit residual_order secondary "
+        modules = ("absorption action_history baton combat critical damage_moves effects encore "
+                   "entry focus_punch forecast infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary "
                    "self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather").split()
         # The per-module domain pins replaced one DOMAIN_SHA256 / KERNEL_SHA256 over these modules: each table names
         # every module, in this order (each entry's bytes are checked in the loop above).
