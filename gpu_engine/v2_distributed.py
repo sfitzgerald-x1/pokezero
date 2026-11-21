@@ -170,13 +170,15 @@ def rendezvous(args, rank, world_size):
     return store
 
 
-def _bench(distribution, device, *, floats):
+def _bench(distribution, device, *, floats, record=None):
     """Pre-flight fabric numbers from collectives on the main communicator only (no lazy P2P communicators):
-    a one-float all-reduce (latency), a learner-sized all-reduce (cross-node bandwidth), an all-to-all."""
+    a one-float all-reduce (latency), all-reduces up to the learner gradient size (bandwidth), an all-to-all.
+    ``record(results)`` is called after every stage so a hang still leaves the earlier numbers behind."""
     import torch
     import torch.distributed as dist
     group = distribution.process_group; world = distribution.world_size
     sync = torch.cuda.synchronize if device == 'cuda' else (lambda: None)
+    record = record or (lambda results: None)
 
     def timed(action, reps):
         sync(); start = time.perf_counter()
@@ -184,11 +186,13 @@ def _bench(distribution, device, *, floats):
             action()
         sync(); return (time.perf_counter() - start) / reps
 
-    results = dict(device=device, floats=floats, world_size=world, nodes=distribution.nodes)
+    results = dict(device=device, floats=floats, world_size=world, nodes=distribution.nodes, stages=[])
     one = torch.ones(1, device=device)
     timed(lambda: dist.all_reduce(one, group=group), 5)
     results['all_reduce_1_float_us'] = timed(lambda: dist.all_reduce(one, group=group), 50) * 1e6
-    for size in sorted({min(floats, 1_000_000), floats}):
+    results['stages'].append('latency'); record(results)
+    sizes = sorted({min(floats, n) for n in (1_000_000, 2_000_000, 4_000_000, 8_000_000)} | {floats})
+    for size in sizes:
         gradient = torch.ones(size, device=device)
         timed(lambda: dist.all_reduce(gradient, group=group), 2)
         seconds = timed(lambda: dist.all_reduce(gradient, group=group), 10 if size == floats else 3)
@@ -196,6 +200,7 @@ def _bench(distribution, device, *, floats):
         # ring all-reduce moves 2(N-1)/N of the buffer through every link; with one cross-node link pair per ring
         # this is the per-direction volume crossing the node boundary.
         results[f'all_reduce_{size}_ring_gbps'] = 2 * (world - 1) / world * size * 4 * 8 / seconds / 1e9
+        results['stages'].append(f'all_reduce_{size}'); record(results)
         del gradient
     results['all_reduce_ms'] = results[f'all_reduce_{floats}_ms']
     chunk = floats // world * world
@@ -204,6 +209,7 @@ def _bench(distribution, device, *, floats):
     seconds = timed(lambda: dist.all_to_all_single(received, sent, group=group), 5)
     results['all_to_all_ms'] = seconds * 1e3
     results['all_to_all_gbps_per_rank'] = chunk * 4 * 8 * (world - 1) / world / seconds / 1e9
+    results['stages'].append('all_to_all'); record(results)
     return results
 
 
@@ -217,9 +223,11 @@ def _probe(args, fused_args, rank, world_size, distribution):
     total = torch.tensor([float(rank)], device=device); dist.all_reduce(total, group=distribution.process_group)
     if [r['rank'] for r in ranks] != list(range(world_size)) or int(total.item()) != world_size * (world_size - 1) // 2:
         raise ValueError('probe collectives disagree with the declared world')
-    bench = _bench(distribution, device, floats=10_000_000 if device == 'cuda' else 100_000) if world_size > 1 else None
-    distribution.barrier()
     out = Path(fused_args[fused_args.index('--out') + 1]); out.mkdir(parents=True, exist_ok=True)
+    partial = out / f'bench-rank-{rank}.partial.json'
+    bench = _bench(distribution, device, floats=10_000_000 if device == 'cuda' else 100_000,
+                   record=lambda results: partial.write_text(json.dumps(results) + '\n')) if world_size > 1 else None
+    distribution.barrier()
     (out / f'probe-rank-{rank}.json').write_text(json.dumps(dict(ranks=ranks, bench=bench, **distribution.placement())) + '\n')
     return 0
 
