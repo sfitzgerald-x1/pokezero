@@ -298,6 +298,14 @@ class FusedDeferredTests(unittest.TestCase):
             checkpoint = root / 'run' / parent['checkpoint']
             checkpoint_sha = v2_fused.sha(checkpoint)
             options = dict(campaign=True, cooldown_from=checkpoint_sha)
+            mismatched = json.loads(original)
+            mismatched['reports'][-1]['training']['rows'] += 1
+            manifest.write_text(json.dumps(mismatched))
+            from torch.multiprocessing.spawn import ProcessRaisedException
+            with self.assertRaisesRegex(ProcessRaisedException, 'checkpoint counters differ'):
+                run_four(root, 'cooled-bad-origin', limit=1, **options)
+            self.assertFalse((root / 'cooled' / v2_fused_state.PARENT_RECEIPT).exists())
+            manifest.write_bytes(original)
             self.assertEqual([rank['exit'] for rank in run_four(root, 'cooled-first', limit=1, **options)], [0] * 4)
             self.assertEqual([rank['exit'] for rank in run_four(root, 'cooled-resume', limit=2,
                              fused_options=('--require-resume',), **options)], [0] * 4)

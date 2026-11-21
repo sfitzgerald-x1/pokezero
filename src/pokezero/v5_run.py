@@ -313,6 +313,15 @@ class EvaluationOutcome:
             raise ValueError('evaluation UNKNOWN requires a reason')
 
 
+def manifest_iteration_game_counts(manifest):
+    """Count a bound declaration's rounds without expanding its campaign ranges."""
+    def batch_size(batch):
+        games = batch['games']
+        return len(GameRange(**games)) if type(games) is dict else len(games)
+
+    return (sum(batch_size(batch) for batch in iteration) for iteration in manifest['iterations'])
+
+
 def evaluation_milestones(iteration_game_counts, interval_games):
     """Map zero-based iteration ends to their exact declared game milestones."""
     if type(interval_games) is not int or interval_games <= 0:

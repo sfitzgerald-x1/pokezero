@@ -562,6 +562,14 @@ def _stability_metrics(record):
         record['value_explained_variance'] = 1. - residual_variance / target_variance if target_variance > 0 else None
 
 
+def summarize_stability(updates):
+    """Pool weighted moments before calculating epoch or round statistics."""
+    rows = [row['stability_sums'] for row in updates if 'stability_sums' in row]
+    pooled = {name: math.fsum(row[name] for row in rows) for name in _STABILITY_SUMS}
+    _stability_metrics(pooled)
+    return pooled
+
+
 def static_v5_loss(output, tensors, model_config, config, *, variant_counts):
     """``v5_loss`` with fixed shapes: a masked reduction replaces each boolean selection.
 
@@ -1118,6 +1126,7 @@ class Trainer:
             if row[-1] == 1.0:
                 for name, value in zip(self._names, row):
                     metrics[name] = int(value) if name.endswith('_count') else value
+                metrics['stability_sums'] = {name: metrics[name] for name in _STABILITY_SUMS}
                 _stability_metrics(metrics)
             metrics['gradient_norm'] = row[len(self._names)]
             results.append(metrics)

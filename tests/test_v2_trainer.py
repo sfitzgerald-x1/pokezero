@@ -118,6 +118,26 @@ class V2TrainerTests(unittest.TestCase):
         self.assertEqual(metrics['clip_fraction'], .75)
         self.assertEqual(metrics['value_explained_variance'], .75)
 
+    def test_stability_summary_weights_updates_and_pools_constant_target_batches(self):
+        from gpu_engine.v2_fused import training_summary
+
+        def step(ratio, value, target, weight):
+            active = torch.tensor([True])
+            sums = v2._stability_sums(torch.tensor([ratio]).log(), .2, active, torch.tensor([value]),
+                                     torch.tensor([target]), active, torch.tensor([weight]))
+            telemetry = {key: float(value) for key, value in sums.items()}
+            result = dict(telemetry)
+            v2._stability_metrics(result)
+            self.assertIsNone(result['value_explained_variance'])
+            return dict(result, stability_sums=telemetry, learning_rate_epoch=1)
+
+        rows = [step(1., -0.5, -1., 3.), step(1.5, 0.5, 1., 1.)]
+        summary = training_summary(rows)
+        for metrics in (summary['iteration_mean'], summary['final_epoch_mean']):
+            self.assertAlmostEqual(metrics['approx_kl'], rows[1]['approx_kl'] / 4)
+            self.assertEqual(metrics['clip_fraction'], .25)
+            self.assertEqual(metrics['value_explained_variance'], .75)
+
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(1)

@@ -1,5 +1,7 @@
 """Committed report prefix for compact fused runs."""
 
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -7,6 +9,47 @@ from pathlib import Path
 
 SCHEMA = 'pokezero.v2-fused-state.v1'
 REPORTS = 'reports.jsonl'
+PARENT_RECEIPT = 'cooldown-parent.json'
+
+
+def _directory_identity(path):
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        return None
+    return info.st_dev, info.st_ino
+
+
+def validate_output(out, parent):
+    """Refuse a fork that writes to either physical tree of the parent."""
+    if parent is None:
+        if (out / PARENT_RECEIPT).exists():
+            raise ValueError('existing cooldown child requires its original parent arguments')
+        return
+    out, parent = out.resolve(), parent.resolve()
+    parent_id = _directory_identity(parent)
+    if parent_id is None:
+        raise ValueError('cooldown parent output does not exist')
+    out_id = _directory_identity(out)
+    if (parent_id in (_directory_identity(path) for path in (out, *out.parents)) or out_id is not None
+            and out_id in (_directory_identity(path) for path in (parent, *parent.parents))):
+        raise ValueError('cooldown child and parent need distinct, non-nested output roots')
+
+
+@contextmanager
+def commit_guard(out, committed_bytes, completed_rounds):
+    """Only the current pointer may append and then publish the next pointer."""
+    with (out / '.round-ledger.lock').open('a+b') as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        path = out / 'state.json'
+        if path.exists():
+            ledger = json.loads(path.read_bytes()).get('round_ledger') or {}
+            current = ledger.get('committed_bytes'), ledger.get('completed_rounds')
+        else:
+            current = (0, 0)
+        if current != (committed_bytes, completed_rounds):
+            raise ValueError('another writer advanced the fused round ledger')
+        yield
 
 
 def append_round(out, committed_bytes, report, encoding_receipt):

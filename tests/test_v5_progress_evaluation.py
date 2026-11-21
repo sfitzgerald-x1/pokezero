@@ -1,6 +1,6 @@
 """CPU tests. All bank rows and outcomes are inert fixtures."""
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 import tempfile
@@ -52,14 +52,18 @@ class ProgressEvaluationTests(unittest.TestCase):
             data = {'showdown': {'compiled_tree_sha256': 'showdown'}} if value is runtime else [{}]
             return SimpleNamespace(document=lambda: data)
 
-        for games, enabled in ((2_000_000, False), (100_000_000, True)):
+        for games, enabled in (
+            (range(2_000_000), False),
+            (asdict(run.GameRange('campaign', 0, 5_000_000, 1, 1, 1)), False),
+            (asdict(run.GameRange('campaign', 0, 100_000_000, 1, 1, 1)), True),
+        ):
             with self.subTest(games=games), patch.object(progress, '_ref', side_effect=artifact), \
                     patch.object(progress, 'validate_banks'), \
                     patch.object(progress.deferred, 'read_milestone', return_value=request), \
                     patch.object(Path, 'read_bytes', return_value=b'{}'), \
                     patch.object(progress.json, 'loads', return_value={
                         'evaluation': {'interval_games': 1_000_000},
-                        'iterations': [[{'games': range(games)}]],
+                        'iterations': [[{'games': games}]],
                     }):
                 _, effective, _ = progress.load_profile(None, protocol)
             self.assertIs(effective[progress.TRAP_SWITCH_SETTING], enabled)
@@ -210,7 +214,8 @@ battle.destroy();
             checkpoint.write_bytes(b'test checkpoint')
             archive.write_bytes(b'test actor')
             protocol_sha = 'b'*64
-            declaration = dict(model={'fixture': True}, iterations=[[{'games':[{}]}]],
+            games = asdict(run.GameRange('campaign', 0, 1, 1, 1, 1))
+            declaration = dict(model={'fixture': True}, iterations=[[{'games': games}]],
                 evaluation=run.EvaluationProtocol(protocol_sha, 1, 'deferred').metadata())
             (root/'declaration.json').write_text(run._json(declaration))
             snapshot = run.Snapshot(0, 'artifacts/train.pt', run._file_sha(checkpoint),

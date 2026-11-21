@@ -53,7 +53,7 @@ def load_profile(dispatch, protocol):
     runtime = _ref(profile['runtime']).document()
     if profile['simulator_sha256'] != runtime['showdown']['compiled_tree_sha256']:
         raise ValueError('progress simulator identity differs from actual runtime')
-    declared_games = sum(len(batch['games']) for batches in declaration['iterations'] for batch in batches)
+    declared_games = sum(run.manifest_iteration_game_counts(declaration))
     trap_switches = profile.get(TRAP_SWITCH_SETTING, declared_games == 100_000_000)
     if type(trap_switches) is not bool:
         raise ValueError('deferred evaluation trap switch setting must be boolean')

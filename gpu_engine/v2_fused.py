@@ -20,6 +20,7 @@ compressed to `<out>/audit/` for offline comparison with the file pipeline.
 All paths are command-line arguments.
 """
 import argparse
+from contextlib import nullcontext
 from dataclasses import asdict, replace
 import gc
 import hashlib
@@ -155,12 +156,15 @@ def audit(store, blocks, out):
 
 def training_summary(updates):
     """Mean of every numeric metric over the iteration and over its final epoch."""
+    from pokezero.v2_trainer import summarize_stability
+
     numeric = lambda rows: {key: float(np.mean([r[key] for r in rows])) for key in rows[0]
         if all(isinstance(r.get(key), (int, float)) and not isinstance(r.get(key), bool) for r in rows)}
     if not updates:return {}
     last_epoch = max(r.get('learning_rate_epoch', 0) for r in updates)
     final = [r for r in updates if r.get('learning_rate_epoch', 0) == last_epoch]
-    summary = dict(iteration_mean=numeric(updates), final_epoch_mean=numeric(final), final_epoch=last_epoch)
+    summary = dict(iteration_mean=dict(numeric(updates), **summarize_stability(updates)),
+                   final_epoch_mean=dict(numeric(final), **summarize_stability(final)), final_epoch=last_epoch)
     entropy = [row['entropy'] for row in updates if row.get('entropy_count', 0) > 0]
     if entropy:
         summary['entropy_min'] = float(min(entropy))
@@ -412,11 +416,7 @@ def main(argv=None, *, distribution=None):
     if bool(args.config) == bool(args.declaration):raise SystemExit('exactly one of --config or --declaration')
     out = Path(args.out)
     parent_root = Path(args.cooldown_child).resolve() if args.cooldown_child else None
-    if parent_root is not None:
-        destination = out.resolve()
-        same_mount = destination.exists() and parent_root.exists() and destination.samefile(parent_root)
-        if same_mount or destination.is_relative_to(parent_root) or parent_root.is_relative_to(destination):
-            raise ValueError('cooldown child and parent need distinct, non-nested output roots')
+    v2_fused_state.validate_output(out, parent_root)
     state_path = out / 'state.json'
     if args.require_resume and not state_path.is_file():
         raise ValueError('--require-resume needs a committed state.json in --out')
@@ -442,6 +442,7 @@ def main(argv=None, *, distribution=None):
     lr_start_policy = context['declared'].get('lr_start') if lr_start is not None else None
     declaration_bytes = runs._json(plan.manifest()).encode()
     declaration_sha256 = hashlib.sha256(declaration_bytes).hexdigest()
+    compact = getattr(plan, 'compact', False)
     if args.recipe is not None or args.learner_precision is not None or lr_start is not None:
         context['declared']['effective_plan_sha256'] = declaration_sha256
     base_campaign = CampaignSchedule() if args.campaign_anneal else None
@@ -450,7 +451,7 @@ def main(argv=None, *, distribution=None):
     parent_offset = 0
     origin = (0, 0, 0)
     if parent_root is not None:
-        if not getattr(plan, 'compact', False) or plan.game_offsets[-1] != 400_000:
+        if not compact or plan.game_offsets[-1] != 400_000:
             raise ValueError('cooldown child requires a separate compact 0.4M declaration')
         parent = _rank_zero(distribution, 'cooldown parent', lambda: cooldown_parent(
             parent_root, args.cooldown_parent_sha256, model_sha256, lr_start_policy))
@@ -460,15 +461,15 @@ def main(argv=None, *, distribution=None):
         origin = parent['origin']
         parent_binding = dict(snapshot=asdict(parent['snapshot']), origin=list(origin),
                               history_sha256=runs._sha(parent['history']))
-        parent_receipt = out / 'cooldown-parent.json'
+        parent_receipt = out / v2_fused_state.PARENT_RECEIPT
 
-        def bind_parent():
+        def bind_parent(*, publish=False):
             if parent_receipt.exists():
                 if json.loads(parent_receipt.read_bytes()) != parent_binding:
                     raise ValueError('cooldown child was bound to a different parent')
             elif state_path.exists():
                 raise ValueError('resumed cooldown child needs its original parent receipt')
-            else:
+            elif publish:
                 runs._publish(parent_receipt, runs._json(parent_binding).encode())
 
         _rank_zero(distribution, 'cooldown child provenance', bind_parent)
@@ -480,8 +481,10 @@ def main(argv=None, *, distribution=None):
         distribution.bind(context, args)
     deferred = plan.evaluation is not None and plan.evaluation.deferred
     dispatch = None
+    if compact or deferred:
+        from pokezero.v5_deferred_evaluation import sync_actor
     if deferred:
-        from pokezero.v5_deferred_evaluation import MilestoneDispatch, retain_full_checkpoints, sync_actor, sync_directory
+        from pokezero.v5_deferred_evaluation import MilestoneDispatch, retain_full_checkpoints, sync_directory
 
         def setup_dispatch():
             nonlocal dispatch
@@ -530,7 +533,6 @@ def main(argv=None, *, distribution=None):
         return v2_fused_state.read_state(out, include_full_reports=False)
 
     saved = _rank_zero(distribution, 'resume manifest', read_resume_manifest)
-    compact = getattr(plan, 'compact', False)
     if compact and saved is not None and 'round_ledger' not in saved:
         raise ValueError('compact declaration needs its original fused round ledger')
     committed_bytes = 0 if saved is None or not compact else saved['round_ledger']['committed_bytes']
@@ -599,6 +601,13 @@ def main(argv=None, *, distribution=None):
             enable_v5=True, v2_config=replace(v2_config, campaign=parent['campaign']),
             expected_model_config=plan.model, expected_loss_config=plan.loss, expected_train_config=plan.train,
             device='cuda', expected_self_moves=plan.self_moves, off_provenance=proof, **placement)
+
+        def check_parent_origin():
+            if (runtime.steps, runtime.rows, runtime.window.end_game) != origin:
+                raise ValueError('cooldown parent checkpoint counters differ from the committed report')
+
+        _validated_on_all_ranks(distribution, check_parent_origin)
+        _rank_zero(distribution, 'cooldown child provenance', lambda: bind_parent(publish=True))
         log('COOLDOWN_CHILD', parent_checkpoint_sha256=first.checkpoint_sha256, parent_games=origin[2])
     else:
         if args.advance_campaign_step_at is not None:
@@ -741,7 +750,7 @@ def main(argv=None, *, distribution=None):
             metadata = v5_model.export(checkpoint, archive, expected_checkpoint_sha256=checkpoint_sha, enable_v5=True,
                 self_moves=plan.self_moves,
                 off_provenance=encoding.off_from_receipt(encoding_receipt) if not plan.self_moves else None)
-            if deferred:
+            if compact or deferred:
                 sync_actor(archive)
             return checkpoint_sha, metadata
 
@@ -780,15 +789,6 @@ def main(argv=None, *, distribution=None):
             entropy_min=report['training'].get('entropy_min'))
         def commit_round():
             state = dict(row_order=row_order, declaration_sha256=declaration_sha256)
-            end = committed_bytes
-            if compact:
-                end = v2_fused_state.append_round(out, committed_bytes, report, encoding_receipts[checkpoint_sha])
-                state['round_ledger'] = dict(schema=v2_fused_state.SCHEMA, committed_bytes=end,
-                                            completed_rounds=iteration + 1, initializer=asdict(snapshots[0]),
-                                            latest_snapshot=asdict(snapshot))
-            else:
-                state.update(snapshots=[asdict(s) for s in snapshots], reports=reports,
-                             checkpoint_encoding_receipts=encoding_receipts)
             if lr_start is not None:
                 state['lr_start'] = lr_start_policy
             if parent is not None:
@@ -797,7 +797,18 @@ def main(argv=None, *, distribution=None):
                 state['campaign_schedule'] = asdict(runtime.v2_config.campaign)
             if distribution is not None:
                 state['distribution'] = distribution.contract
-            write_json(state_path, state, durable=deferred or compact)
+            end = committed_bytes
+            guard = v2_fused_state.commit_guard(out, committed_bytes, iteration) if compact else nullcontext()
+            with guard:
+                if compact:
+                    end = v2_fused_state.append_round(out, committed_bytes, report, encoding_receipts[checkpoint_sha])
+                    state['round_ledger'] = dict(schema=v2_fused_state.SCHEMA, committed_bytes=end,
+                                                completed_rounds=iteration + 1, initializer=asdict(snapshots[0]),
+                                                latest_snapshot=asdict(snapshot))
+                else:
+                    state.update(snapshots=[asdict(s) for s in snapshots], reports=reports,
+                                 checkpoint_encoding_receipts=encoding_receipts)
+                write_json(state_path, state, durable=deferred or compact)
             if deferred:
                 publish_evaluation(snapshot)
                 # The reference initializer is outside this run's retention.

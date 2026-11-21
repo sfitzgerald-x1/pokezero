@@ -175,9 +175,20 @@ def main(argv=None):
         if not 0 <= args.rank < args.ranks or args.ranks > 1 and not args.rendezvous:
             raise ValueError('valid rank and rendezvous required')
         return _worker(args, fused_args)
-    if '--out' not in fused_args:
+    from pokezero.v2_fused_state import validate_output
+
+    output_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    output_parser.add_argument('--out')
+    output_parser.add_argument('--cooldown-child')
+    output_parser.add_argument('--require-resume', action='store_true')
+    fused, _ = output_parser.parse_known_args(fused_args)
+    if fused.out is None:
         raise ValueError('explicit shared output directory required')
-    out = Path(fused_args[fused_args.index('--out') + 1]); out.mkdir(parents=True, exist_ok=True)
+    out = Path(fused.out)
+    validate_output(out, Path(fused.cooldown_child) if fused.cooldown_child else None)
+    if fused.require_resume and not (out / 'state.json').is_file():
+        raise ValueError('--require-resume needs a committed state.json in --out')
+    out.mkdir(parents=True, exist_ok=True)
     # Respect the container's allocated GPU visibility. A parent allocation
     # larger than the declared rank count must not silently leave GPUs idle.
     import torch
