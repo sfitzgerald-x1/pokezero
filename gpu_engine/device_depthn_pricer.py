@@ -221,6 +221,7 @@ def validate_world_requests(requests,worlds,binding,recipe,params):
             raise ValueError('original encoder input keys required')
         if any(type(x)is not int or not 0<=x<len(params)for x in(request.learner_actor,request.opponent_actor)):
             raise ValueError('verified original actor index required')
+        depth2.check_child_actor(request,params)
     return carry_signature(pairs)
 
 
@@ -869,7 +870,7 @@ class DepthNPricer:
         n=2*capacity;N=self.depth;device=0.;invocations=0;host={};pool=None
         data=depth2.pack_turn1(requests,worlds,recipe,capacity,params,k1_own=self.k1_own,fixed_capacity=self.fixed_capacity)
         if data is not None:
-            key=('P1',capacity,tuple(len(x)for x in data['peer_rows']),tuple(len(x)for x in data['leaf_rows']))
+            key=('P1',capacity,tuple(len(x)for x in data['peer_rows']),tuple(len(x)for x in data['leaf_rows']))+depth2.child_rows_key(data)
             device_data=jax.device_put(data)
             program=self._program(key,lambda:make_p1(self.executor,self.model,params=self.params,capacity=capacity,k1_own=self.k1_own,k1_opp=self.k1_opp,
                 digest=self.digest,forward=self.forward),device_data)
@@ -888,7 +889,7 @@ class DepthNPricer:
             opp_logits=t1['t1_peer_logits'].reshape(n,LANES,9),pool=pool,row_of=row_of)
         pool=None  # the level owns the turn-1 children now; the loop drops them once ply 2 has read them
         owners=np.repeat(data['owner']if data is not None else np.zeros(capacity,np.int32),2)
-        actors=np.zeros((n,2),np.int32);actors[:2*count]=np.repeat([(r.learner_actor,r.opponent_actor)for r in requests],2,axis=0)
+        actors=np.zeros((n,2),np.int32);actors[:2*count]=np.repeat([(r.learner_actor,depth2.child_actor(r))for r in requests],2,axis=0)   # plies >= 2: the opponent's actor below the root
         levels=[level];work=[]
         for p in range(2,N+1):
             k_own,k_opp=self.k_own[p-2],self.k_opp[p-2];K=k_own*k_opp;B=block_nodes(self.block_lanes,k_own,k_opp);leaf=p==N

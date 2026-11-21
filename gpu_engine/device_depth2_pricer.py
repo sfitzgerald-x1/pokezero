@@ -265,7 +265,7 @@ def make_turn1_stage(executor,model,*,params,capacity,k1_own=9,k1_opp=9,digest=F
         masks=masks[:,:,0];seat=owners[:,None,None,None]
         own_req2=j.any(j.take_along_axis(masks,seat,axis=2)[:,:,0],axis=-1);peer_req2=j.any(j.take_along_axis(masks,1-seat,axis=2)[:,:,0],axis=-1)
         own_legal2=own_legal2[:,:,0];peer_legal2=peer_legal2[:,:,0]
-        peer_logits2,peer_pv2,peer_valid2=grouped_forward(peer_child_inputs,a['peer_rows'],joint=True)
+        peer_logits2,peer_pv2,peer_valid2=grouped_forward(peer_child_inputs,a['child_peer_rows']if'child_peer_rows'in a else a['peer_rows'],joint=True)
         peer_usable2=peer_valid2&j.all(j.isfinite(peer_logits2),axis=-1)&j.isfinite(peer_pv2)&(j.abs(peer_pv2)<=1)
         errors=j.where(viewed&peer_req2&(peer_error!=0),PEER_VIEW_ERROR,errors)
         errors=j.where(viewed&(errors==0)&peer_req2&~peer_usable2,PEER_PRIOR_REFUSED,errors)
@@ -388,6 +388,44 @@ def validate_requests(requests,materializer,recipe,params):
             raise ValueError('original encoder input keys required')
         if any(type(x)is not int or not 0<=x<len(params)for x in(request.learner_actor,request.opponent_actor)):
             raise ValueError('verified original actor index required')
+        check_child_actor(request,params)
+
+
+def child_actor(request):
+    """The opponent's actor below the root: child_opponent_actor when a request carries one, else opponent_actor (the root's)."""
+    child=getattr(request,'child_opponent_actor',None)
+    return request.opponent_actor if child is None else child
+
+
+def check_child_actor(request,params):
+    child=getattr(request,'child_opponent_actor',None)
+    if child is not None and(type(child)is not int or not 0<=child<len(params)):raise ValueError('verified child opponent actor index required')
+
+
+def routes_children(requests):
+    """True when some request's opponent actor below the root differs from its root opponent actor (then the turn-1 stage's
+    child peer rows are grouped separately; otherwise nothing changes, key included)."""
+    return any(child_actor(r)!=r.opponent_actor for r in requests)
+
+
+def actor_rows(actors,capacity,params,*,fixed_capacity=False):
+    """D3's archive-grouped rows over per-world actor indices [2*count]: actor 0 (and, under fixed_capacity, every actor) sized
+    2*capacity, the others the power of two over the largest history count; padding rows point at 2*capacity."""
+    actors=np.asarray(actors)
+    counts=[int(np.count_nonzero(actors==actor))for actor in range(len(params))]
+    history=max(counts[1:],default=0)
+    history_size=0 if history==0 else 1<<(history-1).bit_length()
+    rows=[]
+    for actor in range(len(params)):
+        indices=np.flatnonzero(actors==actor).astype(np.int32)
+        size=2*capacity if actor==0 or fixed_capacity else history_size
+        padded=np.full(size,2*capacity,np.int32);padded[:len(indices)]=indices;rows.append(padded)
+    return tuple(rows)
+
+
+def child_rows_key(data):
+    """The compile key's extra term for child peer rows: () without them (the key unchanged), else their sizes."""
+    return(('child_peer_rows',tuple(len(x)for x in data['child_peer_rows'])),)if'child_peer_rows'in data else()
 
 
 def pack_turn1(requests,worlds,recipe,capacity,params,*,k1_own=9,fixed_capacity=False):
@@ -426,18 +464,10 @@ def pack_turn1(requests,worlds,recipe,capacity,params,*,k1_own=9,fixed_capacity=
     for i,r in enumerate(requests):
         order=recipe.pricing_order(r.plans.root.address,r.root_logits,r.root_legal)[:k1_own]
         data['order'][i]=order+(order[0],)*(9-len(order));data['order_size'][i]=len(order)
-    def actor_rows(field):
-        actors=np.repeat([getattr(r,field)for r in requests],2)
-        counts=[int(np.count_nonzero(actors==actor))for actor in range(len(params))]
-        history=max(counts[1:],default=0)
-        history_size=0 if history==0 else 1<<(history-1).bit_length()
-        rows=[]
-        for actor in range(len(params)):
-            indices=np.flatnonzero(actors==actor).astype(np.int32)
-            size=2*capacity if actor==0 or fixed_capacity else history_size
-            padded=np.full(size,2*capacity,np.int32);padded[:len(indices)]=indices;rows.append(padded)
-        return tuple(rows)
-    data['peer_rows']=actor_rows('opponent_actor');data['leaf_rows']=actor_rows('learner_actor')
+    rows=lambda values:actor_rows(np.repeat(list(values),2),capacity,params,fixed_capacity=fixed_capacity)
+    data['peer_rows']=rows(r.opponent_actor for r in requests);data['leaf_rows']=rows(r.learner_actor for r in requests)
+    if routes_children(requests):   # the turn-1 children's peer prior from another bank entry than the root's (child_opponent_actor)
+        data['child_peer_rows']=rows(child_actor(r)for r in requests)
     return data
 
 
@@ -500,7 +530,7 @@ class Depth2Pricer:
         if available:
             data=pack_turn1(requests,worlds,recipe,capacity,params,k1_own=self.k1_own,fixed_capacity=self.fixed_capacity)
             data['child_slots'],data['block_actor']=self._blocks(requests,capacity,params)
-            key=(capacity,tuple(len(x)for x in data['peer_rows']),tuple(len(x)for x in data['leaf_rows']),data['child_slots'].shape)+self.evaluator_suffix
+            key=(capacity,tuple(len(x)for x in data['peer_rows']),tuple(len(x)for x in data['leaf_rows']),data['child_slots'].shape)+self.evaluator_suffix+child_rows_key(data)
             device_data=jax.device_put(data)
             if key not in self.kernels:
                 fn=make_depth2_kernel(self.executor,self.model,params=self.params,capacity=capacity,k_own=self.k_own,k_opp=self.k_opp,

@@ -28,6 +28,7 @@ class Request:
     root_inputs:object
     learner_actor:int
     opponent_actor:int
+    child_opponent_actor:int|None=None   # the opponent's actor at every ply below the root (None: opponent_actor, as before)
 
 
 def make_kernel(executor,model,*,params,capacity,block_rows,mixed_learners=False,vectorized=False,forward=None):

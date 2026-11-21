@@ -432,6 +432,9 @@ def parser():
         'ARGMAX_MEAN_COMPLETED_Q (default: averaging plays, or br_fp under --reply-archive) or NOISE_GATED_K2 (that choice only past '
         'a 2-standard-error per-world gap over the root logits\' argmax; screen-r4a variant B with --reply-archive)')
     p.add_argument('--reply-checkpoint-sha256',help='the reply export\'s checkpoint sha256 (required with --reply-archive)')
+    p.add_argument('--reply-below-root',action='store_true',help='with --reply-archive: the reply model also prices every ply below the root '
+        '(the turn-1 children\'s opponent prior, and deeper plies\' opponent priors), as the pricer\'s second bank entry; the root prior stays '
+        'br_fp\'s substitution. Default off: the champion prices every ply below the root, as before')
     p.add_argument('--reply-views',choices=('eager','jit','check'),default='eager',help='how --reply-archive builds the peer inputs: eager '
         '(default; bit-exact with the RR re-pricer), jit (one vmapped program per root), or check (eager plays; jit reported beside)')
     p.add_argument('--matmul-precision',choices=('highest','high','default'),default='highest',
@@ -445,6 +448,7 @@ def check_reply_arguments(p,args):
     reply=[getattr(args,k,None)for k in('reply_archive','reply_archive_sha256','reply_checkpoint_sha256')]
     if any(reply)and not all(reply):p.error('--reply-archive, --reply-archive-sha256 and --reply-checkpoint-sha256 go together')
     if not any(reply)and getattr(args,'reply_views','eager')!='eager':p.error('--reply-views goes with --reply-archive')
+    if not any(reply)and getattr(args,'reply_below_root',False):p.error('--reply-below-root goes with --reply-archive')
     if all(reply)and not all(type(x)is str and len(x)==64 and all(c in'0123456789abcdef'for c in x)for x in reply[1:]):
         p.error('--reply-archive-sha256 and --reply-checkpoint-sha256 must be 64-hex sha256s')
 
@@ -561,27 +565,30 @@ def build(args):
     refuse_search_serving(catalog=catalog,meta=getattr(evaluator,'meta',None),context='depthn live server')
     executor=cw.live_executor(metadata,catalog)   # the constructor's own engine metadata and catalog (the depth-N gate's CONSTRUCTOR_ROOTS uses the same)
     binding=cw.binding(source,metadata,catalog)
+    reply_model=None;below_root=bool(getattr(args,'reply_below_root',False))
+    if getattr(args,'reply_archive',None):   # br_fp: the reply model at the champion's precision, on the same executor's views
+        reply_model=evaluators.load(args.reply_archive,expected_archive_sha256=args.reply_archive_sha256,
+            expected_checkpoint_sha256=args.reply_checkpoint_sha256,precision=evaluators.PRECISIONS[args.champion_precision])
+        check_reply_view(getattr(reply_model,'meta',None),args)
+        refuse_search_serving(meta=getattr(reply_model,'meta',None),context='depthn live server reply model')
     cache=None
     if aot_head is not None:
         from gpu_engine.depthn_aot import ExecutableCache
         static=(astuple(binding),evaluators.identity(evaluator),W,live.DEPTH,live.WIDTH,
             args.reply_archive_sha256,args.reply_checkpoint_sha256,args.reply_views,
             args.leaf_layout,args.wide_nodes,args.block_lanes,args.blocks_per_call,
-            args.peer_view_b,args.ability_guard,args.redact_private_reveals,args.eager_peer_fold)
+            args.peer_view_b,args.ability_guard,args.redact_private_reveals,args.eager_peer_fold)+(('reply_below_root',)if below_root else())
         cache=ExecutableCache(args.aot_cache,source=aot_head,static=static,device=jax.devices()[0])
     cache_option={} if cache is None else dict(program_cache=cache)
-    params=(evaluator.params,)
+    params=(evaluator.params,)+((reply_model.params,)if below_root else())   # --reply-below-root: the reply model is bank entry 1
     from gpu_engine import depthn_guard_inputs as guard_inputs
     pricers=live.make_pricers(executor,evaluator,params,worlds=W,buckets=args.buckets,block_lanes=args.block_lanes,blocks_per_call=args.blocks_per_call,
         labels=guard_inputs.ability_labels if getattr(args,'ability_guard',False)else guard_inputs.child_labels,
         leaf_layout=getattr(args,'leaf_layout','blocks'),wide_nodes=getattr(args,'wide_nodes',None),**cache_option)
     reply=None
-    if getattr(args,'reply_archive',None):   # br_fp: the reply model at the champion's precision, on the same executor's views
+    if reply_model is not None:
         from gpu_engine.depthn_reply_prior import ReplyPrior
-        model=evaluators.load(args.reply_archive,expected_archive_sha256=args.reply_archive_sha256,
-            expected_checkpoint_sha256=args.reply_checkpoint_sha256,precision=evaluators.PRECISIONS[args.champion_precision])
-        check_reply_view(getattr(model,'meta',None),args)
-        refuse_search_serving(meta=getattr(model,'meta',None),context='depthn live server reply model')
+        model=reply_model
         reply=ReplyPrior(executor,model,mode=args.reply_views,identity=dict(archive_sha256=args.reply_archive_sha256,
             checkpoint_sha256=args.reply_checkpoint_sha256,view=reply_view(getattr(model,'meta',None))),**cache_option)
     search=live.DepthNLiveSearch(constructor=constructor,pricers=pricers,params=params,binding=binding,
@@ -589,7 +596,8 @@ def build(args):
         max_requests=args.max_requests,session_cap=args.session_cap,refuse_classes=args.refuse_classes,
         redact_private_reveals=bool(getattr(args,'redact_private_reveals',False)),reply=reply,
         root_operator=getattr(args,'root_operator',live.ROOT_OPERATOR),
-        **({'peer_view_b':True}if getattr(args,'peer_view_b',False)else{}),**({'ability_guard':True}if getattr(args,'ability_guard',False)else{}))
+        **({'peer_view_b':True}if getattr(args,'peer_view_b',False)else{}),**({'ability_guard':True}if getattr(args,'ability_guard',False)else{}),
+        **({'child_opponent_actor':1}if below_root else{}))   # --reply-below-root: bank entry 1 (the reply model) prices every ply below the root
     if cache is not None:
         search.program_cache=cache
     return search
@@ -670,7 +678,8 @@ def header(args,search):
         vocabulary_sha256=args.expected_vocabulary_sha256,champion_archive_sha256=args.champion_archive_sha256,
         champion_checkpoint_sha256=args.champion_checkpoint_sha256,champion_precision=args.champion_precision,pricer=search.pricer_identity,
         **({}if not getattr(args,'reply_archive',None)else dict(root_operator='br_fp',reply_archive_sha256=args.reply_archive_sha256,
-            reply_checkpoint_sha256=args.reply_checkpoint_sha256,reply_views=args.reply_views,reply_archive_view=reply_view(getattr(getattr(getattr(search,'reply',None),'evaluator',None),'meta',None)))),
+            reply_checkpoint_sha256=args.reply_checkpoint_sha256,reply_views=args.reply_views,reply_archive_view=reply_view(getattr(getattr(getattr(search,'reply',None),'evaluator',None),'meta',None)),
+            **({'reply_below_root':True}if getattr(search,'child_opponent_actor',None)is not None else{}))),
         jax_enable_x64=bool(jax.config.jax_enable_x64),matmul_precision=matmul_precision(),matmul_precision_pin=args.matmul_precision,
         **({}if getattr(args,'root_operator',live.ROOT_OPERATOR)==live.ROOT_OPERATOR else dict(live_root_operator=args.root_operator)),
         **({}if not getattr(args,'prepare_workers',0)else dict(prepare_workers=args.prepare_workers,prepare_cpus=args.prepare_cpus,
