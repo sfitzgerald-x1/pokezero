@@ -93,7 +93,7 @@ class BatonStartDiagnosticsTests(unittest.TestCase):
   # state.py and baton.py are byte-certified against the reviewed SOURCE_PINS below and by transition_observer_wiring.
   for name in('engine_execution_completeness.py','engine_kernel_frame_risk.py','engine_retained_encoder_driver.py','engine_full_v4_event_device.py'):
    self.assertEqual(Path('gpu_engine',name).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+name]),name)
-  for f,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers.py','SOURCE_PINS'),('ordinary_law.py','MAPPING_PINS'),('conditional_law.py','MAPPING_PINS')]:
+  for f,key in [('engine_source_frame_witness.py','SOURCE_PINS'),('chance_consumers_pins.py','SOURCE_PINS'),('ordinary_law.py','MAPPING_PINS'),('conditional_law.py','MAPPING_PINS')]:
    t=ast.parse(Path('gpu_engine',f).read_text());pins=ast.literal_eval(next(n.value for n in t.body if isinstance(n,ast.Assign)and any(isinstance(x,ast.Name)and x.id==key for x in n.targets)))
    for name,v in pins.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),v)
 

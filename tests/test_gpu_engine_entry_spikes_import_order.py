@@ -9,6 +9,8 @@ import subprocess
 import sys
 import unittest
 
+from tests._source_pins import PIN_COUNTS
+
 ROOT=Path(__file__).resolve().parents[1]
 PARENT='5ca765f559cf67993f8bccb6b4a25962a9d01a2d'
 MODULES=('gpu_engine.benchmark_retained_games','gpu_engine.engine_lifecycle_event_device',
@@ -46,15 +48,16 @@ class EntrySpikesImportOrderTests(unittest.TestCase):
             return next(n.value for n in ast.parse(path.read_text()).body if isinstance(n,ast.Assign)
                 and any(isinstance(t,ast.Name)and t.id==name for t in n.targets))
         pins=ast.literal_eval(assignment(gpu/'engine_source_frame_witness.py','SOURCE_PINS'))
-        self.assertEqual(len(pins),92)   # 88, residual_order.py since §6, plus infatuation.py, transform.py and forecast.py
         for name,digest in pins.items():self.assertEqual(hashlib.sha256((gpu/name).read_bytes()).hexdigest(),digest,name)
         value=assignment(gpu/'chance_consumers.py','DOMAIN_MODULES')
         modules=value.args[0].func.value.value.split()
-        self.assertEqual(len(modules),29);self.assertIn('residual_order',modules);self.assertNotIn('engine_entry_spikes_callbacks',modules)
-        self.assertIn('transform',modules)   # Transform joined the domain (26 before)
-        actual=hashlib.sha256(b''.join(n.encode()+b'\0'+(gpu/(n+'.py')).read_bytes()+b'\0'for n in modules)).hexdigest()
-        for file,name in (('chance_consumers.py','DOMAIN_SHA256'),('ordinary_law.py','DOMAIN_SHA256'),('conditional_law.py','KERNEL_SHA256')):
-            self.assertEqual(ast.literal_eval(assignment(gpu/file,name)),actual)
+        self.assertEqual(len(modules),PIN_COUNTS[('chance_consumers_pins.py','DOMAIN_PINS')])
+        self.assertIn('residual_order',modules);self.assertNotIn('engine_entry_spikes_callbacks',modules)
+        self.assertIn('transform',modules)
+        # the per-module domain pins (they replaced one DOMAIN_SHA256 / KERNEL_SHA256 over these modules): every module, in order
+        actual=[(n+'.py',hashlib.sha256((gpu/(n+'.py')).read_bytes()).hexdigest())for n in modules]
+        for file,name in (('chance_consumers_pins.py','DOMAIN_PINS'),('ordinary_law.py','DOMAIN_PINS'),('conditional_law.py','KERNEL_PINS')):
+            self.assertEqual(list(ast.literal_eval(assignment(gpu/file,name)).items()),actual,(file,name))
 
 
 if __name__=='__main__':unittest.main()

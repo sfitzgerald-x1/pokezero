@@ -22,9 +22,48 @@ from .finite_law import Axis, COORDINATES, DRAW_BOUNDS, EFFECT_BOUNDS, Cardinali
 # Complete transition-domain proof, including the copy/zero assignments in
 # transition.step_with_chance (the four saved blocks and, since §6, the effect
 # block at :2969-2970). A numeric representative alone is not proof.
-DOMAIN_SHA256 = 'ff112cd408864b63a2dfe9b9d103b4119a83161d46983463050e9a2ba2e17476'
+# One whole-file sha256 per module, in chance_consumers.DOMAIN_MODULES order (it replaced a single DOMAIN_SHA256 over
+# them; _source_certificate still returns that digest, computed from the same bytes).
+DOMAIN_PINS = {
+    'absorption.py': '2d684602eb9aa69bc470b215c188533b0e1c4d8495dd5b71ca2508dc38f20623',
+    'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407',
+    'baton.py': 'f86ad12ae0d59c1c8f89eb3f84f2d0519e1214ae4a4506d5cb700c6e0c20fa01',
+    'combat.py': '2d3ad693aebf879dc4b26cd992e9357fcc0e7a9fcf22bf1274e33869cd684aa7',
+    'critical.py': '7f8be9394e5a5473df5e6e9e9dcd242947ac0970cf5f46d50e27b27658e58f72',
+    'damage_moves.py': 'c2427b88dc7f7b643625659f12498e1c06412c6875c60d548fa573f6e7a45e72',
+    'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2',
+    'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd',
+    'entry.py': '688cc4eaa0266f71faf22c78fa2d91f2ee0fd8b875171e88fe4c2304c66aa285',
+    'focus_punch.py': '881bd17a84dc22576aa618256ada2b0f67bee29224dbb50508925b55e119585f',
+    'forecast.py': '3c08324c4012ab60b8aa33f1a3d217c820783c4b85e0e0f5b0bdc2feade97bcf',
+    'infatuation.py': '6d25d2cfe1f45e0cee4334e89b66ae2ff3ca92de141b2825d9345aec04bc3ffa',
+    'items.py': '4a936d5d4e92036155bce8a1ae19005ca7555996cb23a6359cdd4c128fa93490',
+    'linked_traps.py': '743c01ee69509162e7829ae555b85f069f1c20ec9bd19cec0779d066894bade4',
+    'mechanics.py': 'fa63643594e8e01cae573c324fbd442fd82ddf63e4514bc23c2e3a4c337e3444',
+    'phazing.py': '8004d4880991a074480b6a7e9be6f6cb980577a61d2388c4c8c56d9a1ab2f26a',
+    'pressure.py': '73eefb16678fedf1885a4e11cbc8954d15706592742caa6b0b673fb4d63d698c',
+    'pursuit.py': '31a6805d9a6b0032c849877efcb2b5a2447b9abc29fbe5170e687b0abe1fbb55',
+    'residual_order.py': 'd49fbd0f47ffe4fa1c98bba49eeaacfb5e16518c2ef938aa7ff311d996a0df94',
+    'secondary.py': 'a3058e796b8affc38f5aa0d188bf52cc554d6c07cc8b4e83ac792ed70734001a',
+    'self_destruct.py': 'b3c9df0ea093eca7c0960b4c4ffd4277e289a0ded6f32f914466c0752fa9b739',
+    'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154',
+    'solar_beam.py': '5463e103392e24df7cc560003740b7e425aba766a0d1bba90ff4428606849155',
+    'state.py': '4cb9d910e8eb8cd70e80185fe4352132fd8933321a9fb00132623077b5993387',
+    'sustain.py': '0b575a55f091312679058e0ab990116b1f2348f163654ae777e293c1e7b51b24',
+    'transform.py': '5ff5f4613ec84b6ca7a72efec3ffd6b64dcf28d1f1672c633428a8e5dc45e20b',
+    'transition.py': 'e86226e51f4ec2941d8ce793c6eaadae6deafaf591e2bd057eac1f03ce0e0a97',
+    'variable_moves.py': '0d3655aac5b547782457be46ebfee0b8b66ece3a360d05d4ec34cebbf801ea6d',
+    'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5',
+}
 # Filled only after reviewed implementation stabilizes; drift must refuse.
-MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'edc059ffb175c3814cca785a8a88df4052cd19c824845ce6caadcd71a6e14be6', 'conditioned_future.py': 'bee60d69d535f4d9982c027f75ea6c49906787fc6c1754a9ac4d1a4548c2b8d6', 'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f', 'finite_law.py': '6adba87e46cc027d0b45fe4e4d5602dd36ac3bb00e66156774e0705fcabb8231', 'future_state.py': 'a79bc6e0b9e18bf679404444e7d6ac5a148bd4e3a893b5628c909e307ed30bd2'}
+MAPPING_PINS = {
+    'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e',
+    'chance_consumers.py': 'fbc62ed9ecd186c6456324f9fd353838c248192a3ad119190b0f61a6e39a326c',
+    'conditioned_future.py': 'bee60d69d535f4d9982c027f75ea6c49906787fc6c1754a9ac4d1a4548c2b8d6',
+    'fidelity_panel.py': '728c1d14c3cc5e95de63d6d3770d143263d58c0d5d7dec8a444b64c5b829099f',
+    'finite_law.py': '6adba87e46cc027d0b45fe4e4d5602dd36ac3bb00e66156774e0705fcabb8231',
+    'future_state.py': 'a79bc6e0b9e18bf679404444e7d6ac5a148bd4e3a893b5628c909e307ed30bd2',
+}
 NATIVE_BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
     for s in range(2) for i,bound in enumerate(DRAW_BOUNDS)]
     + [(f'{field}_draws.{s}', f'{field}.{s}', bound)
@@ -43,9 +82,12 @@ CAPSULE = (*conditioned_future.CAPSULE_FIELDS,conditioned_future.SAVED_BLOCK,con
 
 def _source_certificate():
     root=Path(__file__).parent
-    digest=hashlib.sha256(b''.join(name.encode()+b'\0'+(root/(name+'.py')).read_bytes()+b'\0'
-        for name in chance_consumers.DOMAIN_MODULES)).hexdigest()
-    if digest!=DOMAIN_SHA256:raise ValueError('ORDINARY_CONSUMER_DOMAIN_DRIFT')
+    if tuple(DOMAIN_PINS)!=tuple(name+'.py' for name in chance_consumers.DOMAIN_MODULES):
+        raise ValueError('ORDINARY_CONSUMER_DOMAIN_DRIFT: DOMAIN_MODULES')
+    data={name:(root/(name+'.py')).read_bytes() for name in chance_consumers.DOMAIN_MODULES}
+    for name in chance_consumers.DOMAIN_MODULES:
+        if hashlib.sha256(data[name]).hexdigest()!=DOMAIN_PINS[name+'.py']:raise ValueError('ORDINARY_CONSUMER_DOMAIN_DRIFT: '+name+'.py')
+    digest=hashlib.sha256(b''.join(name.encode()+b'\0'+data[name]+b'\0' for name in chance_consumers.DOMAIN_MODULES)).hexdigest()
     if not MAPPING_PINS:raise ValueError('ORDINARY_MAPPING_PROOF_NOT_REGISTERED')
     for name,expected in MAPPING_PINS.items():
         if hashlib.sha256((root/name).read_bytes()).hexdigest()!=expected:

@@ -62,7 +62,6 @@ class CensusPartyOrderTests(unittest.TestCase):
   old=ast.parse(subprocess.check_output(['git','show','11ce1be7:gpu_engine/engine_source_frame_witness.py'],text=True));new=ast.parse(Path('gpu_engine/engine_source_frame_witness.py').read_text())
   is_pins=lambda n:isinstance(n,ast.Assign)and any(isinstance(t,ast.Name)and t.id=='SOURCE_PINS'for t in n.targets)
   pins=ast.literal_eval(next(n.value for n in new.body if is_pins(n)))
-  self.assertEqual(len(pins),92)   # 88, residual_order.py since §6, plus infatuation.py, transform.py and forecast.py
   for name,want in pins.items():self.assertEqual(hashlib.sha256(Path('gpu_engine',name).read_bytes()).hexdigest(),want,name)
   strip=lambda t:ast.Module(body=[n for n in t.body if not is_pins(n)],type_ignores=[])
   self.assertEqual(ast.dump(strip(old),include_attributes=False),ast.dump(strip(new),include_attributes=False))

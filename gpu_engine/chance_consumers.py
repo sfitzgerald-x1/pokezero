@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import future_state as mapping
 from . import mechanics
+from .chance_consumers_pins import DOMAIN_PINS, SOURCE_PINS
 from .finite_law import Axis, COORDINATES, Observation, Plan as FinitePlan
 
 
@@ -55,10 +56,31 @@ CONSUMERS = {
     "effect.1.3": ("transition residual Perish pair ordering, order 12 (both ends resolve before faintMessages, so no Gen 3 outcome depends on it)",),
 }
 
-# Changing any source that supplies the consumer/domain proof requires review.
-SOURCE_PINS = {'action_history.py': 'a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407', 'critical.py': '7f8be9394e5a5473df5e6e9e9dcd242947ac0970cf5f46d50e27b27658e58f72', 'effects.py': '47f549d608b60d46e8cc4db7bad5be249ae728a4aab2a0ef28f105f3614e40e2', 'encore.py': '63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd', 'entry.py': '688cc4eaa0266f71faf22c78fa2d91f2ee0fd8b875171e88fe4c2304c66aa285', 'mechanics.py': 'fa63643594e8e01cae573c324fbd442fd82ddf63e4514bc23c2e3a4c337e3444', 'phazing.py': '8004d4880991a074480b6a7e9be6f6cb980577a61d2388c4c8c56d9a1ab2f26a', 'pursuit.py': '31a6805d9a6b0032c849877efcb2b5a2447b9abc29fbe5170e687b0abe1fbb55', 'residual_order.py': 'd49fbd0f47ffe4fa1c98bba49eeaacfb5e16518c2ef938aa7ff311d996a0df94', 'secondary.py': 'a3058e796b8affc38f5aa0d188bf52cc554d6c07cc8b4e83ac792ed70734001a', 'sleep_talk.py': '968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154', 'state.py': '4cb9d910e8eb8cd70e80185fe4352132fd8933321a9fb00132623077b5993387', 'transition.py': 'e86226e51f4ec2941d8ce793c6eaadae6deafaf591e2bd057eac1f03ce0e0a97', 'weather.py': '3c861027e16d27917fa47fa5cf5d6dc0c68d3a74af282108dfb94369d4db57e5'}
+# Changing any source that supplies the consumer/domain proof requires review: SOURCE_PINS and DOMAIN_PINS (one
+# whole-file sha256 per domain module, in DOMAIN_MODULES order) live in chance_consumers_pins.py.
 DOMAIN_MODULES = tuple("absorption action_history baton combat critical damage_moves effects encore entry focus_punch forecast infatuation items linked_traps mechanics phazing pressure pursuit residual_order secondary self_destruct sleep_talk solar_beam state sustain transform transition variable_moves weather".split())
-DOMAIN_SHA256 = 'ff112cd408864b63a2dfe9b9d103b4119a83161d46983463050e9a2ba2e17476'
+
+
+def _domain_certificate(root):
+    """Return the first drifting module and no identity, or the identity of the checked bytes.
+
+    Preserve the aggregate formula (name, NUL, bytes, NUL in module order), using each
+    file's one read for both its pin check and the identity carried by the plan.
+    """
+    if tuple(DOMAIN_PINS) != tuple(name+".py" for name in DOMAIN_MODULES):
+        return "DOMAIN_MODULES", None
+    domain = sha256()
+    for name, expected in DOMAIN_PINS.items():
+        data = (root/name).read_bytes()
+        if sha256(data).hexdigest() != expected:
+            return name, None
+        domain.update(name[:-3].encode()+b"\0"+data+b"\0")
+    return None, domain.hexdigest()
+
+
+def _domain_drift(root):
+    """The first drifting domain module, or None when every ordered pin matches."""
+    return _domain_certificate(root)[0]
 
 
 def _host(value):
@@ -152,10 +174,9 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                        for name in SOURCE_PINS)
         if actual != tuple(SOURCE_PINS.items()):
             return refuse("CONSUMER_SOURCE_DRIFT", repr(actual))
-        domain = sha256(b"".join(name.encode()+b"\0"+(Path(__file__).parent/(name+".py")).read_bytes()+b"\0"
-                                for name in DOMAIN_MODULES)).hexdigest()
-        if domain != DOMAIN_SHA256:
-            return refuse("CONSUMER_DOMAIN_DRIFT", domain)
+        drift, domain = _domain_certificate(Path(__file__).parent)
+        if drift is not None:
+            return refuse("CONSUMER_DOMAIN_DRIFT", drift)
         native = (mapping.native_input_from_jax(state, index, metadata)
                   if native_input is None else native_input)
         if isinstance(native, mapping.Refused):
