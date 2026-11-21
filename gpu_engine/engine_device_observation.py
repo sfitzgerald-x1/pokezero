@@ -605,7 +605,7 @@ _SELF_MOVE_NUMERIC = frozenset([reference.v4_numeric_index(reference.NUMERIC_REV
 
 
 def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tracked_item=None, posterior=True,
-                    self_moves=False):
+                    self_moves=False, set_posterior=False):
     """Complete meanings; optional real readout keys describe installed hooks.
 
     Pass the READOUT public view (``engine_device_trackers.readout(carry, observer_sides)``), the view ``encode`` reads,
@@ -725,6 +725,10 @@ def column_manifest(public=None, *, tracked_types=None, tracked_ability=None, tr
                     status, reason = 'TRACKED', 'original source prior + public hard/pin mask fallback; uniform current sampler'
                     if column == 131:
                         status, reason = 'TRACKED', 'produced constant0: frozen investment_belief_narrowing=False disables both standing-pin producers'
+                        if set_posterior:
+                            # Narrowing A: with set_posterior_narrowing the device's damage reveals narrow the standing
+                            # pin (engine_device_belief.Tables.posterior), so a pin disjoint from the hard mask is live.
+                            status, reason = 'TRACKED', 'set_posterior_narrowing standing pin (device damage-reveal producer): pin_conflict live'
                 if self_moves and section == 'own' and (column in _SELF_MOVE_CATEGORIES if kind == 'categorical'
                                                         else column in _SELF_MOVE_NUMERIC):
                     status, reason = 'DIRECT', 'V2 self_moves: actual owning engine move slots and PP (state.moves, state.pp)'

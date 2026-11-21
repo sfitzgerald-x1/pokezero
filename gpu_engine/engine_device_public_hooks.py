@@ -810,6 +810,32 @@ def damage(c,state,side,dealt,taken,use):
     return feature(c,foe,p,'last_damage_taken',shown,use)
 
 
+def set_posterior_enabled(c):
+    """Narrowing A: the damage reveal's set_posterior producer exists only with its tables (set_posterior_narrowing;
+    engine_device_belief.Tables.posterior). Off, no hook below is traced and every program is unchanged."""
+    return (c.belief_tables is not None and getattr(c.belief_tables,'posterior',None) is not None
+        and c.trackers.belief_mask is not None)
+
+
+def posterior_move_hard(c,state,side,move_id,use):
+    """Pursuit's tagged move declaration, evaluated without committing its public writes."""
+    evidence=Context(c.trackers,c.belief_tables,c.port_tables)
+    move(evidence,state,side,move_id,use,pp_use=True,from_tag=True)
+    return evidence.trackers.belief_mask
+
+
+def set_posterior_strike(c,state,side,move,caller_move,critical,hits_sub,endured,dealt,hp_before,hp_after,num,den,use,
+                         *,pursuit=False,hit_by=None,hard_mask=None):
+    """Narrowing A at one damage reveal: side's move hit the other side's active (device_set_posterior.in_tree). An
+    admitted strike's fitting variants narrow the attacker's standing pin (narrow_pin) and refresh it, as B2 installs
+    set_posterior's support. Reads only operands the step already computed; no draw."""
+    if not set_posterior_enabled(c):return c
+    from . import device_set_posterior
+    trackers,_=device_set_posterior.in_tree(c.trackers,c.belief_tables,state,side,move,caller_move,critical,hits_sub,
+        endured,dealt,hp_before,hp_after,num,den,use,pursuit=pursuit,hit_by=hit_by,hard_mask=hard_mask)
+    return c._replace(trackers=trackers)
+
+
 def negative_hp_line(c,state,side,use,*,source_class):
     # Called before observe at each actual HP-line cutpoint. The shared hp_line
     # hook composes this notification with observer-relative damage history.

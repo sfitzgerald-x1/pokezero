@@ -157,6 +157,15 @@ class DigestAndRuleTests(unittest.TestCase):
         self.assertTrue((named['state.new'] == -1).all())
         self.assertEqual(named['trackers.public_order'][2, 1].tolist(), list(range(6)))       # declared identity, not lane 0
         self.assertTrue((named["trackers.mon_features['wrap_trap_turns']"] == 0).all())
+        history = 'trackers.type_changed'
+        template[history] = np.ones((1, 2), bool)
+        migrated, filled = migrate(['state.a', 'actions'], leaves, template, defaults=defaults)
+        self.assertIn(history, filled)
+        np.testing.assert_array_equal(migrated[history], np.zeros((3, 2), bool))
+        captured = np.asarray([[True, False], [True, True], [False, True]])
+        migrated, filled = migrate(['state.a', 'actions', history], leaves + [captured], template, defaults=defaults)
+        self.assertNotIn(history, filled)
+        np.testing.assert_array_equal(migrated[history], captured)
         with self.assertRaises(MigrationError):migrate(['state.a', 'actions'], [leaves[0].astype(np.int16), leaves[1]], template, defaults=defaults)
         with self.assertRaises(MigrationError):migrate(['state.a', 'actions'], [np.ones((3, 3), np.int32), leaves[1]], template, defaults=defaults)
         with self.assertRaises(MigrationError):migrate(['state.a', 'actions', 'state.gone'], leaves + [leaves[0]], template, defaults=defaults)
@@ -947,6 +956,36 @@ class EffectAndResidualRuleTests(unittest.TestCase):
         self.assertEqual(code, 1);self.assertIn('state.effect_draws', report['uninvolved_leaves'])
         code, report, _ = self.patched('effect-unsaved', clocked(pending_step, even))   # deferred lanes left at zero
         self.assertEqual(code, 1);self.assertIn('state.effect_draws', report['uninvolved_leaves'])
+
+    def test_strict_baseline_reports_saved_draw_changes_on_done_lanes(self):
+        import jax.numpy as j
+        from gpu_engine import v2e_regress as regress
+
+        def save_cure(state, actions, trackers):
+            out = pending_step(state, actions, trackers)
+            after = out.step.state
+            return result(after._replace(shed_skin_draws=saved_cure_block(state, after)), out.trackers)
+
+        def change_done(state, actions, trackers):
+            out = save_cure(state, actions, trackers)
+            after = out.step.state
+            draws = after.effect_draws.at[:, 0, 4].add(j.asarray(state.done, after.effect_draws.dtype))
+            return result(after._replace(effect_draws=draws), out.trackers)
+
+        args = TwoPassTests.args.__func__
+        base = self.tmp / 'strict-base'
+        prepared = (self.context, self.new)
+        self.assertEqual(regress.base_pass(args(type(self), out=base, pad_lanes=self.LANES),
+            step_override=clocked(save_cure, even), prepared=prepared), 0)
+        out = self.tmp / 'strict-done'
+        code = regress.patched_pass(args(type(self), out=out, base=base, pr='none', strict_baseline=True,
+            faint_clear=False, integration='HEAD', allow_base_mismatch=False), step_override=clocked(change_done, even),
+            prepared=prepared)
+        report = json.loads((out / 'report.json').read_text())
+        self.assertEqual(code, 1)
+        self.assertEqual(report['failures'], 2)
+        self.assertEqual(report['counts']['done_skipped'], 0)
+        self.assertEqual(report['uninvolved_leaves'], {'state.effect_draws': 2})
 
     def test_a_phase_shift_changes_the_saved_effect_block_only_by_the_derivation(self):
         """M1 GPU pass (2 lanes of 1.1M): once the base pass has state.effect_draws it is compared bitwise, and a

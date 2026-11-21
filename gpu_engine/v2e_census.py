@@ -33,22 +33,22 @@ import numpy as np
 
 SCHEMA = 'pokezero.v2e-census.v1'
 # transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1, A2, R, B, M1, M2, R1, WH and R2).
-SPAN = (470, 2988)
+SPAN = (470, 3017)
 # (phase, first line, last line, group). 'pre' is the host-side argument checks; boundary statements open the next phase.
 PHASES = (
     ('pre', 470, 615, 'pre'),
     ('A', 616, 677, 'A'),      # request kind, validity, resuming draws, key split, age, initialize, Lum
-    ('B', 678, 712, 'B'),      # speeds, switches, saved actor, slot, Struggle, charge, recharge, Focus Punch preparation
-    ('C', 713, 778, 'C'),      # Pursuit per side
-    ('D', 779, 912, 'D'),      # switch order, Baton, depart/install/enter, forced replacement entries, post-switch Lum
-    ('E0', 913, 935, 'E'),     # ordering
-    ('E1', 936, 1166, 'E'),     # per action: pre-move (the recharge turn included)
-    ('E2', 1167, 1571, 'E'),    # damage
-    ('E3', 1572, 2223, 'E'),   # effects (Perish Song, Yawn, the Substitute's trap release and Wrap's trap included)
-    ('E4', 2224, 2380, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
-    ('F1', 2381, 2496, 'F'),   # defer/ready, end speeds, Wish, weather
-    ('F2', 2497, 2895, 'F'),   # residual events (argsort at 2504, the 14-event loop at 2505), the Perish pass, White Herb's order 29 and the recharge tick
-    ('G', 2896, 2988, 'G'),    # end of turn
+    ('B', 678, 716, 'B'),      # speeds, switches, saved actor, slot, Struggle, charge, recharge, Focus Punch preparation
+    ('C', 717, 797, 'C'),      # Pursuit per side
+    ('D', 798, 931, 'D'),      # switch order, Baton, depart/install/enter, forced replacement entries, post-switch Lum
+    ('E0', 932, 957, 'E'),     # ordering
+    ('E1', 958, 1188, 'E'),     # per action: pre-move (the recharge turn included)
+    ('E2', 1189, 1600, 'E'),    # damage
+    ('E3', 1601, 2252, 'E'),   # effects (Perish Song, Yawn, the Substitute's trap release and Wrap's trap included)
+    ('E4', 2253, 2409, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
+    ('F1', 2410, 2525, 'F'),   # defer/ready, end speeds, Wish, weather
+    ('F2', 2526, 2924, 'F'),   # residual events (argsort at 2533, the 14-event loop at 2534), the Perish pass, White Herb's order 29 and the recharge tick
+    ('G', 2925, 3017, 'G'),    # end of turn
 )
 GROUPS = ('A', 'B', 'C', 'D', 'E', 'F', 'G')
 GROUP = {name: group for name, _, _, group in PHASES}
@@ -58,29 +58,29 @@ ANCHORS = {
     616: 'rows = jnp.arange(state.hp.shape[0])',
     678: '# All action speeds are frozen before ordinary switches.',
     680: 'speed = _speeds(work,table)',
-    713: 'pursuit_used = jnp.zeros_like(switches)',
-    779: 'bench = bench_indices(state.active)',
-    912: 'else:work = _lum_update(work,table,live,_device_public=_device_public)',
-    913: 'priority = table.priority[moves]',
-    936: 'for order in range(2):',
-    937: '_faint_before_hp=work.hp',
-    1167: 'attack_stats = _active(work.stats, work, side)',
-    1572: 'if table.effects is not None:',
-    2224: '# Gen3 applies contact DamagingHit',
-    2326: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
-    2381: 'turn_context = live & (~replacement | state.pending_residual)',
-    2497: 'event_sides = jnp.array(residual_order.EVENT_SIDES)',
-    2504: 'event_order = jnp.argsort(event_keys,axis=1)',
-    2505: 'for order in range(residual_order.EVENTS):',
-    2520: 'if _status_residual_context is not None:',
-    2896: 'work=linking.prune(work)',
-    2979: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
-    2988: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
+    717: 'pursuit_used = jnp.zeros_like(switches)',
+    798: 'bench = bench_indices(state.active)',
+    931: 'else:work = _lum_update(work,table,live,_device_public=_device_public)',
+    932: 'priority = table.priority[moves]',
+    958: 'for order in range(2):',
+    959: '_faint_before_hp=work.hp',
+    1189: 'attack_stats = _active(work.stats, work, side)',
+    1601: 'if table.effects is not None:',
+    2253: '# Gen3 applies contact DamagingHit',
+    2355: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
+    2410: 'turn_context = live & (~replacement | state.pending_residual)',
+    2526: 'event_sides = jnp.array(residual_order.EVENT_SIDES)',
+    2533: 'event_order = jnp.argsort(event_keys,axis=1)',
+    2534: 'for order in range(residual_order.EVENTS):',
+    2549: 'if _status_residual_context is not None:',
+    2925: 'work=linking.prune(work)',
+    3008: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
+    3017: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
 }
 # Iteration rules over lines in program order (the scratch census's): an E1..E4 line <= E_RESTART after one >= E_LATE
 # starts the second action; in F2 a line <= F2_HEAD after one > F2_BODY starts the next of the 14 residual events.
-E_LATE, E_RESTART = 2242, 1024
-F2_LOOP, F2_HEAD, F2_BODY = 2505, 2520, 2535
+E_LATE, E_RESTART = 2271, 1046
+F2_LOOP, F2_HEAD, F2_BODY = 2534, 2549, 2564
 # Design boundaries: the phase label whose first equation each one is (b0: the first step_with_chance equation; b8: the end).
 BOUNDARIES = (('b0', 'A'), ('b1', 'B'), ('b2', 'D'), ('b3', 'E0'), ('b4', 'E1.0'), ('b5', 'E1.1'), ('b6', 'F1'), ('b7', 'G'), ('b8', 'END'))
 TRACKERS = {'engine_device_public_hooks', 'engine_device_trackers', 'engine_device_public_port', 'engine_device_visible_belief',
