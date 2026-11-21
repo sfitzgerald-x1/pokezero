@@ -62,7 +62,8 @@ class DomainGateTests(unittest.TestCase):
                 self.assertEqual(pins.domain_digest(names, read), old)
         for (file, var), (holder, listing) in pins.DOMAIN_TABLES.items():
             with self.subTest(table=f'{file}:{var}'):
-                names = pins.modules(holder, listing, show(CHANGE, f'gpu_engine/{holder}').decode())
+                names = pins.modules(holder, listing, show(BASE, f'gpu_engine/{holder}').decode())
+                self.assertEqual(pins.modules(holder, listing, show(CHANGE, f'gpu_engine/{holder}').decode()), names)
                 at_change = pins.table(file, var, show(CHANGE, f'gpu_engine/{file}').decode())
                 self.assertEqual(list(at_change.items()), [(n + '.py', hashlib.sha256(base[n]).hexdigest()) for n in names])
 

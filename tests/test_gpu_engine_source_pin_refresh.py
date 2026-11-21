@@ -104,6 +104,48 @@ class SourcePinRefreshTests(unittest.TestCase):
             self.assertEqual(run('--root', str(root))[0], 0)
             self.assertEqual(law.read_text(), text)
 
+    def test_noncanonical_assignment_spacing_cannot_hide_a_table(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = scratch_engine(scratch)
+            path = root/'gpu_engine'/'chance_consumers_pins.py'
+            text = path.read_text()
+            match = refresh._pins(text, 'DOMAIN_PINS')
+            path.write_text(text[:match.start()] + 'DOMAIN_PINS=' + repr(pins.table(path.name, 'DOMAIN_PINS', text))
+                            + text[match.end():])
+            code, out = run('--root', str(root), '--check')
+            self.assertEqual(code, 1)
+            self.assertIn('FORMAT chance_consumers_pins.py: DOMAIN_PINS', out)
+            self.assertEqual(run('--root', str(root))[0], 0)
+            self.assertEqual(path.read_text(), text)
+
+    def test_missing_or_duplicate_table_definition_refuses_without_writing(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = scratch_engine(scratch)
+            path = root/'gpu_engine'/'chance_consumers_pins.py'
+            text = path.read_text()
+            match = refresh._pins(text, 'DOMAIN_PINS')
+            for broken in (text[:match.start()] + text[match.end():], text + '\n' + match[0] + '\n'):
+                path.write_text(broken)
+                for flag in ((), ('--check',)):
+                    code, out = run('--root', str(root), *flag)
+                    self.assertEqual(code, 1)
+                    self.assertIn('TABLE chance_consumers_pins.py: DOMAIN_PINS', out)
+                    self.assertEqual(path.read_text(), broken)
+
+    def test_duplicate_domain_module_refuses_without_writing(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = scratch_engine(scratch)
+            path = root/'gpu_engine'/'conditional_law.py'
+            text = path.read_text()
+            broken = text.replace('KERNEL_MODULES = tuple("', 'KERNEL_MODULES = tuple("absorption ', 1)
+            self.assertNotEqual(broken, text)
+            path.write_text(broken)
+            for flag in ((), ('--check',)):
+                code, out = run('--root', str(root), *flag)
+                self.assertEqual(code, 1)
+                self.assertIn('LIST conditional_law.py: KERNEL_PINS', out)
+                self.assertEqual(path.read_text(), broken)
+
     def test_an_aggregate_literal_or_a_list_mismatch_is_refused_not_written(self):
         """Both are review decisions: a DOMAIN_SHA256 literal back from an older branch, or a per-module table that no
         longer names its module list (a module added or dropped on one side). --check names them; a refresh writes

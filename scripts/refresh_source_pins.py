@@ -19,8 +19,9 @@ should. The domain digests were once single DOMAIN_SHA256 / KERNEL_SHA256 litera
 domain edits changed on the same line. Problems --check reports besides stale values:
 - FORMAT: a single-line or unsorted table, or a per-module table out of its list's order (a refresh rewrites it);
 - AGGREGATE: a DOMAIN_SHA256 / KERNEL_SHA256 literal is back (from a branch older than per-module pins): remove it by hand;
-- LIST: a per-module table no longer names its module list exactly (a module added or dropped on one side): add or
-  drop the pin by hand. AGGREGATE and LIST are review decisions, so a refresh refuses to write while either stands.
+- LIST: a per-module table no longer matches its module list, or the module list contains duplicates;
+- TABLE: an expected table is missing, duplicated, or not a simple dict assignment, or a table is defined in the wrong file.
+AGGREGATE, LIST and TABLE issues require a review decision. A refresh refuses to write until they are resolved.
 
 usage: refresh_source_pins.py [--root ROOT] [--check]
   --check  write nothing; exit 1 and name every stale pin and every FORMAT, AGGREGATE or LIST problem.
@@ -32,22 +33,35 @@ from pathlib import Path
 import re
 import sys
 
-FILES = ('engine_source_frame_witness.py', 'chance_consumers_pins.py', 'phase_d_chance.py', 'ordinary_law.py',
-         'conditional_law.py')
-SORTED_DICTS = ('SOURCE_PINS', 'MAPPING_PINS')
+TABLES = {'engine_source_frame_witness.py': ('SOURCE_PINS',),
+          'chance_consumers_pins.py': ('SOURCE_PINS', 'DOMAIN_PINS'),
+          'phase_d_chance.py': ('SOURCE_PINS', 'DOMAIN_PINS'),
+          'ordinary_law.py': ('MAPPING_PINS', 'DOMAIN_PINS'),
+          'conditional_law.py': ('MAPPING_PINS', 'KERNEL_PINS')}
+FILES = tuple(TABLES)
 # per-module tables: (file, dict) -> (file holding its module list, list name)
 LISTED = {('chance_consumers_pins.py', 'DOMAIN_PINS'): ('chance_consumers.py', 'DOMAIN_MODULES'),
           ('phase_d_chance.py', 'DOMAIN_PINS'): ('phase_d_chance.py', 'DOMAIN_MODULES'),
           ('ordinary_law.py', 'DOMAIN_PINS'): ('chance_consumers.py', 'DOMAIN_MODULES'),
           ('conditional_law.py', 'KERNEL_PINS'): ('conditional_law.py', 'KERNEL_MODULES')}
-PIN_DICTS = SORTED_DICTS + ('DOMAIN_PINS', 'KERNEL_PINS')
+PIN_DICTS = ('SOURCE_PINS', 'MAPPING_PINS', 'DOMAIN_PINS', 'KERNEL_PINS')
 AGGREGATES = ('DOMAIN_SHA256', 'KERNEL_SHA256')
 ROUNDS = 10
 
 
 def _pins(text, var):
     """The `VAR = {...}` dict literal's match (one line or one entry per line; pin dicts hold no braces)."""
-    return re.search(rf'^{var} = (\{{[^{{}}]*\}})$', text, re.M)
+    return re.search(rf'^{var}[ \t]*=[ \t]*(\{{[^{{}}]*\}})[ \t]*$', text, re.M)
+
+
+def assignments(text):
+    """Top-level assignment names, with repeats preserved."""
+    for node in ast.parse(text).body:
+        targets = node.targets if isinstance(node, ast.Assign) else (
+            [node.target] if isinstance(node, (ast.AnnAssign, ast.AugAssign)) else [])
+        for target in targets:
+            if isinstance(target, ast.Name):
+                yield target.id
 
 
 def _modules(text, name):
@@ -72,27 +86,37 @@ def order_of(texts, engine, name, var):
     return modules
 
 
+def names_match(pins, order):
+    return order is None or len(order) == len(pins) and set(pins) == {m + '.py' for m in order}
+
+
 def problems(texts, engine):
-    """[(kind, file, detail)] for kind FORMAT, AGGREGATE or LIST over the pin-holding files' texts."""
+    """Check table definitions, module lists and canonical spelling before writing."""
     found = []
-    for name, text in texts.items():
-        found += [('AGGREGATE', name, var) for var in AGGREGATES if re.search(rf'^{var} = ', text, re.M)]
+    for name, text in {**texts, 'chance_consumers.py': (engine/'chance_consumers.py').read_text()}.items():
+        assigned = list(assignments(text))
+        found += [('AGGREGATE', name, var) for var in AGGREGATES if var in assigned]
         for var in PIN_DICTS:
+            if var not in TABLES.get(name, ()):
+                if var in assigned:
+                    found.append(('TABLE', name, f'{var} is defined in the wrong file'))
+                continue
             match = _pins(text, var)
-            if match:
-                pins, order = ast.literal_eval(match.group(1)), order_of(texts, engine, name, var)
-                if order is not None and set(pins) != {m + '.py' for m in order}:
-                    found.append(('LIST', name, f'{var} does not name {LISTED[(name, var)][1]} exactly'))
-                elif match.group(1) != canonical(pins, order):
-                    found.append(('FORMAT', name, var))
+            if assigned.count(var) != 1 or not match:
+                found.append(('TABLE', name, f'{var} needs exactly one simple dict assignment'))
+                continue
+            pins, order = ast.literal_eval(match.group(1)), order_of(texts, engine, name, var)
+            if not names_match(pins, order):
+                found.append(('LIST', name, f'{var} does not name {LISTED[(name, var)][1]} exactly'))
+            elif match.group(0) != f'{var} = {canonical(pins, order)}':
+                found.append(('FORMAT', name, var))
     return found
 
 
-def refreshed(engine):
+def refreshed(engine, original):
     """{file: (old text, refreshed text)} at the fixed point, computed in memory; and the rounds it took. A per-module
     table with LIST drift is left as it is (problems() reports it; main() refuses to write)."""
-    texts = {name: (engine/name).read_bytes().decode('utf-8') for name in FILES}
-    original = dict(texts)
+    texts = dict(original)
 
     def sha(name):
         return hashlib.sha256(texts[name].encode('utf-8') if name in texts else (engine/name).read_bytes()).hexdigest()
@@ -101,12 +125,13 @@ def refreshed(engine):
         changed = False
         for name in FILES:
             text = texts[name]
-            for var in PIN_DICTS:
+            for var in TABLES[name]:
                 match = _pins(text, var)
                 if match:
                     pins, order = ast.literal_eval(match.group(1)), order_of(texts, engine, name, var)
-                    if order is None or set(pins) == {m + '.py' for m in order}:
-                        text = text[:match.start(1)] + canonical({key: sha(key) for key in pins}, order) + text[match.end(1):]
+                    if names_match(pins, order):
+                        rows = canonical({key: sha(key) for key in pins}, order)
+                        text = text[:match.start()] + f'{var} = {rows}' + text[match.end():]
             if text != texts[name]:
                 texts[name] = text
                 changed = True
@@ -132,9 +157,14 @@ def main(argv=None):
     parser.add_argument('--check', action='store_true', help='write nothing; exit 1 on any stale pin or problem')
     args = parser.parse_args(argv)
     engine = args.root / 'gpu_engine'
-    result, rounds = refreshed(engine)
+    original = {name: (engine/name).read_bytes().decode('utf-8') for name in FILES}
+    found = problems(original, engine)
+    if any(kind == 'TABLE' for kind, _, _ in found):
+        for kind, name, detail in found:
+            print(f'{kind} {name}: {detail}')
+        return 1
+    result, rounds = refreshed(engine, original)
     differing = {name: stale(old, new) for name, (old, new) in result.items() if old != new}
-    found = problems({name: old for name, (old, _) in result.items()}, engine)
     if args.check:
         for name, entries in differing.items():
             if entries:
