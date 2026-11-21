@@ -21,6 +21,15 @@ from .s0_transfer_roster import (
 MAX_REQUESTS = 250
 JOIN_SECONDS = 900
 WARMUP_OFFSET = 5000
+BRIDGE_SOURCES = (
+    "battle_bridge.mjs",
+    "battle_bridge_boundary_requests.mjs",
+    "battle_bridge_reference_rest.mjs",
+    "battle_bridge_reference_sleep.mjs",
+    "battle_bridge_reference_trace.mjs",
+    "battle_bridge_witness_port.mjs",
+)
+FOUL_PLAY_CAP_REASON = "RuntimeError: owning game round cap without actual owner terminal"
 
 
 def scratch_label_vocabulary(source, expected_source_hash):
@@ -258,18 +267,24 @@ def wait_for(path, message, *, peer_terminal=None):
     return json.loads(path.read_bytes())
 
 
+def pack_bridge(path):
+    """Bundle the sources needed to start the staged Showdown bridge."""
+    source = Path(__file__).resolve().parents[2] / "scripts"
+    with zipfile.ZipFile(path, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name in BRIDGE_SOURCES:
+            archive.writestr(name, (source / name).read_bytes())
+
+
 def install_bridge(path, expected_sha):
     """Restore the small hash-bound Node sources omitted by the launcher archive."""
-    names = {"battle_bridge.mjs", "battle_bridge_reference_rest.mjs", "battle_bridge_reference_sleep.mjs",
-             "battle_bridge_reference_trace.mjs", "battle_bridge_boundary_requests.mjs"}
     if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha:
         raise ValueError("staged bridge source changed")
     dest = Path(__file__).resolve().parents[2] / "scripts"
     dest.mkdir(exist_ok=True)
     with zipfile.ZipFile(path) as archive:
-        if set(archive.namelist()) != names or len(archive.namelist()) != len(names):
+        if sorted(archive.namelist()) != list(BRIDGE_SOURCES):
             raise ValueError("unexpected bridge source inventory")
-        for name in names:
+        for name in BRIDGE_SOURCES:
             blob = archive.read(name)
             p = dest / name
             if p.exists():
@@ -362,6 +377,12 @@ def showdown_h2h(prepared, model, manifest, cells, *, replica):
         yield cell, status, witness
 
 
+def foulplay_failure(cell, status, reason):
+    if reason == FOUL_PLAY_CAP_REASON:
+        status = "CAPPED"
+    return cell, status, {"reason": reason}
+
+
 async def showdown_fp(prepared, model, manifest, cells, *, publish, replica):
     from .env import BattleStartOverride
     from .foulplay_bridge import ControlledFoulPlayConfig, run_controlled_foulplay_benchmark
@@ -416,7 +437,7 @@ async def showdown_fp(prepared, model, manifest, cells, *, publish, replica):
                 raise
             except (ValueError, RuntimeError, TimeoutError, OSError) as error:
                 status = "REFUSED" if isinstance(error, ValueError) else "FAILED"
-                return cell, status, dict(reason=f"{type(error).__name__}: {error}")
+                return foulplay_failure(cell, status, f"{type(error).__name__}: {error}")
             game, = panel.games
             fp_seed, = panel.foulplay_random_seed_schedule
             raw = dict(seed=game.seed, fp_seed=fp_seed, source_game=game.to_dict())
@@ -425,10 +446,7 @@ async def showdown_fp(prepared, model, manifest, cells, *, publish, replica):
                                     packed_birth_callback=verify_birth)
             raw = panel["rows"][0]
             if raw["status"] != "COMPLETE":
-                status = raw["status"]
-                if raw["reason"] == "RuntimeError: owning game round cap without actual owner terminal":
-                    status = "CAPPED"
-                return cell, status, dict(reason=raw["reason"])
+                return foulplay_failure(cell, raw["status"], raw["reason"])
         witness = raw["source_game"]["terminal_witness"]
         if len(birth) != 1:
             raise ValueError("completed Foul Play cell lacks one verified native birth")
