@@ -744,7 +744,7 @@ class RowStore:
 
     def keys(self):
         """Host (stream, frame, owner) address of every row."""
-        get = lambda name: np.asarray(jax.device_get(self.arrays[name][:self.n]))
+        get = lambda name: np.asarray(jax.device_get(self.arrays[name]))[:self.n]
         return np.stack([get('streams'), get('frames'), get('owners')], axis=1)
 
     def to_numpy(self):
@@ -817,8 +817,11 @@ def finalize(result, *, loss_config, discount=1.):
         n = sum(c for _, c in result.segments)
         rows = Rows(*(j.concatenate([getattr(seg, name)[:c] for seg, c in result.segments], axis=0) for name in Rows._fields))
     if n == 0:raise ValueError('no valid actual learner decisions')
-    small = jax.device_get(dict(games=rows.games[:n], owners=rows.owners[:n], positions=rows.positions[:n],
-        values=rows.value_estimates[:n], streams=rows.streams[:n], frames=rows.frames[:n]))
+    # Transfer fixed-shape buffers and trim on the host. Slicing on device
+    # specializes JAX primitives to each rank's actual number of valid rows.
+    small = jax.device_get(dict(games=rows.games, owners=rows.owners, positions=rows.positions,
+        values=rows.value_estimates, streams=rows.streams, frames=rows.frames))
+    small = {name: np.asarray(value)[:n] for name, value in small.items()}
     games = np.asarray(small['games']).astype(np.int64);owners = np.asarray(small['owners']).astype(np.int64)
     position = np.asarray(small['positions']).astype(np.int64)
     trajectory = games * 2 + owners
@@ -832,18 +835,22 @@ def finalize(result, *, loss_config, discount=1.):
     if len(np.unique(keys, axis=0)) != n:raise ValueError('duplicate actual decision address')
     eligible = complete[games] & ~bad[games, owners]
     outcome_host = np.where(winner[games] == 2, 0., np.where(winner[games] == owners, 1., -1.)).astype(np.float32)
-    advantage = np.zeros(n, np.float32);value_target = np.zeros(n, np.float32)
+    capacity = rows.games.shape[0]
+    advantage = np.zeros(capacity, np.float32);value_target = np.zeros(capacity, np.float32)
     if eligible.any():
         selected = np.flatnonzero(eligible);_, compact_id = np.unique(trajectory[selected], return_inverse=True)
         last_reward = np.zeros(compact_id.max() + 1, np.float32);last_reward[compact_id] = outcome_host[selected]
         a, target = trajectory_gae(np.asarray(small['values'])[selected], compact_id, position[selected], last_reward,
             discount=discount, policy_lambda=loss_config.policy_lambda, value_lambda=loss_config.value_lambda)
         advantage[selected] = a;value_target[selected] = target
-    outcome, om, end, end_mask, survival, codes = _terminal_rows(rows.games[:n], rows.owners[:n], rows.physical[:n],
+    outcome, om, end, end_mask, survival, codes = _terminal_rows(rows.games, rows.owners, rows.physical,
         j.asarray(status), j.asarray(winner), j.asarray(fraction))
+    ppo_mask = np.zeros(capacity, bool)
+    ppo_mask[:n] = eligible
+    ppo_mask = j.asarray(ppo_mask)
     arrays = {name: getattr(rows, name) for name in DIRECT_FIELDS}
-    arrays.update(ppo_advantages=j.asarray(advantage), ppo_advantage_mask=j.asarray(eligible),
-        ppo_value_targets=j.asarray(value_target), ppo_value_target_mask=j.asarray(eligible),
+    arrays.update(ppo_advantages=j.asarray(advantage), ppo_advantage_mask=ppo_mask,
+        ppo_value_targets=j.asarray(value_target), ppo_value_target_mask=ppo_mask,
         survival_targets=survival, final_hp_targets=end, pokemon_end_target_mask=end_mask,
         outcome_targets=outcome, outcome_target_mask=om, terminal_status=codes,
         streams=rows.streams, frames=rows.frames, owners=rows.owners, games=rows.games, turns=rows.turns)
