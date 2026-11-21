@@ -12,7 +12,7 @@ import numpy as np
 
 from pokezero.dex import normalize_id
 from pokezero.poke_engine_adapter import BattleSpec
-from .state import BattleState, empty_state, LEECH_SEED, DESTINY_BOND
+from .state import BattleState, empty_state, LEECH_SEED, DESTINY_BOND, ATTRACT
 
 PERISH=('perish1','perish2','perish3')   # Showdown never shows perish4 (the use prints a silent perish3)
 
@@ -32,6 +32,8 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
     residual decrements it before printing |-start|X|perishN, so the shown N is the remaining count after a residual;
     the protocol world writes 4 for the silent perish3 of the Song's own turn, phase_d_protocol_world._perish_counts) and
     encore to encore_move = the resolved lock with a placeholder count the protocol world replaces by its posterior draw.
+    Attract maps to ATTRACT; its source is the opposing active, including the
+    source-faint boundary restored by the protocol tail until replacement.
 
     ``arrays``: a host copy of ``empty_state(1, seed=seed)`` (device_public_world_state._empty_arrays with this seed's
     world_keys), or a zero-argument builder of one, called where ``empty_state`` would run (so a bad seed refuses after the
@@ -57,7 +59,7 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
         if side.force_switch or side.baton_passing or side.slow_uturn_move or side.switch_out_move_second_saved_move:
             reasons.append(f'deferred-or-replacement-phase:{seat}')
         if set(side.side_conditions)-{'spikes','protect','toxic_count'}:reasons.append(f'side-condition:{seat}')
-        held={'destinybond','encore',*PERISH} if held_volatiles else set()
+        held={'destinybond','encore','attract',*PERISH} if held_volatiles else set()
         if type(side.active_index) is int and 0<=side.active_index<len(side.pokemon) and side.pokemon[side.active_index].pre_transform is not None:
             held |= {'transformed','typechange'}
         if set(side.volatile_statuses)-{'leechseed','substitute','truant'}-held:reasons.append(f'volatile:{seat}')
@@ -142,6 +144,7 @@ def map_spec(spec, *, metadata, seed, turn, active_turns, happiness, dex=None, h
             arrays['substitute_hp'][0,seat,active]=side.substitute_health
             if 'leechseed' in side.volatile_statuses:arrays['volatile'][0,seat,active]|=LEECH_SEED
             if held_volatiles and 'destinybond' in side.volatile_statuses:arrays['volatile'][0,seat,active]|=DESTINY_BOND
+            if held_volatiles and 'attract' in side.volatile_statuses:arrays['volatile'][0,seat,active]|=ATTRACT
             for name in PERISH:
                 if held_volatiles and name in side.volatile_statuses:arrays['perish_counter'][0,seat,active]=int(name[-1])
             arrays['truant_loaf'][0,seat,active]='truant' in side.volatile_statuses

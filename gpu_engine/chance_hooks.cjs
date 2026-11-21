@@ -46,7 +46,8 @@ function validTape(c){
     &&(hasPhazing(c)?row(c.phazing,[60,60]):c.phazing===undefined)
     &&(hasEntryTies(c)?(row(c.entry_ties,[2,2])&&typeof c.resuming==='boolean'):
       c.entry_ties===undefined&&c.resuming===undefined)
-    &&(c.shed_skin===undefined||row(c.shed_skin,[100,100]));
+    &&(c.shed_skin===undefined||row(c.shed_skin,[100,100]))
+    &&(c.protect_stall_order===undefined||c.protect_stall_order===0||c.protect_stall_order===1);
 }
 function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',options={}) {
   const strictNoRng=options.strictNoRng===true;
@@ -71,8 +72,8 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
       return result;
     };
   }
-  function take(c,role,side,value){
-    const key=role+':'+side;if(used.has(key))return unknown('REPEATED_ROLE',key);
+  function take(c,role,side,value,key=role+':'+side){
+    if(used.has(key))return unknown('REPEATED_ROLE',key);
     used.add(key);audit({kind:'COUPLED',nonce:c.nonce,role,side,raw:value});return value;
   }
   function effectDraw(c,role,side,column){
@@ -114,6 +115,23 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
   let fieldEventId=null,runEventId=null;
   const singles=b=>b.gen===3&&b.sides?.length===2&&b.sides.every(s=>s?.active?.length===1);
   const active=(b,p)=>p?.side&&b.sides[p.side.n]===p.side&&p.side.active[0]===p;
+  const localPreparations=new Set(['focuspunch','counter','mirrorcoat']);
+  const silentVolatileExpiry=(b,h)=>{
+    const p=h.effectHolder,id=h.effect?.id;
+    return active(b,p)&&!p.fainted&&!h.callback&&h.end===p.removeVolatile
+      &&h.effect===gen3Dex?.conditions.get(id)&&!h.effect.onEnd
+      &&h.state===p.volatiles[id]&&Number.isInteger(h.state?.duration)&&h.state.duration>0
+      &&!h.state.linkedPokemon;
+  };
+  const localWish=(b,h)=>{
+    const p=h.effectHolder;
+    return active(b,p)&&!p.fainted&&h.order===7&&h.effect===gen3Dex?.conditions.get('wish')
+      &&!h.callback&&h.end===p.side.removeSlotCondition
+      &&h.endCallArgs?.[0]===p.side&&h.endCallArgs[1]===p&&h.endCallArgs[2]==='wish'
+      &&h.state?.isSlotCondition===true&&h.state===p.side.slotConditions[p.position].wish
+      &&(h.state.duration===1||h.state.duration===2)
+      &&!b.findEventHandlers(p,'TryHeal',p).length&&!b.findEventHandlers(p,'Heal',p).length;
+  };
   const ownUpdates={Ability:new Set(['magmaarmor','limber','insomnia','vitalspirit','immunity','owntempo','oblivious','waterveil']),
     Item:new Set(['lumberry','cheriberry','chestoberry','pechaberry','rawstberry','aspearberry','persimberry','leppaberry']),
     // Attract's Update only removes its holder's volatile if the source left;
@@ -420,6 +438,17 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
         const first=take(c,'move_tie',0,c.draws[0][0]);
         group.sort((a,b)=>(a.pokemon.side.n===first?-1:1));items.splice(start,2,...group);return;
       }
+      if(singles(battle)&&hasEntryTies(c)&&!c.resuming&&list===battle.queue.list&&group.length===2
+        &&group.every(x=>x.choice==='beforeTurnMove'&&x.order===5&&localPreparations.has(x.move?.id)
+          &&typeof x.move.beforeTurnCallback==='function'
+          &&x.move.beforeTurnCallback===gen3Dex?.moves.get(x.move.id).beforeTurnCallback
+          &&active(battle,x.pokemon)&&x.pokemon.hp>0
+          &&list.some(a=>a.choice==='move'&&a.pokemon===x.pokemon&&a.move?.id===x.move.id))
+        &&group[0].pokemon.side!==group[1].pokemon.side&&Number.isFinite(group[0].speed)&&group[0].speed===group[1].speed){
+        // Both choices are moves, so the ordinary switch-order coordinate is free.
+        const first=take(c,'before_turn_move_tie',0,c.draws[0][11],'switch_tie:0');
+        group.sort((a,b)=>a.pokemon.side.n===first?-1:1);items.splice(start,2,...group);return;
+      }
       if(singles(battle)&&group.length===2&&['switch','instaswitch'].includes(group[0].choice)
         &&group.every(x=>x.choice===group[0].choice&&active(battle,x.pokemon))
         &&group[0].pokemon.side!==group[1].pokemon.side){
@@ -442,6 +471,13 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
       }
       if(singles(battle)&&fieldEventId==='Residual'&&group.length===2
         &&group.every(h=>active(battle,h.effectHolder))&&group[0].effectHolder.side!==group[1].effectHolder.side){
+        if(group.every(h=>localWish(battle,h))){
+          // Slot countdowns are independent. An expiry heals only its own
+          // recipient, and both V2 folds record HP and Wish state by side.
+          group.sort((a,b)=>a.effectHolder.side.n-b.effectHolder.side.n);
+          items.splice(start,2,...group);
+          audit({kind:'INERT_WISH_TIE',nonce:c.nonce,sides:[0,1]});return;
+        }
         if(group.every(h=>h.effect?.id==='truant'&&h.order===27&&originalCallback(h,'Residual'))){
           audit({kind:'INERT_TRUANT_TIE',nonce:c.nonce});return;
         }
@@ -455,10 +491,22 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
           group.sort((a,b)=>a.effectHolder.side.n===first?-1:1);items.splice(start,2,...group);return;
         }
       }
-      // Same-holder residual countdowns (no callback, no onEnd: stall+protect, ...) commute;
-      // their order cannot change the battle, so keep it and audit the tie as inert.
-      if(group.every(x=>x.effectHolder&&x.effectHolder===group[0].effectHolder&&!x.callback&&x.end
-        &&x.state?.duration&&x.effect&&!x.effect.onEnd)){
+      // The panel replays both orders from the same request and checks the
+      // next boundary. Only the witnessed expiry group is eligible.
+      if(c.protect_stall_order!==undefined&&singles(battle)&&fieldEventId==='Residual'
+        &&group.length===3&&group.map(h=>h.effect?.id).sort().join(',')==='focuspunch,protect,stall'){
+        const protect=group.find(h=>h.effect.id==='protect'),stall=group.find(h=>h.effect.id==='stall');
+        const focus=group.find(h=>h.effect.id==='focuspunch');
+        if(protect.effectHolder===stall.effectHolder&&focus.effectHolder!==protect.effectHolder
+          &&group.every(h=>silentVolatileExpiry(battle,h))){
+          if(c.protect_stall_order===1){group.reverse();items.splice(start,end-start,...group);}
+          audit({kind:'PROTECT_STALL_ORDER',nonce:c.nonce,order:c.protect_stall_order,
+            effects:group.map(h=>h.effect.id)});return;
+        }
+      }
+      // Callback-free local expiries commute across holders as well as within
+      // one holder (Protect/stall, Focus Punch, Counter and Mirror Coat).
+      if(singles(battle)&&fieldEventId==='Residual'&&group.every(h=>silentVolatileExpiry(battle,h))){
         audit({kind:'INERT_RESIDUAL_TIE',nonce:c.nonce,effects:group.map(x=>x.effect.id)});return;
       }
       if(group.length===2&&group.every(x=>x.effect?.id==='yawn'&&(x.effectHolder?.side?.n===0||x.effectHolder?.side?.n===1))

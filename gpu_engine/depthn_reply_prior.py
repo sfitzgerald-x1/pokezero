@@ -49,7 +49,7 @@ def host_stack(trees):
 
 
 class ReplyPrior:
-    def __init__(self, executor, evaluator, params=None, *, views=None, mode='eager', identity=None, self_moves=None):
+    def __init__(self, executor, evaluator, params=None, *, views=None, mode='eager', identity=None, self_moves=None, program_cache=None):
         """`evaluator`: the reply model (a champion_evaluator.ChampionEvaluator of the reply archive, or any callable
         (params, inputs) -> an object with policy_logits); `params` default evaluator.params; `mode` in VIEWS. `identity`: None, or
         the served archive's {archive_sha256, checkpoint_sha256, view}, echoed in every br_fp response's reply_prior record so the
@@ -70,6 +70,19 @@ class ReplyPrior:
             raise ValueError('identity: None or {archive_sha256, checkpoint_sha256, view} required')
         self.identity = None if identity is None else dict(identity)
         self.program = jax.jit(lambda p, x: evaluator(p, x));self._jitted = {}
+        self.program_cache = program_cache
+        self._compiled = {}
+
+    def _call(self, name, jit_program, args):
+        if self.program_cache is None:
+            return jit_program(*args)
+        from .depthn_aot import input_signature
+        signature = input_signature(args)
+        key = (name, signature)
+        if key not in self._compiled:
+            identity = ('reply', name, self.self_moves)
+            self._compiled[key], _, _ = self.program_cache.acquire(identity, lambda: jit_program, args, signature=signature)
+        return self._compiled[key](*args)
 
     def inputs(self, worlds, owner):
         """The peer encoder inputs of `worlds` (each with .state and .public), stacked in order: {key: array [W, ...]}."""
@@ -85,7 +98,8 @@ class ReplyPrior:
     def logits(self, worlds, owner):
         """The reply model's policy logits [W, 9] float32 for the root's worlds (the eager views)."""
         import jax
-        return np.asarray(jax.device_get(self.program(self.params, self.inputs(worlds, owner))).policy_logits, np.float32)
+        args = (self.params, self.inputs(worlds, owner))
+        return np.asarray(jax.device_get(self._call('eager', self.program, args)).policy_logits, np.float32)
 
     def jit_logits(self, worlds, owner):
         """The same logits from one jitted program: the views vmapped over the stacked worlds, then the reply model."""
@@ -97,7 +111,6 @@ class ReplyPrior:
         then device_get as float32: the batching pipeline's reply_forward='root' dispatches it in the device thread right after
         the price and fetches it in reduce (the same program on the same inputs: the same bits)."""
         import jax
-        import jax.numpy as jnp
         if any(w.state is None for w in worlds):raise ValueError('a priced root with an unconstructed world')
         if owner not in self._jitted:
             views, evaluator = self.views, self.evaluator
@@ -106,7 +119,8 @@ class ReplyPrior:
                 inputs = jax.tree.map(lambda x: x.reshape((x.shape[0] * x.shape[1],) + x.shape[2:]), inputs)
                 return evaluator(params, inputs).policy_logits
             self._jitted[owner] = jax.jit(program)
-        return self._jitted[owner](self.params, host_stack([w.state for w in worlds]), host_stack([w.public for w in worlds]))
+        args = (self.params, host_stack([w.state for w in worlds]), host_stack([w.public for w in worlds]))
+        return self._call(('jit', owner), self._jitted[owner], args)
 
     def warm(self, worlds):
         """Compile what a live root of these worlds' shapes runs, for both owner seats, before READY (a seat first compiled on

@@ -8130,7 +8130,7 @@ def _belief_for_species(
     return beliefs_by_species.get(_normalize_identifier(species))
 
 
-def _legal_action_mask(request: Mapping[str, Any] | None) -> tuple[bool, ...]:
+def _legal_action_mask(request: Mapping[str, Any] | None, *, allow_maybe_trapped: bool = False) -> tuple[bool, ...]:
     mask = [False] * ACTION_COUNT
     if not isinstance(request, Mapping) or request.get("wait"):
         return tuple(mask)
@@ -8146,7 +8146,7 @@ def _legal_action_mask(request: Mapping[str, Any] | None) -> tuple[bool, ...]:
                 if isinstance(move, Mapping) and not move.get("disabled", False):
                     mask[move_index] = True
 
-    if force_switch_requested or _switching_allowed(request):
+    if force_switch_requested or _switching_allowed(request, allow_maybe_trapped=allow_maybe_trapped):
         active_team_index = _active_team_index(_self_team_from_request(request, _request_side_id(request) or "p1"))
         team_size = _team_size_from_request(request)
         if active_team_index is not None and team_size >= 2:
@@ -8172,10 +8172,11 @@ def _request_kind(request: Mapping[str, Any] | None) -> str:
     return "unknown"
 
 
-def _switching_allowed(request: Mapping[str, Any]) -> bool:
+def _switching_allowed(request: Mapping[str, Any], *, allow_maybe_trapped: bool = False) -> bool:
     active_rows = request.get("active")
     active = active_rows[0] if isinstance(active_rows, list) and active_rows and isinstance(active_rows[0], Mapping) else None
-    if isinstance(active, Mapping) and (active.get("trapped") is True or active.get("maybeTrapped") is True):
+    if isinstance(active, Mapping) and (active.get("trapped") is True
+            or not allow_maybe_trapped and active.get("maybeTrapped") is True):
         return False
     return _request_kind(request) == "move"
 

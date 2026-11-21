@@ -28,13 +28,18 @@ SEED = 20261103
 
 
 class Detached:
-    """A detached root up to its own packet: materialize_protocol reads it only after both posterior checks."""
+    """Expose the preceding trap agreement; other own fields mark completion of both posterior checks."""
+    class Own(dict):
+        def __missing__(self, key):
+            raise ValueError('reached-after-posterior-checks')
+
     def __init__(self, address):
         self.address = address
+        self._own = self.Own(active=0, volatile=(0,) * 6)
 
     @property
     def own(self):
-        raise ValueError('reached-after-posterior-checks')
+        return self._own
 
 
 @requires_showdown('the protocol route needs the pinned gen3 randbats source and dex')
@@ -153,9 +158,10 @@ class ProtocolRoute(unittest.TestCase):
 
     def materialize(self, name, rows_of, start=None):
         """materialize_protocol on a real root and a start (default: its posterior-drawn world 0), with B2's posterior rows
-        rows_of(posts) and the own packet (Detached: 'reached-after-posterior-checks' once both posterior checks passed); the
+        rows_of(posts) and trap-free own agreement facts (Detached: other own reads raise 'reached-after-posterior-checks'); the
         tail facts, removals and preflight are patched clear."""
         data, root = self.root(name)
+        self.assertNotIn('ingrain', root.materialization_payload['sides'][f'p{root.address.owner+1}']['volatiles'])
         inputs = self.inputs(data)
         inputs = pw.ProtocolInputs(Detached(root.address), inputs.lines, inputs.catalog, {}, inputs.source)
         posts = self.posts(data)

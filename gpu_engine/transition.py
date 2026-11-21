@@ -704,8 +704,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         work=focusing.prepare(work,moves,table.focus_punch,ordinary=live & ~replacement,
             move_requests=(actions<4) & ~struggle)
         if _device_public is not None:
-            for _device_side in range(2):
-                device_public.move(_device_public,work,_device_side,moves[:,_device_side],
+            # Two move choices cannot use the ordinary switch-order draw.
+            # Keep it independent of the separate attack-order draw.
+            _focus_first=jnp.where(speed[:,0]==speed[:,1],draws[:,0,11],
+                (speed[:,1]>speed[:,0]).astype(jnp.int32))
+            for _device_side in (_focus_first,1-_focus_first):
+                device_public.move(_device_public,work,_device_side,moves[rows,_device_side],
                     live & ~replacement & ((_active(work.volatile,work,_device_side)&FOCUS_PUNCH)!=0),
                     pp_use=False,count_turn=False,preparation=True)
         if _lifecycle_trace:

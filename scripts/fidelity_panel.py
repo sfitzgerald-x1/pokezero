@@ -104,6 +104,60 @@ def protocol_completed(rows, expected):
     return len(rows) == expected and all(r['status'] != 'HARNESS_ERROR' for r in rows)
 
 
+def reference_step(env, actions, tape, control, audit):
+    control.write_text(json.dumps(tape))
+    failure = None
+    try:
+        env.step(actions)
+    except Exception as error:
+        failure = str(error)
+    finally:
+        control.unlink(missing_ok=True)
+    events = [json.loads(line) for line in audit.read_text().splitlines()] if audit.exists() else []
+    audit.unlink(missing_ok=True)
+    return events, failure
+
+
+def stall_state(battle):
+    def stall(mon):
+        state = mon.get('volatiles', {}).get('stall')
+        return [0, 0] if state is None else [state['counter'], state['duration']]
+    return [stall(side['pokemon'][0]) for side in battle['sides']]
+
+
+def compare_protect_stall_orders(first, second):
+    """Compare native teams and the public carry at the next request."""
+    def physical(snapshot):
+        return {key: value for key, value in snapshot.bridge_snapshot['battle'].items() if key != 'log'}
+
+    def public(snapshot):
+        lines = tuple(line for line in snapshot.protocol_lines if not line.startswith('|t:|'))
+        return snapshot.replay, lines, snapshot.latest_requests, snapshot.terminal
+
+    return dict(
+        stall=[stall_state(first.bridge_snapshot['battle']), stall_state(second.bridge_snapshot['battle'])],
+        state_equal=physical(first) == physical(second),
+        public_carry_equal=public(first) == public(second),
+    )
+
+
+def verify_protect_stall_orders(env, before, actions, tape, control, audit, initial):
+    first = env.snapshot()
+    env.restore(before)
+    events, failure = reference_step(env, actions, dict(
+        tape, nonce=tape['nonce'] + '/reverse-residual', protect_stall_order=1,
+    ), control, audit)
+    reversal = [row for row in events if row['kind'] == 'PROTECT_STALL_ORDER']
+    if (failure or any(row['kind'] == 'UNRESOLVED' for row in events) or len(reversal) != 1
+            or reversal[0]['effects'] != initial['effects'][::-1]):
+        return None, dict(error=failure or 'expected one reversed residual event', chance_audit=events)
+
+    second = env.snapshot()
+    proof = compare_protect_stall_orders(first, second)
+    proof['orders'] = [initial['effects'], reversal[0]['effects']]
+    return second, proof
+
+
 def run(a):
     tree = Path(a.tree).resolve();jax, j, np, F, transition = _engine(tree)
     blob = Path(a.team_pool).read_bytes();pool_sha = hashlib.sha256(blob).hexdigest()
@@ -168,22 +222,40 @@ def run(a):
                             if not native:row['status'] = 'NO_REFERENCE_REQUEST';break
                             row.pop('post_boundary', None);row.pop('native_log_tail', None)
                             row['pre_boundary'] = F.boundary_projection(state, snapshot, original, metadata['vocabulary'])
-                            tape = F.chance_tape(state, game, index, saved_effect);control.write_text(json.dumps(tape))
+                            tape = dict(F.chance_tape(state, game, index, saved_effect), protect_stall_order=0)
                             if not bool(np.asarray(state.pending_residual)[0]):saved_effect = tape['effect']
                             step = dict(index=index, showdown_actions=native, gpu_actions=actions.tolist(), identity_maps=maps, chance=tape)
-                            failure = None
-                            try:env.step(native)
-                            except Exception as error:failure = str(error)
-                            finally:control.unlink(missing_ok=True)
-                            events = [json.loads(line) for line in audit.read_text().splitlines()] if audit.exists() else []
+                            events, failure = reference_step(env, native, tape, control, audit)
                             step['chance_audit'] = events;step['reference_error'] = failure
-                            if audit.exists():audit.unlink()
                             row['steps'].append(step)
                             if any(e['kind'] == 'UNRESOLVED' for e in events):row['status'] = 'UNRESOLVED_CHANCE_ROLE';break
                             if failure:row['status'] = 'HARNESS_ERROR';break
+                            proved_snapshot = None
+                            candidates = [event for event in events if event['kind'] == 'PROTECT_STALL_ORDER']
+                            if candidates:
+                                if len(candidates) != 1:
+                                    row.update(status='UNRESOLVED_CHANCE_ROLE',
+                                               first_divergence=[dict(field='protect_stall_order', error='multiple groups')])
+                                    break
+                                proved_snapshot, proof = verify_protect_stall_orders(
+                                    env, snapshot, native, tape, control, audit, candidates[0])
+                                step['protect_stall_proof'] = proof
+                                if proved_snapshot is None or not (proof['state_equal'] and proof['public_carry_equal']
+                                                                  and proof['stall'][0] == proof['stall'][1]):
+                                    row.update(status='STATE_MISMATCH',
+                                               first_divergence=[dict(field='protect_stall_order', **proof)])
+                                    break
                             result = jax.block_until_ready(advance(state, actions));state = result.state
                             if bool(np.asarray(result.invalid_actions)[0]):row['status'] = 'GPU_INVALID_ACTION';break
-                            snapshot = env.snapshot();diff = F.compare(state, snapshot, original, metadata['vocabulary'])
+                            snapshot = env.snapshot() if proved_snapshot is None else proved_snapshot
+                            diff = F.compare(state, snapshot, original, metadata['vocabulary'])
+                            if proved_snapshot is not None:
+                                gpu_stall = [int(state.protect_counter[0, side, int(state.active[0, side])])
+                                             for side in (0, 1)]
+                                native_stall = [counter for counter, _ in proof['stall'][0]]
+                                proof['engine_counter'] = gpu_stall
+                                if native_stall != gpu_stall:
+                                    diff.append(dict(field='protect_stall_counter', showdown=native_stall, gpu=gpu_stall))
                             row['post_boundary'] = F.boundary_projection(state, snapshot, original, metadata['vocabulary'])
                             row['native_log_tail'] = snapshot.bridge_snapshot['battle'].get('log', [])[-80:]
                             if diff:row.update(status='STATE_MISMATCH', first_divergence=diff);break
