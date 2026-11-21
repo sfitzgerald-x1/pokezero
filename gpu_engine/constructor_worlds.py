@@ -1834,7 +1834,7 @@ def b2_view_check(forward,root_inputs,detached):
         return dict(equal=None,error=f'{type(error).__name__}: {error}')
 
 
-def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,opponent_actor=0,only_complete=False,root_prior='b2'):
+def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,opponent_actor=0,only_complete=False,root_prior='b2',child_opponent_actor=None):
     """Requests and pre-built worlds for `prepared` (prepare_roots' output for this constructor), for `pricer` (its executor
     gives the root view, its evaluator the root prior: on B2's encoding, else world 0's view, for root_prior 'b2'; on world
     0's view for 'world0') under the pricer-side `binding`. Every world's carry is completed first (a no-op on prepare_roots' worlds). ValueError on a binding mismatch
@@ -1848,6 +1848,8 @@ def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,op
     if isinstance(pricer.forward,evaluators.ChampionEvaluator):evaluators.check_binding(pricer.forward,constructor.catalog)
     if type(recipe)is not original.Recipe:raise ValueError('a random recipe (lane order) required')
     if any(type(x)is not int or not 0<=x<len(params)for x in(learner_actor,opponent_actor)):raise ValueError('verified actor index required')
+    if child_opponent_actor is not None and(type(child_opponent_actor)is not int or not 0<=child_opponent_actor<len(params)):
+        raise ValueError('verified child opponent actor index required')   # the opponent's actor below the root (None: opponent_actor)
     if root_prior not in ROOT_PRIORS:raise ValueError(f'root_prior in {ROOT_PRIORS} required, got {root_prior!r}')
     W=constructor.count
     if type(W)is not int or W<2 or W%2:raise ValueError('an even declared world budget required')
@@ -1905,7 +1907,7 @@ def build(constructor,prepared,pricer,params,*,binding,recipe,learner_actor=0,op
             starts=tuple(plans.Start(w.index,made.seeds[w.index],None,(),tuple(w.refusals))for w in pair)
             # No D3 source-fixture draw exists for a constructor world: its unknown source-fixture mass is not defined (NaN).
             p=plans.Plans(detached,True,starts,constructor.source.source_hash,constructor.source.source_rows_sha256,float('nan'))
-            rows.append(len(requests));requests.append(batch.Request(p,logits,legal,root_inputs,learner_actor,opponent_actor));pairs.append(pair)
+            rows.append(len(requests));requests.append(batch.Request(p,logits,legal,root_inputs,learner_actor,opponent_actor,child_opponent_actor));pairs.append(pair)
         roots.append(dict(base,status='PRICED',reason=None,rows=tuple(rows),root_logits=logits,root_legal=legal,root_value=value,root_view_world=first.index))
     return Batch(tuple(requests),dn.PrebuiltWorlds(SOURCE,built,tuple(pairs)),tuple(roots),W,K)
 

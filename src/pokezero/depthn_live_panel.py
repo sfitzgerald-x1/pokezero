@@ -163,6 +163,7 @@ KEYS={'schema','ladder_declaration_sha256','checkpoint_sha256','archive_sha256',
       'search_choice','foulplay_move_wall','actor','server_tree_commit'}
 ROOT_OPERATORS=('ARGMAX_MEAN_COMPLETED_Q','NOISE_GATED_K2')   # depthn_live_search.ROOT_OPERATORS: the declarable live root operators
 REPLY_PRIOR_KEYS={'archive_sha256','checkpoint_sha256','view','peer_view_b','union_guard','views'}   # optional: a br_fp screen's reply model
+REPLY_IDENTITY_FIELDS=('reply_archive_sha256','peer_view_b','reply_views','reply_below_root')
 ACTOR_KEYS={'cells_per_worker','warmup_decisions','search_overlaps_greedy','warm_p95_seconds','preflight_search_wall_p95_seconds','source'}
 SEARCH_CHOICE_KEYS={'arm','cell_commit','evidence','summary'}
 MOVE_WALL_SCHEMA='depthn-foulplay-panel.move-walls.v1'
@@ -243,24 +244,27 @@ def validate_reply_prior(value):
     on ('b' needs peer_view_b true, the server's own rule), and the union guard (automatic with a reply model) declared true. Every
     COMPLETE search must then carry it (reply_prior.reply_archive_sha256); without this key none may."""
     v=value
-    if (type(v)is not dict or set(v)!=REPLY_PRIOR_KEYS or not _hex(v['archive_sha256'])or not _hex(v['checkpoint_sha256'])
+    if (type(v)is not dict or set(v)not in (REPLY_PRIOR_KEYS,REPLY_PRIOR_KEYS|{'reply_below_root'})
+            or type(v.get('reply_below_root',False))is not bool or not _hex(v['archive_sha256'])or not _hex(v['checkpoint_sha256'])
             or v['view']not in ('b','env')or type(v['peer_view_b'])is not bool or (v['view']=='b')>v['peer_view_b']
             or v['union_guard']is not True or v['views']not in ('eager','jit')):
         raise ValueError('reply prior: archive and checkpoint sha256, view b (with peer_view_b) or env, union_guard true and views eager '
-                         'or jit required')
+                         'or jit required, with a boolean reply_below_root when present')
     return v
 
 
 def served_reply(response):
-    """(the reply model's archive sha256 a response names, or None; whether it was built with peer view b; its views mode or None)."""
+    """The response's archive, view b and views mode, plus the route when present. Legacy off receipts keep three fields."""
     reply=response.get('reply_prior')if isinstance(response.get('reply_prior'),dict)else {}
-    return reply.get('reply_archive_sha256'),'peer_view_b'in response,reply.get('views')
+    route=response.get('reply_below_root',False)
+    suffix=()if route is False else (True if route is True else 'invalid',)
+    return (reply.get('reply_archive_sha256'),'peer_view_b'in response,reply.get('views'))+suffix
 
 
 def declared_reply(d):
-    """(the declared reply archive sha256 or None; whether the declaration's searches are built with peer view b; views or None)."""
+    """The declared reply identity in the same format as served_reply."""
     reply=d.get('reply_prior')or {}
-    return reply.get('archive_sha256'),bool(reply.get('peer_view_b')),reply.get('views')
+    return (reply.get('archive_sha256'),bool(reply.get('peer_view_b')),reply.get('views'))+((True,)if reply.get('reply_below_root')is True else ())
 
 
 def validate_actor(value,deadline_seconds,reserve_seconds):
@@ -595,7 +599,7 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
         snapshot=SimpleNamespace(battle_id='probe-'+uuid.uuid4().hex,**{k:row[k]for k in ('owner','stream_id','generation','prefix_sha256','lines','own_request_line')})
         response=client.request(snapshot,decision_index=row['decision_index'],started=clock())
         tried.append({k:response.get(k)for k in ('request_id','status','cause','refusal','requested_worlds','root_operator',
-            'tree_commit','archive_sha256','pricer','client_wall_seconds')}|dict(zip(('reply_archive_sha256','peer_view_b','reply_views'),served_reply(response))))
+            'tree_commit','archive_sha256','pricer','client_wall_seconds')}|dict(zip(REPLY_IDENTITY_FIELDS,served_reply(response))))
         if response.get('client_refused')is False and response.get('archive_sha256')!=d['archive_sha256']:
             reason='server archive differs from the declared champion archive';break
         if response.get('client_refused')is False and response.get('tree_commit')!=d['server_tree_commit']:
@@ -604,7 +608,7 @@ def probe(run_directory,*,arm,server,capture,roots=5,tree_commit=None):
             good=(response.get('requested_worlds')==d['search'][arm]['worlds']and response.get('root_operator')==d['root_operator']
                 and (response.get('pricer')or {}).get('matmul_precision')==d['matmul_precision'])
             status,reason=('PASS',None)if good else('FAIL','COMPLETE response with another W, root operator or matmul precision')
-            if good and served_reply(response)!=declared_reply(d):status,reason='FAIL','COMPLETE response with another reply model or peer view'
+            if good and served_reply(response)!=declared_reply(d):status,reason='FAIL','COMPLETE response with another reply model, peer view or below-root route'
             break
         if response['cause']not in ('constructor_refused','depthn_refused','class_refused'):reason='refused: '+str(response['cause']);break
     value=dict(schema=PROBE_SCHEMA,arm=arm,server=server,capture=str(Path(capture).resolve()),status=status,reason=reason,tried=tried)

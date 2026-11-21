@@ -768,6 +768,27 @@ class ProbeTests(unittest.TestCase):
                 panel.probe(root, arm='DN2W8', server=dict(host='127.0.0.1', port=server.port), capture=self.capture)
         with self.assertRaisesRegex(ValueError, 'probe failed'): self.probe(answer(**served))   # a reply model the champion's screen never declared
 
+    def test_probe_checks_the_reply_route_and_keeps_legacy_declarations(self):
+        legacy, *_=make_run(Path(self.directory.name)/'legacy',reply=REPLY)
+        routed, *_=make_run(Path(self.directory.name)/'routed',reply=dict(REPLY,reply_below_root=True))
+        served=dict(reply_prior=dict(operator='br_fp',views='jit',reply_archive_sha256='d'*64),peer_view_b=dict(enabled=True))
+        for root,change,expected in ((legacy,{},True),(routed,{'reply_below_root':True},True),
+                                     (legacy,{'reply_below_root':True},False),(routed,{},False),
+                                     (routed,{'reply_below_root':1},False)):
+            reply=dict(served,**change)
+            def answer(request):
+                if request['schema']==live.BATTLE_END_SCHEMA:return dict(status='ENDED')
+                return champion_complete(request,**reply)
+            with self.subTest(root=root,change=change),actor_tests.FakeServer(actor_tests.send(answer))as server:
+                kwargs=dict(arm='DN2W8',server=dict(host='127.0.0.1',port=server.port),capture=self.capture)
+                if expected:
+                    tried=panel.probe(root,**kwargs)['tried'][0]
+                    self.assertEqual(tried.get('reply_below_root'),change.get('reply_below_root'))
+                else:
+                    with self.assertRaisesRegex(ValueError,'below-root route'):panel.probe(root,**kwargs)
+        with self.assertRaisesRegex(ValueError,'boolean reply_below_root'):
+            panel.validate_reply_prior(dict(REPLY,reply_below_root=1))
+
     def test_the_probe_budgets_by_the_declared_deadline(self):
         root, run, d, lad = make_run(Path(self.directory.name)/'ten', deadline=10.)
         with actor_tests.FakeServer(actor_tests.send(champion_complete)) as server:
@@ -1012,6 +1033,15 @@ class ReadoutTests(unittest.TestCase):
                 self.assertEqual(value['breakage'], breakage)
         populate(self.root, self.run, self.lad, rows_for=rows('d'*64))   # an undeclared reply model on the champion's own screen
         self.assertEqual(self.readout()['breakage'], ['search_provenance'])
+
+    def test_readout_records_mixed_below_root_routes_as_breakage(self):
+        root,run,_,lad=make_run(Path(self.directory.name)/'mixed',reply=dict(REPLY,reply_below_root=True))
+        cell=panel.cells(lad,'DN2W8',limit=500)[0]
+        rows=[decision_row(cell,i,reply='d'*64,view_b=True)for i in range(2)]
+        rows[0]['search']['reply_below_root']=True
+        write_cell(root,cell,run['declaration_sha256'],score=1.,rows=rows)
+        value=panel.readout(root,arm='DN2W8',limit=500)
+        self.assertIn('search_provenance',value['breakage'])
 
     def test_search_provenance_and_worlds_must_match_the_declaration(self):
         populate(self.root, self.run, self.lad)
