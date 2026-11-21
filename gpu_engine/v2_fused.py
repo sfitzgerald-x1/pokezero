@@ -150,14 +150,21 @@ def construct(context, backend, iteration, current, past, ordinal, *, shard=None
 
 def audit(store, blocks, out):
     """Compressed host copy of the audited blocks' rows (keys, targets and inputs)."""
+    if not blocks:
+        return []
     import jax
-    import jax.numpy as j
-    streams = np.asarray(jax.device_get(store.arrays['streams'][:store.n]))
+    import torch
+
+    streams = np.asarray(jax.device_get(store.arrays['streams']))[:store.n]
+    device = torch.from_dlpack(store.arrays['streams']).device
     written = []
     for index, lo, hi in blocks:
         rows = np.flatnonzero((streams >= lo) & (streams <= hi))
-        take = j.asarray(rows)
-        arrays = {name: np.asarray(jax.device_get(j.take(value[:store.n], take, axis=0))) for name, value in store.arrays.items()}
+        take = torch.as_tensor(rows, device=device)
+        # Match the trainer's DLPack handoff without compiling an XLA kernel
+        # for the varying number of valid or sampled rows.
+        arrays = {name: torch.from_dlpack(value).index_select(0, take).cpu().numpy()
+                  for name, value in store.arrays.items()}
         path = Path(out, f'audit-block-{index:06d}.npz');np.savez_compressed(path, **arrays)
         written.append(dict(block=index, streams=[int(lo), int(hi)], rows=int(len(rows)), path=str(path), bytes=path.stat().st_size))
     return written

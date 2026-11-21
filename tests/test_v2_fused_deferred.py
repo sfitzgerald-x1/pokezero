@@ -234,6 +234,32 @@ def run_four(root, attempt, **options):
 
 
 @unittest.skipIf(torch is None, 'torch required')
+class CollectorAuditTests(unittest.TestCase):
+    def test_empty_audit_does_not_touch_the_device_store(self):
+        self.assertEqual(v2_fused.audit(None, [], None), [])
+
+    @unittest.skipUnless(torch is not None, 'torch required')
+    def test_audit_gathers_only_valid_rows_without_jax_gather(self):
+        import jax.numpy as j
+        from gpu_engine.v2_collector import RowStore
+
+        arrays = dict(streams=j.array([3, 7, 5, 7], dtype=j.int32),
+                      mask=j.array([True, False, True, True]),
+                      values=j.array([[1., 2.], [3., 4.], [5., 6.], [7., 8.]], dtype=j.float32))
+        with tempfile.TemporaryDirectory() as directory, patch.object(j, 'take', side_effect=AssertionError):
+            for n, indices in ((3, [1, 2]), (2, [1])):
+                store = RowStore(arrays, n, {}, {})
+                sampled, empty = v2_fused.audit(store, [(1, 5, 7), (2, 8, 9)], directory)
+                self.assertEqual(sampled['rows'], len(indices))
+                self.assertEqual(empty['rows'], 0)
+                for report, expected in ((sampled, indices), (empty, [])):
+                    with np.load(Path(report['path']), allow_pickle=False) as written:
+                        self.assertEqual(set(written.files), set(arrays))
+                        for name, field in arrays.items():
+                            self.assertEqual(written[name].dtype, field.dtype)
+                            np.testing.assert_array_equal(written[name], np.asarray(field)[expected])
+
+
 class FusedDeferredTests(unittest.TestCase):
     def test_production_profile_freezes_after_first_commit_of_each_attempt(self):
         with tempfile.TemporaryDirectory() as directory:
