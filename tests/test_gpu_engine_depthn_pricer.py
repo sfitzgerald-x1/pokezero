@@ -291,6 +291,8 @@ class DepthNPricerTests(unittest.TestCase):
             self.assertEqual(backups.refusal_summary(routed)['refused_count'],backups.refusal_summary(root1)['refused_count'])   # the specs' own refusals
             if depth==2:   # the depth-2 pricer takes the same requests and agrees bit for bit (its own key carries the child rows)
                 reference=self.depth2(specs,requests,ex,k_own=2,k_opp=3,child_block=4);mine=dn.as_depth2_frame(routed)
+                self.assertEqual(reference.timing['evaluated_child_prior_forward_rows'],8*2*d2.LANES)
+                self.assertNotEqual(reference.timing['evaluated_child_prior_forward_rows'],reference.timing['evaluated_peer_forward_rows']*d2.LANES)
                 for name in d2.Depth2Frame.__dataclass_fields__:
                     if name in('world_reports','timing')or getattr(reference,name)is None:continue
                     np.testing.assert_array_equal(getattr(reference,name),getattr(mine,name),err_msg=name)

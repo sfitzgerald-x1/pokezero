@@ -41,6 +41,12 @@ class HelperTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'child opponent actor'):d2.check_child_actor(request(0,0,bad),('a','b'))
         d2.check_child_actor(request(0,0,1),('a','b'));d2.check_child_actor(request(0,0),('a',))
 
+    def test_routed_fixed_capacity_only_calls_the_active_group(self):
+        for actor in (0,1):
+            rows=d2.actor_rows([actor]*4,capacity=4,params=('a','b'),fixed_capacity=True,skip_unused=True)
+            self.assertEqual(tuple(map(len,rows)),(8,0)if actor==0 else(0,8))
+            np.testing.assert_array_equal(rows[actor],[0,1,2,3,8,8,8,8])
+
     def test_actor_rows_and_the_key_term(self):
         rows=d2.actor_rows([0,0,1,1,0,0],capacity=4,params=('a','b'))   # 3 requests x 2 worlds; actor 1 holds worlds 2 and 3
         self.assertEqual([len(r)for r in rows],[8,2]);np.testing.assert_array_equal(rows[0],[0,1,4,5,8,8,8,8]);np.testing.assert_array_equal(rows[1],[2,3])
@@ -57,19 +63,19 @@ class ServerTests(unittest.TestCase):
         with self.assertRaises(SystemExit),redirect_stderr(io.StringIO()):self.options(['--reply-below-root'])
         self.assertIs(self.options(REPLY+['--reply-below-root']).reply_below_root,True);self.assertIs(self.options(REPLY).reply_below_root,False)
 
-    def build(self,extra):
+    def build(self,extra,*,reply_heads=8):
         """build() on stand-ins (as test_depthn_live_server's build test): what make_pricers and DepthNLiveSearch were given."""
         import jax
         from gpu_engine import constructor_worlds as cw,device_public_teacher as teacher,engine_device_observation,phase_d_protocol_constructor as pc,transition
         from gpu_engine import depthn_reply_prior as rp
         made={};pricers={}
         stand_ins=((S,'matmul_precision',lambda:'highest'),(jax,'devices',lambda:[NS(platform='gpu')]),(pc,'load_inputs',lambda a:('catalog','source','metadata','config')),
-            (S.evaluators,'load_from_arguments',lambda a:NS(params='champion')),(pc,'ProtocolConstructor',lambda **kw:NS(**kw)),
+            (S.evaluators,'load_from_arguments',lambda a:NS(params='champion',config=NS(heads=8),precision='bfloat16')),(pc,'ProtocolConstructor',lambda **kw:NS(**kw)),
             (teacher,'make_executor',lambda *a,**k:'executor'),(transition,'tables_from_metadata',lambda m:'tables'),
             (engine_device_observation,'compile_tables',lambda m,catalog:'observation'),
             (S.live,'make_pricers',lambda executor,forward,params,**k:pricers.update(params=params)or'pricers'),
             (cw,'binding',lambda *a:'binding'),(S.live,'DepthNLiveSearch',lambda **kw:made.update(kw)or'search'),
-            (S.evaluators,'load',lambda path,**kw:NS(params='reply',meta=dict(extra=dict(view='b')))),
+            (S.evaluators,'load',lambda path,**kw:NS(params='reply',config=NS(heads=reply_heads),precision='bfloat16',meta=dict(extra=dict(view='b')))),
             (rp,'ReplyPrior',lambda executor,model,mode,identity:('reply-prior',executor,model.params,mode,identity)))
         args=self.options(extra)
         with ExitStack()as stack:
@@ -82,6 +88,11 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(pricers['params'],('champion',));self.assertNotIn('child_opponent_actor',made);self.assertEqual(made['reply'][0],'reply-prior')
         search=NS(tree_commit='t',rung='DN2W16',max_requests=1,min_price_seconds=1.,session_cap=256,refuse_classes=(),pricer_identity={})
         self.assertNotIn('reply_below_root',S.header(args,search))
+
+    def test_on_rejects_a_different_evaluator_configuration(self):
+        with self.assertRaisesRegex(ValueError,'matching champion and reply evaluator configurations'):
+            self.build(REPLY+['--reply-below-root'],reply_heads=16)
+        self.assertEqual(self.build(REPLY,reply_heads=16)[2]['params'],('champion',))
 
     def test_on_binds_the_reply_model_as_bank_entry_one_below_the_root(self):
         args,made,pricers=self.build(REPLY+['--reply-below-root'])

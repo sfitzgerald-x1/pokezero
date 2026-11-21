@@ -408,9 +408,10 @@ def routes_children(requests):
     return any(child_actor(r)!=r.opponent_actor for r in requests)
 
 
-def actor_rows(actors,capacity,params,*,fixed_capacity=False):
+def actor_rows(actors,capacity,params,*,fixed_capacity=False,skip_unused=False):
     """D3's archive-grouped rows over per-world actor indices [2*count]: actor 0 (and, under fixed_capacity, every actor) sized
-    2*capacity, the others the power of two over the largest history count; padding rows point at 2*capacity."""
+    2*capacity, the others the power of two over the largest history count; padding rows point at 2*capacity.
+    Routed requests can omit a wholly empty current or history group before tracing its forward."""
     actors=np.asarray(actors)
     counts=[int(np.count_nonzero(actors==actor))for actor in range(len(params))]
     history=max(counts[1:],default=0)
@@ -419,6 +420,7 @@ def actor_rows(actors,capacity,params,*,fixed_capacity=False):
     for actor in range(len(params)):
         indices=np.flatnonzero(actors==actor).astype(np.int32)
         size=2*capacity if actor==0 or fixed_capacity else history_size
+        if skip_unused and not (counts[0] if actor==0 else history):size=0
         padded=np.full(size,2*capacity,np.int32);padded[:len(indices)]=indices;rows.append(padded)
     return tuple(rows)
 
@@ -464,9 +466,11 @@ def pack_turn1(requests,worlds,recipe,capacity,params,*,k1_own=9,fixed_capacity=
     for i,r in enumerate(requests):
         order=recipe.pricing_order(r.plans.root.address,r.root_logits,r.root_legal)[:k1_own]
         data['order'][i]=order+(order[0],)*(9-len(order));data['order_size'][i]=len(order)
-    rows=lambda values:actor_rows(np.repeat(list(values),2),capacity,params,fixed_capacity=fixed_capacity)
+    routed=routes_children(requests)
+    def rows(actors):
+        return actor_rows(np.repeat(list(actors),2),capacity,params,fixed_capacity=fixed_capacity,skip_unused=routed)
     data['peer_rows']=rows(r.opponent_actor for r in requests);data['leaf_rows']=rows(r.learner_actor for r in requests)
-    if routes_children(requests):   # the turn-1 children's peer prior from another bank entry than the root's (child_opponent_actor)
+    if routed:   # the turn-1 children's peer prior from another bank entry than the root's (child_opponent_actor)
         data['child_peer_rows']=rows(child_actor(r)for r in requests)
     return data
 
@@ -546,7 +550,7 @@ class Depth2Pricer:
         work=dict(evaluated_root_slots=evaluated,evaluated_world_slots=2*evaluated,evaluated_joint_slots=2*LANES*evaluated,
             evaluated_peer_forward_rows=0 if output is None else sum(map(len,data['peer_rows'])),
             evaluated_leaf_forward_rows=0 if output is None else LANES*sum(map(len,data['leaf_rows'])),
-            evaluated_child_prior_forward_rows=0 if output is None else LANES*sum(map(len,data['peer_rows'])),
+            evaluated_child_prior_forward_rows=0 if output is None else LANES*sum(map(len,data.get('child_peer_rows',data['peer_rows']))),
             padding_root_slots=0 if output is None else evaluated-count,padding_world_slots=0 if output is None else 2*(evaluated-count),
             substituted_world_slots=0 if output is None else 2*count-len(available),
             pre_refused_available_worlds=0 if output is None else int(np.count_nonzero(frame['pre']>0)),

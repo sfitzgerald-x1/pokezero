@@ -131,6 +131,20 @@ class LiveSearchTests(unittest.TestCase):
             for p in self.pricers[8].values():stack.enter_context(patch.object(p, 'labels', gi.ability_labels))
             with self.assertRaisesRegex(ValueError, 'move catalog'):self.search(ability_guard=True)   # the fixture's metadata names no moves: at startup
 
+    def test_reply_routing_must_select_the_bound_reply_entry(self):
+        from gpu_engine.depthn_reply_prior import ReplyPrior
+        from tests.test_gpu_engine_depthn_guard_inputs import fake_labels
+        bank=CW.PARAMS[:2]
+        pricers=live.make_pricers(self.executor,self.evaluator,bank,worlds=8,buckets=(1,),block_lanes=81,blocks_per_call=4,labels=fake_labels)
+        reply=ReplyPrior(self.executor,self.evaluator,params=bank[1])
+        arguments=dict(constructor=self.cw.constructor(8,rung='DN2W8'),pricers=pricers,params=bank,binding=self.cw.binding,
+            recipe=self.cw.recipe,tree_commit=TREE)
+        for actor,prior in ((0,reply),(1,None),(1,ReplyPrior(self.executor,self.evaluator,params=object())),(2,reply),(True,reply)):
+            with self.subTest(actor=actor,prior=prior),self.assertRaisesRegex(ValueError,'select the bound reply prior'):
+                live.DepthNLiveSearch(**arguments,child_opponent_actor=actor,reply=prior)
+        exact=live.DepthNLiveSearch(**arguments,child_opponent_actor=1,reply=reply)
+        self.assertIs(exact._response('r',1)['reply_below_root'],True)
+
     def test_responses_name_the_root_priors_source_and_carry_b2_view(self):
         made,_=self.cw.wide_root(0,8)
         s=self.search(pricers=self.make_pricers(8,(1,),executor=CW.wide_executor()))

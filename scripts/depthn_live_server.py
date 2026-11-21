@@ -571,6 +571,8 @@ def build(args):
             expected_checkpoint_sha256=args.reply_checkpoint_sha256,precision=evaluators.PRECISIONS[args.champion_precision])
         check_reply_view(getattr(reply_model,'meta',None),args)
         refuse_search_serving(meta=getattr(reply_model,'meta',None),context='depthn live server reply model')
+        if below_root and (reply_model.config!=evaluator.config or reply_model.precision!=evaluator.precision):
+            raise ValueError('--reply-below-root requires matching champion and reply evaluator configurations and precision')
     cache=None
     if aot_head is not None:
         from gpu_engine.depthn_aot import ExecutableCache

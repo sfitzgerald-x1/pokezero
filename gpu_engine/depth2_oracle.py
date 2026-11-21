@@ -30,7 +30,7 @@ its child prior is unusable; such a child keeps D's learner value and is not exp
 no state has pre code -1 (world_pre). Heads (heads()) are a separate step on the oracle's own views:
 the evaluator, v5_model.forward(..., compute_dtype='bfloat16') unless Oracle(forward=) names another (the pricer's own,
 e.g. champion_evaluator.ChampionEvaluator), learner params for the learner's child and leaf views, opponent params for
-the opponent's root and child views. Digests hash each view through that evaluator's digest view
+the opponent's root views and the configured child opponent's child views. Digests hash each view through that evaluator's digest view
 (champion_evaluator.digest_view: what it reads; the views unchanged for the V2 default).
 
 Enumeration (turn1_cells, turn2_leaves) follows the contract (docs/v2e_depth2_pricer.md): turn 1 is D's
@@ -65,7 +65,8 @@ class Stack:
     owners: object             # device int32 [rows]
     owner: np.ndarray          # host int32 [rows]
     learner: np.ndarray        # host int32 [rows]: learner actor index into params
-    opponent: np.ndarray       # host int32 [rows]: opponent actor index into params
+    opponent: np.ndarray       # host int32 [rows]: root opponent actor index into params
+    child_opponent: np.ndarray | None = None  # host int32 [rows]; legacy stacks use the root opponent
 
 
 def bucket(count):
@@ -85,7 +86,7 @@ def stack(requests, worlds, *, size=None):
         raise ValueError(f'stack size must be a power of two >= 8 (got {size!r})')
     requests, worlds = tuple(requests), tuple(worlds)
     if len(requests) != len(worlds):raise ValueError('one materialized world pair per request required')
-    rows, states, publics, owner, learner, opponent = {}, [], [], [], [], []
+    rows, states, publics, owner, learner, opponent, child_opponent = {}, [], [], [], [], [], []
     for q, (request, pair) in enumerate(zip(requests, worlds)):
         if len(pair) != 2:raise ValueError('two materialized worlds per request required')
         for wi, world in enumerate(pair):
@@ -94,8 +95,10 @@ def stack(requests, worlds, *, size=None):
             states.append(world.state);publics.append(world.public)
             owner.append(int(request.plans.root.address.owner))
             learner.append(int(request.learner_actor));opponent.append(int(request.opponent_actor))
-    owner, learner, opponent = (np.asarray(x, np.int32) for x in (owner, learner, opponent))
-    if not states:return Stack(rows, None, None, None, owner, learner, opponent)
+            child = getattr(request, 'child_opponent_actor', None)
+            child_opponent.append(int(request.opponent_actor if child is None else child))
+    owner, learner, opponent, child_opponent = (np.asarray(x, np.int32) for x in (owner, learner, opponent, child_opponent))
+    if not states:return Stack(rows, None, None, None, owner, learner, opponent, child_opponent)
     if size is None:size = bucket(len(states))
     elif size < len(states):raise ValueError(f'stack size {size} is below the {len(states)} materialized world rows (never truncated)')
     states = states + [states[0]] * (size - len(states));publics = publics + [publics[0]] * (size - len(publics))
@@ -103,7 +106,7 @@ def stack(requests, worlds, *, size=None):
     states = jax.device_put(jax.tree.map(pack, *jax.device_get(states)))
     publics = jax.device_put(jax.tree.map(pack, *jax.device_get(publics)))
     padded = lambda x: np.concatenate([x, np.repeat(x[:1], size - len(x))])
-    return Stack(rows, states, publics, j.asarray(padded(owner)), owner, learner, opponent)
+    return Stack(rows, states, publics, j.asarray(padded(owner)), owner, learner, opponent, child_opponent)
 
 
 def _gather(tree, row):
@@ -270,6 +273,8 @@ class Oracle:
         """fn over specs [N, k] (column 0 = flat world row) in fixed chunks; evaluate: ((input, actor kind), ...)."""
         clock = time.perf_counter()
         specs = np.asarray(specs, np.int32).reshape(len(specs), -1);facts, outputs, kept = [], {}, {}
+        child = stack.opponent if stack.child_opponent is None else stack.child_opponent
+        actors = dict(learner=stack.learner, opponent=stack.opponent, child_opponent=child)
         total = -(-len(specs) // self.chunk)
         for index, start in enumerate(range(0, len(specs), self.chunk)):
             started = time.perf_counter()
@@ -277,9 +282,8 @@ class Oracle:
             padded = np.concatenate([part, np.repeat(part[:1], self.chunk - count, axis=0)])
             out, inputs = jax.block_until_ready(fn(stack.states, stack.publics, stack.owners, j.asarray(padded)))
             stepped = time.perf_counter()
-            actors = dict(learner=stack.learner[padded[:, 0]], opponent=stack.opponent[padded[:, 0]])
             for name, actor, *raw in evaluate:
-                result = heads(self.raw_forward if raw else self.forward, params, inputs[name], actors[actor])
+                result = heads(self.raw_forward if raw else self.forward, params, inputs[name], actors[actor][padded[:, 0]])
                 outputs.setdefault(name + (':raw' if raw else ''), []).append(tuple(x[:count] for x in result))
             headed = time.perf_counter()
             for name in keep:
@@ -321,7 +325,7 @@ class Oracle:
         rows = np.asarray([stack.rows[(int(q), int(w))] for q, w in cells[:, :2]], np.int32)
         specs = np.concatenate([rows[:, None], cells[:, 2:]], axis=1)
         raw = (('own', 'learner', 'raw'),) if self.raw_forward is not None else ()
-        facts, outputs, _ = self._map('children', self._child, stack, specs, params, (('own', 'learner'), ('peer', 'opponent')) + raw)
+        facts, outputs, _ = self._map('children', self._child, stack, specs, params, (('own', 'learner'), ('peer', 'child_opponent')) + raw)
         own_logits, own_value, own_usable = outputs['own'];peer_logits, _, peer_usable = outputs['peer']
         owner = stack.owner[rows]
         status, error = classify(facts['invalid'], facts['done'], facts['winner'], facts['own_error'], own_usable, owner,

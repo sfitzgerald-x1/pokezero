@@ -383,9 +383,6 @@ class DepthNLiveSearch:
         if not _real(min_price_seconds)or min_price_seconds<0:raise ValueError('finite min_price_seconds >= 0 required')
         if type(tree_commit)is not str or not tree_commit:raise ValueError('the tree commit required')
         if type(params)is not tuple or not params:raise ValueError('the champion bank (params,) required')
-        if child_opponent_actor is not None and(type(child_opponent_actor)is not int or not 0<=child_opponent_actor<len(params)):
-            raise ValueError('child_opponent_actor: an index into params required (the opponent\'s actor at every ply below the root)')
-        self.child_opponent_actor=child_opponent_actor   # --reply-below-root: the reply model's bank entry prices the plies below the root
         refuse_classes=tuple(refuse_classes)
         if any(c not in CLASSES for c in refuse_classes):raise ValueError(f'refuse_classes from {CLASSES} required, got {refuse_classes!r}')
         self.refuse_classes=tuple(sorted(set(refuse_classes),key=CLASSES.index));self.carry=None;self.warming=False
@@ -396,6 +393,15 @@ class DepthNLiveSearch:
         self.archive_sha256=archive_sha256 or getattr(self.forward,'archive_sha256',None)or ident[1]
         from .depthn_reply_prior import ReplyPrior
         if reply is not None and not isinstance(reply,ReplyPrior):raise ValueError('reply: a depthn_reply_prior.ReplyPrior or None required')
+        if child_opponent_actor is not None:
+            if (type(child_opponent_actor)is not int or not 0<child_opponent_actor<len(params)
+                    or reply is None or params[child_opponent_actor]is not reply.params):
+                raise ValueError('child_opponent_actor must select the bound reply prior parameters in a separate bank entry')
+            if isinstance(self.forward,evaluators.ChampionEvaluator) and (
+                    not isinstance(reply.evaluator,evaluators.ChampionEvaluator)
+                    or reply.evaluator.config!=self.forward.config or reply.evaluator.precision!=self.forward.precision):
+                raise ValueError('below-root reply routing requires matching champion and reply evaluator configurations and precision')
+        self.child_opponent_actor=child_opponent_actor
         self.device,self.clock,self.reply=device,clock,reply;self.reply_completed=0   # roots the reply prior completed (warmup's check)
         self.battles=OrderedDict();self.evicted=0;self.warm=None;self.pool=None
         self.reply_batches=()   # bucket sizes whose batched reply forward warmup compiles (the pipeline's reply_forward='device')
