@@ -357,8 +357,11 @@ class Gen3RandbatSource:
         resolved_cache_dir = Path(cache_dir).expanduser() if cache_dir else Path.home() / ".cache" / "pokezero"
         cache_path = resolved_cache_dir / f"gen3randbat-{source_hash}.json"
         if use_cache and cache_path.exists():
-            cached = cls.from_payload(json.loads(cache_path.read_text(encoding="utf-8")))
-            if cached.move_metadata and cached.species_metadata:
+            try:
+                cached = cls.from_payload(json.loads(cache_path.read_text(encoding="utf-8")))
+            except (ValueError, KeyError, TypeError):
+                cached = None   # a concurrent writer's partial file (several ranks start together); rebuild below
+            if cached is not None and cached.move_metadata and cached.species_metadata:
                 return cached
 
         data = json.loads(sets_path.read_text(encoding="utf-8"))
@@ -372,7 +375,10 @@ class Gen3RandbatSource:
         )
         if use_cache:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(json.dumps(source.to_payload(), indent=2) + "\n", encoding="utf-8")
+            # Atomic publish: concurrent processes (one per GPU) must never observe a partial file.
+            temporary = cache_path.with_name(f".{cache_path.name}.{os.getpid()}.tmp")
+            temporary.write_text(json.dumps(source.to_payload(), indent=2) + "\n", encoding="utf-8")
+            os.replace(temporary, cache_path)
         return source
 
     @classmethod
