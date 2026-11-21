@@ -47,7 +47,7 @@ def evaluate(prepared, pool, model_config, cell_groups, starts, actors, *, run_s
     initialize = jax.jit(lambda state: transition.initialize_with_public(
         state, prepared.engine_tables, belief_tables=prepared.observation_tables.belief,
     ))
-    collector = None
+    collectors = {}
     for cells in cell_groups:
         if not cells:
             continue
@@ -62,12 +62,14 @@ def evaluate(prepared, pool, model_config, cell_groups, starts, actors, *, run_s
         bindings = rollout.Bindings(model_config.category_vocabulary_sha256, model_config.label_vocabulary,
                                     prepared.source_sha256, archives, (True, True), run_sha)
         roster, birth = make_roster(initialize, pool, bindings, cells, starts, archives)
+        collector = collectors.get(len(cells))
         if collector is None:
             collector = v2_collector.RefillCollector(
                 prepared.engine_tables, prepared.observation_tables, model_config, labels, roster,
-                lanes=lanes, max_requests=max_requests,
+                lanes=min(lanes, len(cells)), max_requests=max_requests,
             )
             collector.compile(params, threads=2)
+            collectors[len(cells)] = collector
         else:
             collector.rebind(roster)
         play_batch(collector, params, roster, cells, birth, publish=publish)

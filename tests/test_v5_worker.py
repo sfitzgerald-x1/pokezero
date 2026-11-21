@@ -95,6 +95,34 @@ class WorkerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'crosses'):
                 self.load(record(root / 'crossing-plan.json', wrong), runtime, contract)
 
+    def test_five_million_compact_games_round_trip_without_materializing_games(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe, contract, _, _, runtime = self.fixture(root, evaluation=False)
+            runtime['gender_policy'] = record(root/'gender.json', {})
+            runtime_ref = record(root/'campaign-runtime.json', runtime)
+            iterations = phase.campaign_iterations(
+                'unit', 250, stream_start=1000, team_start=2000, identity_seed_start=3000,
+                constructor_seed_start=4000, sampling_seed_start=5000,
+                gender_seed=6000, gender_domain=7, gender_root_start=8000)
+            campaign = replace(recipe, iterations=iterations, self_moves=True,
+                               evaluation=run.EvaluationProtocol('c'*64, 1_000_000, 'deferred'))
+            document = record(root/'campaign.json', campaign.manifest())
+            with patch.object(run.GameRange, '__getitem__', side_effect=AssertionError('game materialized')):
+                loaded = self.load(document, runtime_ref, contract).plan
+                self.assertEqual(loaded, campaign)
+                self.assertEqual(loaded.game_offsets[-1], 5_000_000)
+                self.assertEqual(loaded.evaluation_milestones(), {49: 1_000_000, 99: 2_000_000,
+                    149: 3_000_000, 199: 4_000_000, 249: 5_000_000})
+                self.assertEqual(run.learning_rate_window(loaded, 249).start_game, 4_980_000)
+            self.assertEqual(loaded.iterations[1][0].games[0],
+                             run.Game(21_000, 'unit-20000', 23_000, (42_000, 42_001)))
+            self.assertEqual(loaded.iterations[1][0].gender_root_ids[0], 28_000)
+            batches = list(iterations[0])
+            batches[1] = replace(batches[1], games=replace(batches[1].games, team_start=2000))
+            with self.assertRaisesRegex(ValueError, 'reuse roots or teams'):
+                replace(campaign, iterations=(tuple(batches), *iterations[1:]))
+
     def test_missing_or_changed_controls_and_reordered_cells_never_default(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);recipe,contract,doc,rt,_=self.fixture(root)

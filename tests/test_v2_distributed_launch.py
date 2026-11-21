@@ -33,7 +33,8 @@ class DistributedLaunchTests(unittest.TestCase):
             out = Path(folder) / 'run'
             with (patch.dict(sys.modules, torch=torch),
                   patch.object(v2_distributed.subprocess, 'Popen', return_value=process) as spawn):
-                rc = v2_distributed.main(['--ranks', '2', '--timeout-seconds', '10', '--out', str(out)])
+                rc = v2_distributed.main(['--ranks', '2', '--timeout-seconds', '10', '--out', str(out),
+                                          '--config', 'unused', '--reference-run', 'unused'])
         self.assertEqual(rc, 0)
         actual = [(call.args[0][call.args[0].index('--rank')+1], call.kwargs['env']['CUDA_VISIBLE_DEVICES'])
                   for call in spawn.call_args_list]

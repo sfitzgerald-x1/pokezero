@@ -100,6 +100,44 @@ def eval_outputs(model, tensors):
 
 @unittest.skipIf(torch is None, 'requires optional local Torch')
 class V2TrainerTests(unittest.TestCase):
+    def test_stability_metrics_use_global_weighted_active_rows(self):
+        ratios = torch.tensor([1.0, 1.5, 0.5, 0.0])
+        weights = torch.tensor([1., 2., 1., 0.])
+        mask = weights > 0
+        targets = torch.tensor([-1., 0., 1., 0.])
+        values = torch.tensor([-0.5, 0., 0.5, float('nan')])
+        log_ratio = torch.where(mask, ratios, 1.).log().requires_grad_()
+        ranks = [v2._stability_sums(log_ratio[part], .2, mask[part], values[part],
+                                    targets[part], mask[part], weights[part])
+                 for part in (slice(0, 2), slice(2, None))]
+        self.assertTrue(all(not value.requires_grad for rank in ranks for value in rank.values()))
+        metrics = {key: float(ranks[0][key] + ranks[1][key]) for key in ranks[0]}
+        v2._stability_metrics(metrics)
+        self.assertAlmostEqual(metrics['approx_kl'], float((2 * (.5 - torch.log(ratios[1]))
+                                                            + (-.5 - torch.log(ratios[2]))) / 4))
+        self.assertEqual(metrics['clip_fraction'], .75)
+        self.assertEqual(metrics['value_explained_variance'], .75)
+
+    def test_stability_summary_weights_updates_and_pools_constant_target_batches(self):
+        from gpu_engine.v2_fused import training_summary
+
+        def step(ratio, value, target, weight):
+            active = torch.tensor([True])
+            sums = v2._stability_sums(torch.tensor([ratio]).log(), .2, active, torch.tensor([value]),
+                                     torch.tensor([target]), active, torch.tensor([weight]))
+            telemetry = {key: float(value) for key, value in sums.items()}
+            result = dict(telemetry)
+            v2._stability_metrics(result)
+            self.assertIsNone(result['value_explained_variance'])
+            return dict(result, stability_sums=telemetry, learning_rate_epoch=1)
+
+        rows = [step(1., -0.5, -1., 3.), step(1.5, 0.5, 1., 1.)]
+        summary = training_summary(rows)
+        for metrics in (summary['iteration_mean'], summary['final_epoch_mean']):
+            self.assertAlmostEqual(metrics['approx_kl'], rows[1]['approx_kl'] / 4)
+            self.assertEqual(metrics['clip_fraction'], .25)
+            self.assertEqual(metrics['value_explained_variance'], .75)
+
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(1)

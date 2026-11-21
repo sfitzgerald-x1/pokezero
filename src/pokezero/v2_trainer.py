@@ -52,6 +52,8 @@ ORDERS = ('ordered', 'shuffled')
 MODES = ('reference', 'eager', 'compiled', 'cudagraphs')
 OPTIMIZERS = ('fused', 'foreach', 'single')
 AUXILIARY_TERMS = ('opponent_action_loss', 'hidden_species_loss', 'hidden_variant_loss', 'survival_loss', 'final_hp_loss')
+_STABILITY_SUMS = ('_ppo_weight', '_kl_sum', '_clip_sum', '_value_weight', '_target_sum', '_target_square_sum',
+                   '_residual_sum', '_residual_square_sum')
 _FALLBACK = dict(cudagraphs='compiled', compiled='eager')
 _V5_GROUP_FLAGS = dict(foreach=False, fused=None, capturable=False, differentiable=False)
 _OUTPUT_FIELDS = tuple(item.name for item in fields(V5Output))
@@ -527,6 +529,47 @@ def metric_names(model_config, loss_config):
     return tuple(name for base in names for name in (base, base + '_count')) + ('loss',)
 
 
+def _stability_sums(log_ratio, clip_epsilon, ppo, values, targets, value_mask, weights):
+    """Additive detached statistics so the same metrics work across ranks."""
+    torch = _torch()
+    log_ratio = log_ratio.detach()
+    ppo_weights = torch.where(ppo, weights, 0.)
+    value_weights = torch.where(value_mask, weights, 0.)
+    clipped = (log_ratio < math.log1p(-clip_epsilon)) | (log_ratio > math.log1p(clip_epsilon))
+    residual = torch.where(value_mask, values.detach().float() - targets, 0.)
+    return dict(zip(_STABILITY_SUMS, (
+        ppo_weights.sum(),
+        (ppo_weights * (log_ratio.expm1() - log_ratio)).sum(),
+        (ppo_weights * clipped).sum(),
+        value_weights.sum(),
+        (value_weights * targets).sum(),
+        (value_weights * targets.square()).sum(),
+        (value_weights * residual).sum(),
+        (value_weights * residual.square()).sum(),
+    )))
+
+
+def _stability_metrics(record):
+    policy_weight, kl, clipped, value_weight, target, target_square, residual, residual_square = (
+        record.pop(name) for name in _STABILITY_SUMS
+    )
+    if policy_weight > 0:
+        record['approx_kl'] = kl / policy_weight if math.isfinite(kl) else None
+        record['clip_fraction'] = clipped / policy_weight
+    if value_weight > 0:
+        target_variance = target_square / value_weight - (target / value_weight)**2
+        residual_variance = max(0., residual_square / value_weight - (residual / value_weight)**2)
+        record['value_explained_variance'] = 1. - residual_variance / target_variance if target_variance > 0 else None
+
+
+def summarize_stability(updates):
+    """Pool weighted moments before calculating epoch or round statistics."""
+    rows = [row['stability_sums'] for row in updates if 'stability_sums' in row]
+    pooled = {name: math.fsum(row[name] for row in rows) for name in _STABILITY_SUMS}
+    _stability_metrics(pooled)
+    return pooled
+
+
 def static_v5_loss(output, tensors, model_config, config, *, variant_counts):
     """``v5_loss`` with fixed shapes: a masked reduction replaces each boolean selection.
 
@@ -640,6 +683,7 @@ def static_v5_loss(output, tensors, model_config, config, *, variant_counts):
         + config.uniform_kl_coefficient * uniform_kl + (config.auxiliary_weight * auxiliary if model_config.treatment else zero)
         + (config.search_policy_weight * teacher if config.arm == 'D' else zero))
     metrics['loss'] = total.detach()
+    metrics.update(_stability_sums(log_ratio, config.clip_epsilon, ppo, output.value, target, vm, weights))
     return total, metrics, logits_ok
 
 
@@ -657,7 +701,8 @@ def _static_forward_loss(model, tensors, model_config, loss_config, precision, d
         output = forward_unchecked(model, tensors, include_auxiliary=model_config.treatment, experts=experts,
             role_routing=role_routing, native_embedding_backward=native_embedding_backward)
         loss, metrics, logits_ok = static_v5_loss(output, tensors, model_config, loss_config, variant_counts=variant_counts)
-    vector = torch.stack([metrics[name].float() for name in metric_names(model_config, loss_config)])
+    names = metric_names(model_config, loss_config) + _STABILITY_SUMS
+    vector = torch.stack([metrics[name].float() for name in names])
     return loss, vector, logits_ok
 
 
@@ -799,7 +844,7 @@ class Trainer:
             from .v2_native_embedding import validate
             validate(runtime.model.category_embedding)
         self._variant_counts = _variant_counts(runtime.model_config, runtime.device)
-        self._names = metric_names(runtime.model_config, runtime.loss_config)
+        self._names = metric_names(runtime.model_config, runtime.loss_config) + _STABILITY_SUMS
         self._parameters = [p for p in runtime.model.parameters()]
         self._buffer = torch.zeros((runtime.v2_config.check_interval, len(self._names) + 3),
             dtype=torch.float32, device=runtime.device)
@@ -1081,6 +1126,8 @@ class Trainer:
             if row[-1] == 1.0:
                 for name, value in zip(self._names, row):
                     metrics[name] = int(value) if name.endswith('_count') else value
+                metrics['stability_sums'] = {name: metrics[name] for name in _STABILITY_SUMS}
+                _stability_metrics(metrics)
             metrics['gradient_norm'] = row[len(self._names)]
             results.append(metrics)
         return results
