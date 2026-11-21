@@ -20,5 +20,6 @@ Train B adds Forecast while preserving all prior state at 77a780c2.
 The explicit wide-draw Perish side-index correction moves it to 500dcc84.
 The Shed Skin composition retains that correction and adds the saved cure bank at f62255ca.
 Gen 3 Toxic SwitchIn composes with the saved Shed Skin cure bank at 85abfe4f.
+The device Focus Punch preparation order is bound at 1123d927.
 """
-CURRENT_TRANSITION = '85abfe4ff255af8a1b91fd4811ddf9baec0ce644'
+CURRENT_TRANSITION = '1123d9278abe4eec3542fb4458898ae5f7a7faab'
