@@ -2457,7 +2457,7 @@ def patched_pass(args, *, step_override=None, prepared=None):
     plugins = [p for p in args.pr.split(',') if p]
     nar.validate_options(plugins, waive=args.waive, faint_clear=args.faint_clear)
     narrowing_rules = plugins == ['NAR']
-    strict_baseline = getattr(args, 'strict_baseline', False)
+    strict_baseline = narrowing_rules or getattr(args, 'strict_baseline', False)
     if strict_baseline and (plugins not in (['none'], ['NAR']) or args.allow_base_mismatch or args.waive or args.faint_clear):
         raise SystemExit('strict baseline requires --pr none or --pr NAR, an exact merge base, and no waivers')
     base_dir = Path(args.base);manifest = json.loads((base_dir / 'manifest.json').read_text())
@@ -2492,12 +2492,12 @@ def patched_pass(args, *, step_override=None, prepared=None):
     public_order_rule = PUBLIC_ORDER in new_inputs and PUBLIC_ORDER not in base_names
     # Fidelity R: likewise the saved effect block is checked against the design's derivation while the base lacks it.
     effect_rule = EFFECT_DRAWS in new_inputs and EFFECT_DRAWS not in base_names
-    if (narrowing_rules or strict_baseline) and (public_order_rule or effect_rule):
+    if strict_baseline and (public_order_rule or effect_rule):
         raise SystemExit('this comparison requires public-order and effect-draw outputs in the baseline')
     # The fifth column extends an existing leaf: independently check the whole
     # saved block, including all four old columns, rather than accepting its
     # new shape as involvement. This check also runs with CC dropped.
-    if not (narrowing_rules or strict_baseline) and EFFECT_DRAWS in template_named:
+    if not strict_baseline and EFFECT_DRAWS in template_named:
         effect_rule |= template_named[EFFECT_DRAWS].shape[-1] == 5
     m2_rules = 'M2' in plugins
     m2_ids = {n: vocab['moves'].index(n) for n in ('perishsong', 'yawn', 'wrap') if n in vocab['moves']} if m2_rules else None
@@ -3049,7 +3049,7 @@ def main(argv=None):
             p.add_argument('--integration', default=None, help='integration ref; the base pass must be at the merge base with it')
             p.add_argument('--allow-base-mismatch', action='store_true', help='accept a base pass not at the merge base (recorded)')
             p.add_argument('--waive', action='append', default=None, help='leaf regex whose unexpected changes are accepted (recorded)')
-            p.add_argument('--strict-baseline', action='store_true', help='compare a fresh integration baseline without migration rules or terminal skips')
+            p.add_argument('--strict-baseline', action='store_true', help='compare a fresh integration baseline without migration rules or terminal skips (implied by --pr NAR)')
     args = parser.parse_args(argv)
     return base_pass(args) if args.command == 'base' else patched_pass(args)
 

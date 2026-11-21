@@ -90,6 +90,9 @@ class StrictPassTests(unittest.TestCase):
         from gpu_engine import v2e_regress as regress
         from gpu_engine.v2e_capture import leaf_paths
         from test_gpu_engine_v2e_regress import lanes_state, CALLABLE, VOCAB
+        # Both synthetic passes use the same engine revision. Local worktree edits are outside this fixture.
+        revision, _ = regress.git_source()
+        cls.enterClassContext(mock.patch.object(regress, 'git_source', return_value=(revision, False)))
         cls.temp = tempfile.TemporaryDirectory(prefix='narrowing-audit-');cls.root = Path(cls.temp.name)
         shards = cls.root / 'capture' / 'shards';shards.mkdir(parents=True)
         st = lanes_state(2, 0)._replace(done=j.zeros(2, bool))
@@ -111,26 +114,32 @@ class StrictPassTests(unittest.TestCase):
     @classmethod
     def args(cls, **extra):
         values = dict(config=None, reference_run=None, shards=str(cls.root / 'capture' / 'shards'), limit=0, arm='B',
-            allow_dirty=True, integration=None, allow_base_mismatch=True, waive=None, faint_clear=False)
+            allow_dirty=True, integration='HEAD', allow_base_mismatch=False, waive=None, faint_clear=False)
         values.update(extra);return Namespace(**values)
 
-    def run_pass(self, kind, pr='NAR'):
+    def run_pass(self, kind, pr='NAR', *, already_done=False):
         from gpu_engine import v2e_regress as regress, device_set_posterior as dsp, engine_device_public_hooks as hooks
-        dest = self.root / (self._testMethodName + '-' + kind + '-' + pr)
+        case = f'{kind}-already-done' if already_done else kind
+        dest = self.root / (self._testMethodName + '-' + case + '-' + pr)
         base, prepared, extra = self.base, self.prepared, {}
-        if kind in ('invalid_mapping', 'absent'):
-            # The malformed member is in BOTH captured inputs: only the planted pin writes may differ.
+        if already_done or kind in ('invalid_mapping', 'absent'):
+            # Both passes get identical inputs. Only the planted pin writes may differ.
             import jax
             from gpu_engine.v2e_capture import leaf_paths
-            t = self.tree[2]
-            t = (t._replace(present=t.present.at[:, 0, 0].set(False)) if kind == 'absent' else
-                 t._replace(physical_to_public=t.physical_to_public.at[:, 0, 0].set(-1)))
-            tree = (*self.tree[:2], t);template = jax.tree.map(lambda x: x[:1], tree)
-            shards = self.root / (kind + '-capture') / 'shards';shards.mkdir(parents=True)
+            state, actions, t = self.tree
+            if already_done:
+                state = state._replace(done=~state.done)
+            elif kind == 'absent':
+                t = t._replace(present=t.present.at[:, 0, 0].set(False))
+            else:
+                t = t._replace(physical_to_public=t.physical_to_public.at[:, 0, 0].set(-1))
+            tree = (state, actions, t)
+            template = jax.tree.map(lambda x: x[:1], tree)
+            shards = self.root / (case + '-capture') / 'shards';shards.mkdir(parents=True)
             np.savez_compressed(shards / 'shard-000000.npz', tick=np.int64(0), level=np.int64(0),
                 **{f'l{i:03d}': np.asarray(x) for i, x in enumerate(jax.tree.leaves(tree))})
             (shards.parent / 'capture.json').write_text(json.dumps(dict(shards=1, paths=leaf_paths(template))))
-            base = self.root / (kind + '-base');prepared = (self.context, template);extra['shards'] = str(shards)
+            base = self.root / (case + '-base');prepared = (self.context, template);extra['shards'] = str(shards)
             regress.base_pass(self.args(out=base, pad_lanes=2, **extra), step_override=step('off'), prepared=prepared)
         hook = hooks.set_posterior_strike
         def outer(c, *args, **kwargs):
@@ -179,6 +188,15 @@ class StrictPassTests(unittest.TestCase):
             code, report, rows = self.run_pass(kind)
             self.assertEqual(code, 1);self.assertEqual(report['failures'], 2)
             self.assertTrue(all(any(s.startswith(leaf + '@') for s in r['unexpected']) for r in rows))
+
+    def test_nar_checks_refused_writes_on_already_done_inputs(self):
+        code, report, rows = self.run_pass('refused', already_done=True)
+        self.assertEqual(code, 1)
+        self.assertTrue(report['strict_baseline'])
+        self.assertEqual(report['counts']['done_skipped'], 0)
+        self.assertEqual(report['failures'], 2)
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r['narrowing_bad'] and not r['admitted_slots'] for r in rows))
 
     def test_no_broadening_options(self):
         for plugins, extra in ((['NAR', 'D'], {}), (['none', 'NAR'], {}), (['NAR'], {'waive': ['.*']}),
