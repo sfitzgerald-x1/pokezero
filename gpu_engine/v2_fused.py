@@ -173,6 +173,21 @@ def file_pipeline_order(keys, batches):
     return order, tuple(int(c) for c in counts if c)
 
 
+def host_rss_gib():
+    """Current and peak resident set of this process, in GiB (Linux /proc; peak from getrusage)."""
+    import resource
+    current = None
+    try:
+        with open('/proc/self/status') as status:
+            for line in status:
+                if line.startswith('VmRSS:'):
+                    current = int(line.split()[1]) / (1024 ** 2); break
+    except OSError:
+        pass
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 ** 2)   # kB on Linux
+    return current, peak
+
+
 def write_json(path, value, *, durable=False):
     temporary = Path(str(path) + '.tmp')
     with temporary.open('w') as stream:
@@ -424,10 +439,11 @@ def main(argv=None, *, distribution=None):
                 if distribution is None or distribution.rank == 0:
                     log('STOP', iteration=iteration, reason='S0_TRANSFER_FAIL', stop_request=route_stop)
                 break
-        phase = {};clock = time.perf_counter();start = clock
+        phase = {};rss = {};clock = time.perf_counter();start = clock
         def mark(name):
             nonlocal clock
             now = time.perf_counter();phase[name] = now - clock;clock = now
+            rss[name] = host_rss_gib()[0]
         current = snapshots[-1];past = tuple(s for s in snapshots if s.iteration < current.iteration)
         shard = {} if distribution is None else dict(shard=distribution.shard(plan, iteration))
         roster, kinds, history = construct(context, backend, iteration, current, past, ordinal, **shard);mark('construct')
@@ -487,6 +503,9 @@ def main(argv=None, *, distribution=None):
                 configs=(plan.model, plan.loss, plan.train, v2_config), chunk_bytes=args.exchange_chunk_bytes or None)
         mark('handoff_validate')
         training = None
+        store_digest = None if store is None or not hasattr(store, 'distributed_layout') else dict(
+            store_id=store.store_id, keys_sha256=store.distributed_layout.digest, counts=list(store.distributed_layout.counts),
+            rows=store.rows)
         if learner:
             train_report = trainer.train(store, window=runs.learning_rate_window(plan, iteration))
             torch.cuda.synchronize()
@@ -525,7 +544,7 @@ def main(argv=None, *, distribution=None):
             history=history, history_slots=v2c.history_slots(history), lane_groups=len(roster.groups), collector_reused=reused,
             compile_timings=compile_timings, phase_seconds=phase, iteration_seconds=total, steady_seconds=steady,
             games_per_second=games / total, games_per_second_steady=games / steady,
-            training=training,
+            training=training, store_digest=store_digest, host_rss_gib=rss, host_rss_peak_gib=host_rss_gib()[1],
             collector={k: v for k, v in stats.items() if isinstance(v, (int, float, str))},
             audit=audit_records, games_matching_reference=same, snapshot=asdict(snapshot))
         if distribution is not None:
@@ -534,7 +553,8 @@ def main(argv=None, *, distribution=None):
         log('ITERATION', iteration=iteration, games_per_second=round(report['games_per_second'], 2),
             games_per_second_steady=round(report['games_per_second_steady'], 2), phase_seconds={k: round(v, 1) for k, v in phase.items()},
             history=history, reused=reused, occupancy=round(stats.get('occupancy', 0), 3), dispositions=report['dispositions'],
-            final_epoch_loss=report['training'].get('final_epoch_mean', {}).get('loss'), matching=same)
+            final_epoch_loss=report['training'].get('final_epoch_mean', {}).get('loss'), matching=same,
+            host_rss_peak_gib=round(report['host_rss_peak_gib'], 1), store_keys_sha256=(store_digest or {}).get('keys_sha256'))
         def commit_round():
             state = dict(snapshots=[asdict(s) for s in snapshots], reports=reports, row_order=row_order,
                 declaration_sha256=declaration_sha256, checkpoint_encoding_receipts=encoding_receipts)
