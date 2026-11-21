@@ -145,10 +145,11 @@ class TwoNodeRendezvousTests(unittest.TestCase):
         self.assertEqual([sorted(int(k) for k in e['codes']) for e in exits], [[0, 1, 2, 3], [4, 5, 6, 7]])
         self.assertTrue(all(code == 0 for e in exits for code in e['codes'].values()))
         bench = probes[0]['bench']
-        self.assertGreater(bench['cross_node_bandwidth_gbps'], 0)
+        self.assertGreater(bench['all_reduce_1_float_us'], 0)
         self.assertGreater(bench['all_reduce_ms'], 0)
+        self.assertGreater(bench['all_reduce_100000_ring_gbps'], 0)
         self.assertGreater(bench['all_to_all_gbps_per_rank'], 0)
-        self.assertNotIn('cross_node_bandwidth_gbps', probes[1]['bench'])   # only the node-0/node-1 pair measures the link
+        self.assertEqual(bench['world_size'], 8)
 
     def test_missing_partner_node_fails_every_rank_within_the_rendezvous_deadline(self):
         port = free_port()

@@ -171,10 +171,12 @@ def rendezvous(args, rank, world_size):
 
 
 def _bench(distribution, device, *, floats):
-    """Pre-flight fabric numbers: node-0 <-> node-1 ping-pong latency/bandwidth, a learner-sized all-reduce, an all-to-all."""
+    """Pre-flight fabric numbers from collectives on the main communicator only (no lazy P2P communicators):
+    a one-float all-reduce (latency), a learner-sized all-reduce (cross-node bandwidth), an all-to-all."""
     import torch
     import torch.distributed as dist
-    group = distribution.process_group; rank = distribution.rank; sync = torch.cuda.synchronize if device == 'cuda' else (lambda: None)
+    group = distribution.process_group; world = distribution.world_size
+    sync = torch.cuda.synchronize if device == 'cuda' else (lambda: None)
 
     def timed(action, reps):
         sync(); start = time.perf_counter()
@@ -182,26 +184,20 @@ def _bench(distribution, device, *, floats):
             action()
         sync(); return (time.perf_counter() - start) / reps
 
-    results = dict(device=device, floats=floats)
-    if distribution.nodes > 1:
-        peer = distribution.ranks_per_node                      # first rank of node 1
-        if rank in (0, peer):
-            other = peer if rank == 0 else 0
-            small, big = torch.zeros(1, device=device), torch.zeros(floats, device=device)
-            def pingpong(tensor):
-                if rank == 0:
-                    dist.send(tensor, other, group=group); dist.recv(tensor, other, group=group)
-                else:
-                    dist.recv(tensor, other, group=group); dist.send(tensor, other, group=group)
-            timed(lambda: pingpong(small), 5); timed(lambda: pingpong(big), 2)
-            results['cross_node_latency_us'] = timed(lambda: pingpong(small), 50) / 2 * 1e6
-            results['cross_node_bandwidth_gbps'] = 2 * big.numel() * 4 * 8 / timed(lambda: pingpong(big), 5) / 1e9
-            del big
-    distribution.barrier()
-    gradient = torch.ones(floats, device=device)                 # the learner gradient is ~10M fp32
-    timed(lambda: dist.all_reduce(gradient, group=group), 3)
-    results['all_reduce_ms'] = timed(lambda: dist.all_reduce(gradient, group=group), 20) * 1e3
-    world = distribution.world_size
+    results = dict(device=device, floats=floats, world_size=world, nodes=distribution.nodes)
+    one = torch.ones(1, device=device)
+    timed(lambda: dist.all_reduce(one, group=group), 5)
+    results['all_reduce_1_float_us'] = timed(lambda: dist.all_reduce(one, group=group), 50) * 1e6
+    for size in sorted({min(floats, 1_000_000), floats}):
+        gradient = torch.ones(size, device=device)
+        timed(lambda: dist.all_reduce(gradient, group=group), 2)
+        seconds = timed(lambda: dist.all_reduce(gradient, group=group), 10 if size == floats else 3)
+        results[f'all_reduce_{size}_ms'] = seconds * 1e3
+        # ring all-reduce moves 2(N-1)/N of the buffer through every link; with one cross-node link pair per ring
+        # this is the per-direction volume crossing the node boundary.
+        results[f'all_reduce_{size}_ring_gbps'] = 2 * (world - 1) / world * size * 4 * 8 / seconds / 1e9
+        del gradient
+    results['all_reduce_ms'] = results[f'all_reduce_{floats}_ms']
     chunk = floats // world * world
     sent, received = torch.ones(chunk, device=device), torch.empty(chunk, device=device)
     timed(lambda: dist.all_to_all_single(received, sent, group=group), 2)
