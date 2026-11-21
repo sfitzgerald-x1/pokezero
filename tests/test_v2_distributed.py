@@ -83,7 +83,7 @@ def rank_test(rank, world, directory, dropout):
         dist.destroy_process_group()
 
 
-def learner_node_test(rank, world, directory, learners):
+def learner_node_test(rank, world, directory, learners, chunk_bytes=None):
     """Every rank collects a row shard; only ranks < learners train (as a learners-wide run)."""
     import torch.distributed as dist
     torch.set_num_threads(1)
@@ -99,7 +99,7 @@ def learner_node_test(rank, world, directory, learners):
         exchange = vd.Exchange(rank, world, dist.group.WORLD, learners)
         runtime = v2.create(model, loss, train, config, enable_v5=True, process_group=group) if rank < learners else None
         store = vd.distribute_store(local, keys[selected], batches, runtime, exchange=exchange,
-                                    configs=(model, loss, train, config))
+                                    configs=(model, loss, train, config), chunk_bytes=chunk_bytes)
         if rank >= learners:
             if store is not None:
                 raise AssertionError('collector-only ranks must not receive rows')
@@ -254,10 +254,17 @@ class DistributedTests(unittest.TestCase):
             return torch.load(Path(directory) / 'learner.pt', weights_only=True)
 
     def test_learner_node_eight_collectors_four_learners_is_bit_identical_to_four_rank_ddp(self):
+        self.check_learner_node(chunk_bytes=None)
+
+    def test_chunked_exchange_is_bit_identical(self):
+        # 64-byte messages force many slabs per field (rows are hundreds of bytes); same rows, same slots.
+        self.check_learner_node(chunk_bytes=64)
+
+    def check_learner_node(self, *, chunk_bytes):
         import torch.multiprocessing as mp
         reference = self.ddp_reference(4)
         with tempfile.TemporaryDirectory() as directory:
-            mp.spawn(learner_node_test, args=(8, directory, 4), nprocs=8, join=True)
+            mp.spawn(learner_node_test, args=(8, directory, 4, chunk_bytes), nprocs=8, join=True)
             result = torch.load(Path(directory) / 'learner.pt', weights_only=True)
         self.assertEqual((result['steps'], result['rows'], result['counts']), (reference['steps'], reference['rows'], reference['counts']))
         self.assertEqual(result['store_id'], reference['store_id'])   # same canonical digest, learner world 4

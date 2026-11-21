@@ -101,7 +101,7 @@ def gather(value, runtime):
     return values
 
 
-def distribute_store(store, keys, batches, runtime, *, exchange=None, configs=None):
+def distribute_store(store, keys, batches, runtime, *, exchange=None, configs=None, chunk_bytes=None):
     """All-to-all real rows, then pad each learner rank's slice of each global batch.
 
     Only compact row addresses/statuses are replicated on the host. Feature
@@ -114,6 +114,12 @@ def distribute_store(store, keys, batches, runtime, *, exchange=None, configs=No
     (model_config, loss_config, train_config, v2_config) instead. The learner
     ranks' stores, digests and batch order are those of a run whose world is the
     learner count alone, whatever the number of collecting ranks.
+
+    ``chunk_bytes`` bounds every all-to-all message: each field is exchanged in
+    slabs of rows (per source, in the source's destination-sorted order) whose
+    per-rank payload does not exceed it. Rows land in the same slots, so the
+    result is identical to the single-message exchange; it exists for transports
+    that stall on large messages (NCCL over TCP sockets, 2026-11-21).
     """
     torch = v2._torch()
     if runtime is None:
@@ -145,17 +151,19 @@ def distribute_store(store, keys, batches, runtime, *, exchange=None, configs=No
     start, end = offsets[rank:rank + 2]
     local_dest = layout.destinations[start:end]
     send_indices = np.argsort(local_dest, kind='stable')
-    send_counts = np.bincount(local_dest, minlength=world).tolist()
-    incoming = [np.flatnonzero(layout.destinations[a:b] == rank) + a if learner else np.zeros(0, np.int64)
-                for a, b in zip(offsets, offsets[1:])]
-    receive_counts = [len(i) for i in incoming]
-    receive_indices = np.concatenate(incoming)
+    # Every source sends its rows in destination-sorted (stable) order; a receiver takes, from each source
+    # in turn, that source's rows addressed to it in the source's original order. Slabs cut this order.
+    orders = [np.argsort(layout.destinations[a:b], kind='stable') + a for a, b in zip(offsets, offsets[1:])]
+    mine = []   # per source: (positions within the source's order, global indices) of rows addressed to this rank
+    for order in orders:
+        positions = np.flatnonzero(layout.destinations[order] == rank) if learner else np.zeros(0, np.int64)
+        mine.append((positions, order[positions]))
+    receive_indices = np.concatenate([g for _, g in mine])
     receive_slots = layout.slots[receive_indices]
     target_rows = len(layout.counts) * layout.local_batch if learner else 0
     # Empty tails on a rank still need a valid dummy input. Exchange one valid
     # row per field as a padding template; its training weight will be zero.
     template_rank = next(i for i, n in enumerate(lengths) if n)
-    sends = torch.as_tensor(send_indices, device=store.device)
     slots = torch.as_tensor(receive_slots, device=store.device)
     output = {}
     for name in sorted(list(store.tensors)):
@@ -165,18 +173,32 @@ def distribute_store(store, keys, batches, runtime, *, exchange=None, configs=No
         if world > 1:
             import torch.distributed as dist
             dist.broadcast(template, template_rank, group=exchange.process_group)
-        sent = original.index_select(0, sends).contiguous()
-        received = torch.empty((sum(receive_counts), *original.shape[1:]), dtype=original.dtype, device=store.device)
-        if world > 1:
-            dist.all_to_all_single(received, sent, output_split_sizes=receive_counts,
-                input_split_sizes=send_counts, group=exchange.process_group)
-        else:
-            received.copy_(sent)
+        row_bytes = max(1, int(np.prod(original.shape[1:])) * original.element_size())
+        slab = None if not chunk_bytes else max(1, int(chunk_bytes) // row_bytes)
+        pieces = 1 if slab is None else max(1, max(-(-n // slab) for n in lengths))
+        value = template.expand(target_rows, *template.shape[1:]).clone() if learner else None
+        for piece in range(pieces):
+            lo, hi = (0, len(send_indices)) if slab is None else (piece * slab, (piece + 1) * slab)
+            my_slab = send_indices[lo:hi]
+            send_counts = np.bincount(local_dest[my_slab], minlength=world).tolist()
+            received_now, counts = [], []
+            for positions, indices in mine:
+                i0, i1 = (0, len(positions)) if slab is None else np.searchsorted(positions, [lo, hi])
+                received_now.append(indices[i0:i1]); counts.append(int(i1 - i0))
+            sent = original.index_select(0, torch.as_tensor(my_slab, device=store.device)).contiguous()
+            received = torch.empty((sum(counts), *original.shape[1:]), dtype=original.dtype, device=store.device)
+            if world > 1:
+                dist.all_to_all_single(received, sent, output_split_sizes=counts,
+                    input_split_sizes=send_counts, group=exchange.process_group)
+            else:
+                received.copy_(sent)
+            if learner and sum(counts):
+                target = torch.as_tensor(layout.slots[np.concatenate(received_now)], device=store.device)
+                value.index_copy_(0, target, received)
+            del sent, received
         if learner:
-            value = template.expand(target_rows, *template.shape[1:]).clone()
-            value.index_copy_(0, slots, received)
             output[name] = value
-        del original, sent, received, template
+        del original, template
     if not learner:
         return None
     valid = torch.zeros(target_rows, dtype=torch.bool, device=store.device); valid[slots] = True

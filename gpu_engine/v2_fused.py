@@ -229,6 +229,9 @@ def argument_parser():
         help='explicit batch/epochs/LR package from the validated R5 reference; records the effective plan hash')
     parser.add_argument('--compile-threads', type=int, default=16)
     parser.add_argument('--audit-every', type=int, default=50)
+    parser.add_argument('--exchange-chunk-bytes', type=int, default=0,
+        help='distributed: bound each cross-rank row message to this many bytes (0 = one message per field); '
+             'same rows, same slots, for transports that stall on large messages')
     parser.add_argument('--torch-memory-fraction', type=float, default=0.45,
         help='Torch per-process GPU memory cap after the runtime probe (V2 also holds the row store in Torch); '
              '0 keeps the runtime declaration\'s torch_fraction. JAX keeps its own fraction')
@@ -481,7 +484,7 @@ def main(argv=None, *, distribution=None):
             rows.arrays.clear()  # DLPack tensors own the buffers through exchange.
             batches = [tuple(g.stream_id for g in b.games) for b in plan.iterations[iteration]]
             store = distribute_store(store, row_keys, batches, runtime, exchange=distribution.exchange(),
-                configs=(plan.model, plan.loss, plan.train, v2_config))
+                configs=(plan.model, plan.loss, plan.train, v2_config), chunk_bytes=args.exchange_chunk_bytes or None)
         mark('handoff_validate')
         training = None
         if learner:
