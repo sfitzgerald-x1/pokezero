@@ -84,6 +84,23 @@ class V5LiveProtocolTests(unittest.TestCase):
             finally:
                 actor.close_game()
 
+    def test_transfer_draw_samples_the_owning_legal_mask(self):
+        with jax.default_matmul_precision('highest'), jax.enable_x64(False):
+            factory = self.make_factory(deterministic=False, compute_dtype='bfloat16')
+            actor = self.actor(factory=factory)
+            try:
+                self.feed(actor)
+                snapshot = actor.snapshot_boundary()
+                draw = p.EvaluationDraw(19, 2080000000, 0, 0)
+                decision = actor.decide(snapshot, rng=draw)
+                routing = actor.decision_observation(snapshot)
+                action, probabilities = draw.choose(np.zeros(9, np.float32), routing.legal_action_mask)
+                self.assertEqual(decision.action_index, action)
+                self.assertEqual(decision.metadata['policy_distribution'], tuple(probabilities))
+                self.assertEqual(actor._backend._compiled_functions.calls, 1)
+            finally:
+                actor.close_game()
+
     def test_same_actual_encode_step_v4_prefix_v5_public_tail_and_original_seeded_raw_rng(self):
         with jax.default_matmul_precision('highest'):
             results=[]

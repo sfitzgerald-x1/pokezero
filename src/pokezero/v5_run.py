@@ -304,9 +304,13 @@ class Plan:
     # source-pinned, so the declaration lives here: the manifest records it only when on (an off plan's declaration,
     # resume and identity are byte-identical), and every collector, export and actor load of the run follows it.
     self_moves:bool=False
+    historical_anchor_slots:int=0
 
     def __post_init__(self):
         if type(self.self_moves) is not bool:raise ValueError('explicit bool self_moves required')
+        if (type(self.historical_anchor_slots) is not int or self.historical_anchor_slots not in (0,8)
+                or self.historical_anchor_slots and self.historical_window!=32):
+            raise ValueError('log-spaced history reserves eight of 32 opponent slots')
         object.__setattr__(self,'iterations',tuple(tuple(x) for x in self.iterations))
         _seed(self.selection_seed);c._binding(self.pool_sha256)
         if isinstance(self.discount,bool) or not isinstance(self.discount,Real) or not math.isfinite(self.discount) or not 0<=self.discount<=1:
@@ -356,6 +360,9 @@ class Plan:
             game_seed_scope='TRAJECTORY_IDENTITY_ONLY_BATCH_CONSTRUCTOR_AND_SAMPLING_SEEDS_DRIVE_RNG',scientific_qualification=False)
         if self.evaluation is not None:value['evaluation']=self.evaluation.metadata()
         if self.self_moves:value['self_moves']=True
+        if self.historical_anchor_slots:
+            value.update(historical_anchor_slots=self.historical_anchor_slots,
+                         opponent_rule='UNIFORM_24_RECENT_8_LOG_AGE_PAST_SNAPSHOTS_NO_OUTCOME_ADAPTATION')
         return value
 
 
@@ -451,11 +458,24 @@ class Store:
         self.emit('SNAPSHOT',**asdict(value));return value
 
 
-def assignment(plan,game,ordinal,current,past):
+def opponent_history(plan,current,past):
+    """Select the same bounded bank for construction, assignment and retention."""
+    slots=getattr(plan,'historical_anchor_slots',0)
+    if not slots:return tuple(past[-plan.historical_window:])
+    recent_count=plan.historical_window-slots
+    older=list(past[:-recent_count]);chosen=[]
+    for slot in range(1,min(slots,len(older))+1):
+        target=current.iteration-plan.historical_window*(2**slot)
+        index=min(range(len(older)),key=lambda i:(abs(older[i].iteration-target),older[i].iteration))
+        chosen.append(older.pop(index))
+    return (*sorted(chosen,key=lambda item:item.iteration),*past[-recent_count:])
+
+
+def assignment(plan,game,ordinal,current,past,*,history=None):
     """Stateless declared-seed selection, independent of outcomes and compaction."""
     digest=hashlib.sha256(_json([plan.selection_seed,game.stream_id,ordinal]).encode()).digest()
     draw=int.from_bytes(digest[:8],'big')/2**64
-    history=tuple(past[-plan.historical_window:])
+    if history is None:history=opponent_history(plan,current,past)
     use=plan.model.arm!='A' and bool(history) and draw<plan.historical_fraction
     opponent=history[int.from_bytes(digest[8:16],'big')%len(history)] if use else current
     return dict(stream_id=game.stream_id,learner_side=ordinal%2,opponent=opponent,
@@ -785,6 +805,7 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
     cancel=threading.Event()
     def collect_iteration(iteration,current,past):
         batches=plan.iterations[iteration]
+        history=opponent_history(plan,current,past)
         progress=Progress(plan.watchdog)
         original_check=progress.check
         def check():
@@ -818,7 +839,7 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
                 return dict(status='STOPPED',reason='CACHE: '+str(error),statuses=statuses)
             remaining=[g.stream_id for g in plan.games if statuses[g.stream_id]=='NOT_ATTEMPTED']
             if [g.stream_id for g in batch.games]!=remaining[:len(batch.games)]:raise ValueError('next fixed not-attempted prefix required')
-            assignments=tuple(assignment(plan,g,ordinal[g.stream_id],current,past) for g in batch.games)
+            assignments=tuple(assignment(plan,g,ordinal[g.stream_id],current,past,history=history) for g in batch.games)
             try:
                 if iteration_policy_lag:progress.check()
                 prepared_batch=backend.prepare_batch(plan,batch,current,assignments,store)
@@ -874,10 +895,11 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
             if not recorded:
                 # An authorized transition can retain an old iteration-zero
                 # prefix only when its exact assignments already match.
+                history=opponent_history(plan,current,past)
                 for started in store.matching('BATCH_STARTED',iteration=iteration):
                     for actual in started['assignments']:
                         game=next(g for g in plan.games if g.stream_id==actual['stream_id'])
-                        expected=json.loads(_json(assignment(plan,game,ordinal[game.stream_id],current,past)))
+                        expected=json.loads(_json(assignment(plan,game,ordinal[game.stream_id],current,past,history=history)))
                         if actual!=expected:raise ValueError('existing collector prefix used a different acting policy')
                 store.emit('ITERATION_ACTOR_BINDING',**binding)
         return current,past
