@@ -6,6 +6,7 @@ a holdout, or promotes an arm. Real execution needs Torch and the separately
 prepared original engine/JAX backend. Source readiness is not qualification.
 """
 from collections.abc import Sequence
+from bisect import bisect_left
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from functools import cached_property
 from itertools import accumulate
@@ -13,6 +14,7 @@ import hashlib
 import json
 import math
 from numbers import Real
+from operator import attrgetter
 import os
 import signal
 from pathlib import Path
@@ -449,8 +451,10 @@ class Plan:
         if self.evaluation is not None:value['evaluation']=self.evaluation.metadata()
         if self.self_moves:value['self_moves']=True
         if self.historical_anchor_slots:
+            rule = ('UNIFORM_24_RECENT_8_EXACT_LOG_AGE_SLOTS_ELSE_CURRENT_AFTER_WARMUP'
+                    if self.compact else 'UNIFORM_24_RECENT_8_LOG_AGE_PAST_SNAPSHOTS_NO_OUTCOME_ADAPTATION')
             value.update(historical_anchor_slots=self.historical_anchor_slots,
-                         opponent_rule='UNIFORM_24_RECENT_8_LOG_AGE_PAST_SNAPSHOTS_NO_OUTCOME_ADAPTATION')
+                         opponent_rule=rule)
         return value
 
 
@@ -546,11 +550,22 @@ class Store:
         self.emit('SNAPSHOT',**asdict(value));return value
 
 
-def opponent_history(plan,current,past):
+def opponent_history(plan,current,past,*,warmup_floor=None):
     """Select the same bounded bank for construction, assignment and retention."""
     slots=getattr(plan,'historical_anchor_slots',0)
-    if not slots:return tuple(past[-plan.historical_window:])
+    compact = getattr(plan, 'compact', False)
+    if not slots and not compact:return tuple(past[-plan.historical_window:])
     recent_count=plan.historical_window-slots
+    if compact:
+        floor = 0 if warmup_floor is None else warmup_floor
+        start = bisect_left(past, floor, key=attrgetter('iteration'))
+        recent = max(start, len(past) - recent_count)
+        anchors = []
+        for slot in range(slots, 0, -1):
+            target = current.iteration - plan.historical_window * 2**slot
+            index = bisect_left(past, target, lo=start, hi=recent, key=attrgetter('iteration'))
+            anchors.append(past[index] if index < recent and past[index].iteration == target else None)
+        return (*anchors, *past[recent:])
     older=list(past[:-recent_count]);chosen=[]
     for slot in range(1,min(slots,len(older))+1):
         target=current.iteration-plan.historical_window*(2**slot)
@@ -565,9 +580,10 @@ def assignment(plan,game,ordinal,current,past,*,history=None):
     draw=int.from_bytes(digest[:8],'big')/2**64
     if history is None:history=opponent_history(plan,current,past)
     use=plan.model.arm!='A' and bool(history) and draw<plan.historical_fraction
-    opponent=history[int.from_bytes(digest[8:16],'big')%len(history)] if use else current
+    selected=history[int.from_bytes(digest[8:16],'big')%len(history)] if use else None
+    opponent=selected if selected is not None else current
     return dict(stream_id=game.stream_id,learner_side=ordinal%2,opponent=opponent,
-        opponent_kind='HISTORICAL' if use else 'SELFPLAY',selection_digest=digest.hex())
+        opponent_kind='HISTORICAL' if selected is not None else 'SELFPLAY',selection_digest=digest.hex())
 
 
 def require_treatment_ready(plan,backend):

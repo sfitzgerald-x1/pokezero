@@ -71,6 +71,25 @@ class FakeTraining:
 
 
 class V5RunTests(unittest.TestCase):
+    def test_campaign_log_slots_use_exact_eligible_round_or_current(self):
+        campaign = NS(compact=True, historical_anchor_slots=8, historical_window=32,
+                      historical_fraction=1., selection_seed=9, model=NS(arm='B'))
+        past = tuple(NS(iteration=i) for i in range(-1, 99) if i != 35)
+        current = NS(iteration=99)
+        history = r.opponent_history(campaign, current, past)
+        self.assertEqual(history[:8], (None,) * 8)  # closest eligible old round is not the exact slot
+        self.assertEqual([snapshot.iteration for snapshot in history[8:]], list(range(75, 99)))
+        start = r.opponent_history(campaign, NS(iteration=0), past[:1])
+        self.assertEqual(start, (None,) * 8)
+        game = NS(stream_id=41)
+        selected = r.assignment(campaign, game, 2, current, past, history=start)
+        self.assertIs(selected['opponent'], current)
+        self.assertEqual(selected['opponent_kind'], 'SELFPLAY')
+        warmed = r.opponent_history(campaign, current, past, warmup_floor=90)
+        self.assertEqual([item.iteration for item in warmed if item is not None], list(range(90, 99)))
+        valid = r.opponent_history(campaign, NS(iteration=100), past)
+        self.assertEqual(valid[7].iteration, 36)
+
     def test_on_declaration_reaches_cold_creation_export_and_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             trainer=FakeTraining();recipe=replace(plan(),self_moves=True);root=Path(tmp)/'run'

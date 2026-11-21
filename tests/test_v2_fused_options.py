@@ -94,6 +94,35 @@ class ResumeOptionsTests(unittest.TestCase):
                 v2_fused.main(['--config', 'unused', '--reference-run', 'unused', '--out', str(out), '--require-resume'])
             self.assertFalse(out.exists())
 
+    def test_cooldown_resolves_only_committed_parent_and_does_not_touch_it(self):
+        from pokezero.v2_campaign_schedule import CampaignSchedule
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = dict(scaling='sqrt', warmup_updates=8000)
+            snapshots = [v5_run.Snapshot(i, f'ckpt-{i}', f'{i + 2:064x}', f'actor-{i}', f'{i + 3:064x}', 'a'*64)
+                         for i in range(-1, 100)]
+            state = dict(snapshots=[asdict(snapshot) for snapshot in snapshots], lr_start=policy, row_order='file',
+                         reports=[dict(iteration=i, training=dict(steps=240 * (i + 1), rows=980_000 * (i + 1),
+                             lr_start=dict(declared_window=dict(end_game=20_000 * (i + 1))),
+                             campaign_schedule=asdict(CampaignSchedule()))) for i in range(100)])
+            manifest = root / 'state.json'
+            original = v5_run._json(state).encode()
+            manifest.write_bytes(original)
+            last = snapshots[-1]
+            parent = v2_fused.cooldown_parent(root, last.checkpoint_sha256, last.model_sha256, policy)
+            self.assertEqual(parent['origin'], (24000, 98_000_000, 2_000_000))
+            self.assertEqual(parent['history'][0].iteration, 33)
+            self.assertEqual(parent['snapshot'], last)
+            with self.assertRaisesRegex(ValueError, 'committed 2M or 5M'):
+                v2_fused.cooldown_parent(root, snapshots[-2].checkpoint_sha256, last.model_sha256, policy)
+            self.assertEqual(manifest.read_bytes(), original)
+            with self.assertRaisesRegex(ValueError, 'distinct, non-nested'):
+                v2_fused.main(['--config', 'unused', '--reference-run', 'unused', '--out', str(root / 'child'),
+                               '--lr-start', 'sqrt', '--lr-warmup-updates', '8000', '--campaign-anneal',
+                               '--cooldown-child', str(root), '--cooldown-parent-sha256', last.checkpoint_sha256])
+            self.assertEqual(list(root.iterdir()), [manifest])
+
 
 if __name__ == '__main__':
     unittest.main()

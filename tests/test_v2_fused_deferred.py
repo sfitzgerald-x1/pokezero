@@ -24,7 +24,8 @@ except ImportError:
 
 
 def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, writer_failure=False,
-                publication_failure=False, stop=False, invalid_resume_rank=None, fused_options=(), campaign=False, advance=None):
+                publication_failure=False, stop=False, invalid_resume_rank=None, fused_options=(), campaign=False, advance=None,
+                parent_window=False, cooldown_from=None):
     from gpu_engine import v2_bench_trainer, v2_collector, v5_device_backend, v5_model
 
     torch.set_num_threads(1)
@@ -37,6 +38,13 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
         iterations=batches, games=tuple(g for b, in batches for g in b.games), discount=1.,
         max_requests=64, historical_fraction=.5, historical_window=2,
         manifest=lambda: declaration, evaluation_milestones=lambda: {1: 16, 3: 32})
+    if cooldown_from is not None:
+        from pokezero.v5_phasec import campaign_iterations
+        plan_fields['compact'] = True
+        plan_fields['iterations'] = campaign_iterations(
+            'fixture', 20, stream_start=10, team_start=20, identity_seed_start=30,
+            constructor_seed_start=40, sampling_seed_start=50, gender_seed=60, gender_domain=7, gender_root_start=80)
+        plan_fields['game_offsets'] = tuple(range(0, 400_001, 20_000))
     plan_type = make_dataclass('CampaignFixturePlan', plan_fields) if campaign else SimpleNamespace
     plan = plan_type(**plan_fields)
     context = dict(plan=plan, declared={}, preparation_seconds=1, gender=None, pool=None,
@@ -50,6 +58,8 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
         argv += ['--max-iterations', str(limit)]
     if campaign:
         argv += ['--lr-start', 'sqrt', '--lr-warmup-updates', '2', '--campaign-anneal']
+    if cooldown_from is not None:
+        argv += ['--cooldown-child', str(root / 'run'), '--cooldown-parent-sha256', cooldown_from]
     if advance is not None:
         argv += ['--advance-campaign-step-at', str(advance)]
     phases = dict(saves=[], exports=[], state=[], collect=[], issues=[])
@@ -59,7 +69,8 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
             self.n = end - begin
             self.stats = {'dispositions': {'COMPLETE': self.n}}
             self.arrays = {}
-            self.addresses = np.column_stack((np.arange(8*iteration+begin+1, 8*iteration+end+1),
+            start = plan.iterations[iteration][0].games.stream_start if cooldown_from is not None else 8 * iteration + 1
+            self.addresses = np.column_stack((np.arange(start + begin, start + end),
                 np.zeros(self.n, dtype=int), np.zeros(self.n, dtype=int)))
             all_tensors = v5_training._training_tensors(varied_batch(rows=8, seed=71+iteration), model, 'cpu')
             self.tensors = {name: value[begin:end] if isinstance(value, (torch.Tensor, tuple)) else value
@@ -89,8 +100,9 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
 
     def construct(context, backend, iteration, current, past, ordinal, *, shard=None):
         begin, end = shard or (0, 8)
+        rows = (2 * rank, 2 * (rank + 1)) if cooldown_from is not None else (begin, end)
         roster = SimpleNamespace(groups=(None,), games=end-begin, actor_archives=(current.archive_sha256,),
-                                 fixture=(iteration, begin, end))
+                                 fixture=(iteration, *rows))
         return roster, dict(SELFPLAY=end-begin, HISTORICAL=0), 0
 
     real_save, load, real_export = trainer.save_checkpoint, trainer.load_checkpoint, v5_model.export
@@ -107,8 +119,8 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
 
     def write(path, payload, **options):
         if path.name == 'state.json':
-            phases['state'].append(len(payload['reports']))
-            assert options.get('durable', False) == (evaluation is not None)
+            phases['state'].append(payload['round_ledger']['completed_rounds'] if cooldown_from else len(payload['reports']))
+            assert options.get('durable', False) == (evaluation is not None or cooldown_from is not None)
         return real_write(path, payload, **options)
 
     def link(source, destination, **options):
@@ -146,7 +158,10 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
         replace(v2_collector, RefillCollector=Collector, expected_counts=lambda *a: None,
                 finalize=lambda result, **k: result.rows, game_records=lambda result: {})
         replace(v5_device_backend, RuntimeBackend=lambda *a, **k: SimpleNamespace(labels=None, check_plan=lambda _: None))
-        replace(run, learning_rate_window=lambda _, i: v5_training.DeclaredGameWindow(8*i, 8*i+8, 40))
+        games_per_round = 2_000_000 if parent_window else (20_000 if cooldown_from else 8)
+        declared_games = 2_000_000 if parent_window else (400_000 if cooldown_from else 40)
+        replace(run, learning_rate_window=lambda _, i: v5_training.DeclaredGameWindow(
+            games_per_round * i, games_per_round * (i + 1), declared_games))
         replace(torch.cuda, synchronize=lambda: None)
         replace(trainer, create=cpu(trainer.create), load_checkpoint=cpu(trainer.load_checkpoint), save_checkpoint=save)
         replace(trainer.os, link=link)
@@ -193,7 +208,8 @@ def run_rank(rank, directory, attempt, options):
     dist.init_process_group('gloo', init_method=(root / f'rendezvous-{attempt}').as_uri(), rank=rank,
                             world_size=4, timeout=timedelta(seconds=45))
     try:
-        phases = run_fixture(root, root/'run', distribution=launcher.Distribution(rank, 4, dist.group.WORLD), **options)
+        output = 'cooled' if options.get('cooldown_from') else 'run'
+        phases = run_fixture(root, root/output, distribution=launcher.Distribution(rank, 4, dist.group.WORLD), **options)
     finally:
         dist.destroy_process_group()
     (root / f'{attempt}-{rank}.json').write_text(json.dumps(phases))
@@ -262,6 +278,36 @@ class FusedDeferredTests(unittest.TestCase):
             peak = scaled_peak_rate(8, 'sqrt')
             rates = [report['training']['iteration_mean']['learning_rate'] for report in reports]
             self.assertEqual(rates, [.75 * peak, .3 * peak, .3 * peak])
+
+    def test_four_rank_cooldown_forks_and_resumes_without_touching_parent(self):
+        from pokezero import v2_fused_state
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_four(root, 'parent', campaign=True, parent_window=True, limit=1)
+            manifest = root / 'run' / 'state.json'
+            state = json.loads(manifest.read_bytes())
+            parent = state['snapshots'][1]
+            parent['iteration'] = 99
+            # The tiny optimized checkpoint has the true 2M completed window.
+            # Expand only the fixture ledger up to that production boundary.
+            first = state['reports'][0]
+            state['reports'] = [dict(first, iteration=index) for index in range(100)]
+            original = json.dumps(state).encode()
+            manifest.write_bytes(original)
+            checkpoint = root / 'run' / parent['checkpoint']
+            checkpoint_sha = v2_fused.sha(checkpoint)
+            options = dict(campaign=True, cooldown_from=checkpoint_sha)
+            self.assertEqual([rank['exit'] for rank in run_four(root, 'cooled-first', limit=1, **options)], [0] * 4)
+            self.assertEqual([rank['exit'] for rank in run_four(root, 'cooled-resume', limit=2,
+                             fused_options=('--require-resume',), **options)], [0] * 4)
+            self.assertEqual(manifest.read_bytes(), original)
+            self.assertEqual(v2_fused.sha(checkpoint), checkpoint_sha)
+            cooled = v2_fused_state.read_state(root / 'cooled')
+            windows = [report['training']['lr_start']['declared_window'] for report in cooled['reports']]
+            self.assertEqual([(window['start_game'], window['end_game']) for window in windows],
+                             [(2_000_000, 2_020_000), (2_020_000, 2_040_000)])
+            self.assertEqual(cooled['cooldown_parent']['snapshot']['checkpoint_sha256'], checkpoint_sha)
 
     def test_rank_zero_writer_failure_reaches_every_rank_promptly(self):
         with tempfile.TemporaryDirectory() as directory:
