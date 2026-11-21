@@ -1,5 +1,7 @@
+import hashlib
 import json
 from types import SimpleNamespace
+import zipfile
 
 import numpy as np
 import pytest
@@ -8,6 +10,40 @@ from pokezero import s0_transfer_recompute as scorer
 from pokezero.s0_transfer_roster import (
     FP, H2H, SCHEMA, canonical, cell_key, digest, dry_run_clusters, expected_cells, read_terminals,
 )
+
+
+def test_staged_bridge_contains_the_witness_port(tmp_path, monkeypatch):
+    from pokezero import s0_transfer_harness as harness
+
+    bundle = tmp_path / "bridge.zip"
+    harness.pack_bridge(bundle)
+    installed_root = tmp_path / "installed"
+    installed_root.mkdir()
+    monkeypatch.setattr(harness, "__file__", str(installed_root / "src/pokezero/s0_transfer_harness.py"))
+    harness.install_bridge(bundle, hashlib.sha256(bundle.read_bytes()).hexdigest())
+    bridge = installed_root / "scripts/battle_bridge.mjs"
+    witness = installed_root / "scripts/battle_bridge_witness_port.mjs"
+    assert f"./{witness.name}" in bridge.read_text()
+    assert "export function setNativeWitness" in witness.read_text()
+
+    incomplete = tmp_path / "incomplete.zip"
+    with zipfile.ZipFile(bundle) as source, zipfile.ZipFile(incomplete, "x") as archive:
+        for name in source.namelist():
+            if name != witness.name:
+                archive.writestr(name, source.read(name))
+    with pytest.raises(ValueError, match="unexpected bridge source inventory"):
+        harness.install_bridge(incomplete, hashlib.sha256(incomplete.read_bytes()).hexdigest())
+
+
+@pytest.mark.parametrize("role", ["H", "T"])
+def test_foulplay_round_cap_is_unknown_for_both_actor_paths(role):
+    from pokezero.s0_transfer_harness import foulplay_failure
+
+    cell = {"role": role}
+    reason = "RuntimeError: owning game round cap without actual owner terminal"
+    assert foulplay_failure(cell, "FAILED", reason) == (cell, "CAPPED", {"reason": reason})
+    other = "RuntimeError: Foul Play exited early"
+    assert foulplay_failure(cell, "FAILED", other) == (cell, "FAILED", {"reason": other})
 
 
 def scratch_rows():
