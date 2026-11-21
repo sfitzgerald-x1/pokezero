@@ -41,6 +41,7 @@ import tempfile
 
 from . import v5_contract as contract, v5_data, v5_training as v5
 from .v2_lr_start import LRStart
+from .v2_campaign_schedule import CampaignSchedule, CampaignStart, CheckpointAnchor
 from .v5_contract import MAX_VARIANTS, OBSERVATION_SCHEMA_VERSION_V5, TRAINING_CONTRACT_SCHEMA
 from .v5_loss import BASE_PPO_FIELDS, FLOAT_FIELDS, INTEGER_FIELDS, MASK_FIELDS, SEARCH_FIELDS, V5LossConfig, v5_loss
 from .v5_model import MODEL_INPUTS, TOKEN_ROLES, V5ModelConfig, V5Output, forward_v5, require_v5_bindings
@@ -100,6 +101,7 @@ class V2Config:
         alone is not a guarantee of eager RNG/statistic parity.
     lr_start: optional global update warmup and scaled peak. The declared
         game windows account for inputs but do not drive the warmup.
+    campaign: opt-in absolute-game annealing using that same LR-start policy.
     """
     order: str = 'ordered'
     order_seed: int | None = None
@@ -113,6 +115,7 @@ class V2Config:
     native_embedding_backward: bool = False
     fallback_random: bool = False
     lr_start: LRStart | None = None
+    campaign: CampaignSchedule | None = None
 
     def __post_init__(self):
         if type(self.lr_start) is dict:
@@ -122,6 +125,14 @@ class V2Config:
                 raise ValueError('invalid LR-start declaration') from error
         if self.lr_start is not None and type(self.lr_start) is not LRStart:
             raise ValueError('explicit LR-start declaration required')
+        if type(self.campaign) is dict:
+            try:
+                object.__setattr__(self, 'campaign', CampaignSchedule(**self.campaign))
+            except TypeError as error:
+                raise ValueError('invalid campaign declaration') from error
+        if self.campaign is not None and (type(self.campaign) is not CampaignSchedule
+                or self.lr_start is None or self.lr_start.warmup_updates <= 0):
+            raise ValueError('campaign anneal requires a typed schedule and positive LR-start warmup')
         if (self.order not in ORDERS or self.mode not in MODES or self.optimizer not in OPTIMIZERS
                 or type(self.check_interval) is not int or self.check_interval <= 0
                 or self.order_seed is not None and (type(self.order_seed) is not int or not 0 <= self.order_seed < 2**63)
@@ -705,6 +716,8 @@ def create(model_config, loss_config, train_config, v2_config=None, *, enable_v5
     one CUDA device per DDP rank). Rank ``r > 0`` derives its own dropout stream
     from (seed, r). All ranks start from the same parameters.
     """
+    if isinstance(v2_config, V2Config) and v2_config.campaign is not None and v2_config.campaign.cooldown is not None:
+        raise ValueError('campaign cooldown starts from its verified completed parent checkpoint')
     runtime = _create_runtime(model_config, loss_config, train_config, v2_config, enable_v5=enable_v5,
         device=device, process_group=process_group, self_moves=self_moves)
     _broadcast_parameters(runtime)
@@ -750,6 +763,15 @@ def learning_rate(train_config, window, epoch):
     if train_config.learning_rate_schedule == 'constant':
         return train_config.learning_rate
     return v5._epoch_learning_rate(train_config, window, epoch)
+
+
+def _campaign_rate(campaign, start, window, cursor, completed_updates, *, last_applied=False):
+    steps_per_epoch = cursor['steps_per_epoch']
+    offset = cursor['epoch'] * steps_per_epoch + cursor['step']
+    # At a newly bound window with zero updates, LR has already been set for its first update.
+    previous = int(last_applied and offset > 0)
+    return campaign.window_rate(start, window, completed_updates=completed_updates - previous,
+                                offset=offset - previous, window_updates=cursor['epochs'] * steps_per_epoch)
 
 
 # ---------------------------------------------------------------------------
@@ -869,17 +891,26 @@ class Trainer:
         elif rt.cursor is not None and description == rt.order and window == rt.window:
             pass  # Completed: the same store and window is a no-op, as in train_caches.
         else:
+            campaign = rt.v2_config.campaign
             if scheduled:
                 previous = rt.window
                 if previous is None:
                     if window.start_game != 0:
                         raise ValueError('fresh schedule must start at declared game zero')
-                elif window != previous and (previous.end_game != window.start_game or previous.total_games != window.total_games):
+                elif window != previous and (previous.end_game != window.start_game
+                        or (campaign is None and previous.total_games != window.total_games)):
                     raise ValueError('scheduled dataset transition requires contiguous declared windows')
                 elif window != previous and rt.order is not None and rt.order['store'] == description['store']:
                     raise ValueError('new declared window cannot replay the previous row store')
                 elif window == previous and rt.cursor is not None:
                     raise ValueError('a new row store requires its own declared window')
+            if campaign is not None:
+                start = CampaignStart(rt.v2_config.lr_start, config.learning_rate)
+                campaign.validate_next_window(start, window, rt.steps)
+                rate = campaign.window_rate(start, window, completed_updates=rt.steps, offset=0,
+                                            window_updates=config.epochs * order.steps_per_epoch)
+                for group in rt.optimizer.param_groups:
+                    group['lr'] = rate
             rt.cursor = dict(epoch=0, step=0, epochs=config.epochs, steps_per_epoch=order.steps_per_epoch, complete=False)
             rt.order = description; rt.window = window
             if rt.v2_config.lr_start is not None:
@@ -992,13 +1023,18 @@ class Trainer:
         cursor = rt.cursor; pad = rt.v2_config.pads(self.mode)
         updates = []; pending = []; current_rate = None
         lr_start = rt.v2_config.lr_start
+        campaign = rt.v2_config.campaign
+        campaign_start = None if campaign is None else CampaignStart(lr_start, config.learning_rate)
         start_step, start_row = rt.steps, rt.rows
         with v5._rng_scope(torch, rt.device, state=rt.rng):
             rt.model.train()
             while not cursor['complete'] and (max_updates is None or len(updates) + len(pending) < max_updates):
                 epoch, step = cursor['epoch'], cursor['step']
-                rate = (learning_rate(config, rt.window, epoch + 1) if lr_start is None
-                    else lr_start.rate(config.learning_rate, rt.steps))
+                if campaign is not None:
+                    rate = _campaign_rate(campaign, campaign_start, rt.window, cursor, rt.steps)
+                else:
+                    rate = (learning_rate(config, rt.window, epoch + 1) if lr_start is None
+                            else lr_start.rate(config.learning_rate, rt.steps))
                 if rate != current_rate:
                     for group in rt.optimizer.param_groups:
                         group['lr'] = rate
@@ -1091,6 +1127,8 @@ def _v2_section(runtime, rng_by_rank):
     config = asdict(runtime.v2_config)
     if runtime.v2_config.lr_start is None:
         config.pop('lr_start')
+    if runtime.v2_config.campaign is None:
+        config.pop('campaign')
     section = dict(schema=V2_SCHEMA, config=config, world_size=runtime.world_size,
         steps=runtime.steps, rows=runtime.rows, cursor=runtime.cursor, order=runtime.order,
         window=None if runtime.window is None else asdict(runtime.window),
@@ -1105,7 +1143,7 @@ def _v2_digest(section):
     return _sha({key: value for key, value in section.items() if key != 'rng_by_rank'})
 
 
-def _validate_lr_start_checkpoint(section, metadata, optimizer, config, lr_start):
+def _validate_lr_start_checkpoint(section, metadata, optimizer, config, lr_start, campaign=None):
     """Verify the saved update clock against its bound input and last applied LR."""
     if lr_start is None:
         if 'lr_start_origin' in section or 'lr_start' in section['config']:
@@ -1120,16 +1158,12 @@ def _validate_lr_start_checkpoint(section, metadata, optimizer, config, lr_start
         raise ValueError('LR-start checkpoint counters differ')
     groups = optimizer.get('param_groups')
     last_rate = config.learning_rate if steps == 0 else lr_start.rate(config.learning_rate, steps - 1)
-    if not isinstance(groups, list) or not groups or any(
-            type(group) is not dict or type(group.get('lr')) is not float or group['lr'] != last_rate
-            for group in groups):
-        raise ValueError('LR-start optimizer rate differs from the saved update clock')
-
     origin, cursor, order, raw_window = (section[key] for key in
         ('lr_start_origin', 'cursor', 'order', 'window'))
     if cursor is None:
         if steps or rows or any(value is not None for value in (origin, order, raw_window)):
             raise ValueError('unbound LR-start checkpoint has progress')
+        _require_optimizer_rate(groups, last_rate)
         return None
     if type(origin) is not tuple or len(origin) != 2 or any(type(x) is not int or x < 0 for x in origin):
         raise ValueError('invalid LR-start window origin')
@@ -1165,7 +1199,26 @@ def _validate_lr_start_checkpoint(section, metadata, optimizer, config, lr_start
             or steps != origin[0] + epoch * len(counts) + step
             or rows != origin[1] + epoch * sum(counts) + sum(counts[:step])):
         raise ValueError('LR-start checkpoint cursor and counters differ')
+    if campaign is not None:
+        start = CampaignStart(lr_start, config.learning_rate)
+        # The first child save can carry the original completed parent window.
+        child_parent = campaign.cooldown.parent if campaign.cooldown is not None else None
+        last_rate = _campaign_rate(campaign, start, window, cursor, steps, last_applied=True)
+        if (child_parent is not None and window.end_game == child_parent.declared_games and complete
+                and steps == child_parent.completed_updates):
+            if last_rate != child_parent.applied_lr:
+                raise ValueError('cooldown origin must match the parent applied rate')
+        else:
+            campaign.validate_next_window(start, window, origin[0])
+    _require_optimizer_rate(groups, last_rate)
     return origin
+
+
+def _require_optimizer_rate(groups, expected):
+    if not isinstance(groups, list) or not groups or any(
+            type(group) is not dict or type(group.get('lr')) is not float or group['lr'] != expected
+            for group in groups):
+        raise ValueError('LR-start optimizer rate differs from the saved update clock')
 
 
 class CheckpointWriteError(RuntimeError):
@@ -1220,7 +1273,7 @@ def _write_checkpoint(path, runtime, rng_by_rank):
         optimizer_state=_canonical_optimizer_state(runtime.optimizer), rng=rng_by_rank[0],
         v2=section, v2_sha256=_v2_digest(section))
     _validate_lr_start_checkpoint(section, metadata, payload['optimizer_state'],
-        runtime.train_config, runtime.v2_config.lr_start)
+        runtime.train_config, runtime.v2_config.lr_start, runtime.v2_config.campaign)
     with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.' + path.name + '.', suffix='.tmp', delete=False) as stream:
         temporary = Path(stream.name)
         try:
@@ -1300,8 +1353,10 @@ def _restore_checkpoint(path, *, enable_v5, v2_config, expected_model_config, ex
     v2_config = saved if v2_config is None else v2_config
     if saved.lr_start != v2_config.lr_start:
         raise ValueError('resume requires the original LR-start declaration')
+    if saved.campaign != v2_config.campaign:
+        raise ValueError('resume requires the original campaign schedule')
     lr_start_origin = _validate_lr_start_checkpoint(section, metadata, payload['optimizer_state'],
-        training, saved.lr_start)
+        training, saved.lr_start, saved.campaign)
     if saved.distributed_rows != v2_config.distributed_rows:
         raise ValueError('resume cannot change distributed row/loss semantics')
     if saved.role_routing != v2_config.role_routing:
@@ -1329,6 +1384,33 @@ def _restore_checkpoint(path, *, enable_v5, v2_config, expected_model_config, ex
         pass
     runtime.model.train(metadata['model_training'])
     return runtime, checked.sha256
+
+
+def advance_campaign_step(runtime, committed_game):
+    """Advance one pending cut for the updates after the exact committed boundary."""
+    campaign = runtime.v2_config.campaign
+    if (campaign is None or runtime.cursor is None or not runtime.cursor['complete'] or runtime.window is None
+            or runtime.window.end_game != committed_game or runtime.steps < runtime.v2_config.lr_start.warmup_updates):
+        raise ValueError('campaign advance requires the current completed game boundary after warmup')
+    updated = campaign.advance_next_step(committed_game)
+    runtime.v2_config = replace(runtime.v2_config, campaign=updated)
+    return updated
+
+
+def load_campaign_cooldown(path, *, parent_checkpoint_sha256, start_game, end_game, **resume_options):
+    """Copy verified trainer state into a separate finite cooldown lineage."""
+    contract._binding(parent_checkpoint_sha256)
+    runtime = load_checkpoint(path, expected_checkpoint_sha256=parent_checkpoint_sha256, **resume_options)
+    campaign = runtime.v2_config.campaign
+    if (campaign is None or runtime.cursor is None or not runtime.cursor['complete'] or runtime.window is None
+            or runtime.window.end_game != start_game):
+        raise ValueError('cooldown requires the verified completed campaign parent at its declared game')
+    start = CampaignStart(runtime.v2_config.lr_start, runtime.train_config.learning_rate)
+    anchor = CheckpointAnchor(parent_checkpoint_sha256, start_game, runtime.steps,
+                              runtime.optimizer.param_groups[0]['lr'])
+    child = campaign.fork_cooldown(start, anchor, end_game=end_game)
+    runtime.v2_config = replace(runtime.v2_config, campaign=child)
+    return runtime
 
 
 def export_actor(checkpoint, out, *, expected_self_moves=None, off_provenance=None):

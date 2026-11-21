@@ -179,6 +179,17 @@ class LRStartTests(unittest.TestCase):
         self.assertEqual(args.lr_start, POLICY)
         self.assertTrue(args.freeze_gc_after_warmup)
 
+    def test_campaign_parser_composes_with_lr_start_and_gc_profile(self):
+        args = v2_fused.parse_args([
+            '--reference-run', 'root', '--out', 'out', '--profile', 'v2-production',
+            '--lr-start', POLICY.scaling, '--lr-warmup-updates', str(POLICY.warmup_updates),
+            '--campaign-anneal', '--advance-campaign-step-at', '8',
+        ])
+        self.assertEqual(args.lr_start, POLICY)
+        self.assertTrue(args.freeze_gc_after_warmup)
+        self.assertTrue(args.campaign_anneal)
+        self.assertEqual(args.advance_campaign_step_at, 8)
+
     def test_fused_committed_game_ledger_must_match_the_checkpoint(self):
         runtime, store = self.make_runtime()
         trained = v2.Trainer(runtime).train(store, window=FIRST)
