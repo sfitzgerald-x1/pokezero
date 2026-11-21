@@ -1,0 +1,187 @@
+{
+ "schema": "pokezero.effect_probe.scenario.v1",
+ "move": "narrowing_refusals",
+ "note": "Narrowing A: a Leftovers Tauros Return on Lapras, which then sets up a Substitute (the next Return hits it: refused, hit-substitute) and Endures (a capped KO: refused, endure-or-focusband); the clean first hit narrows Tauros to its Leftovers variant. Device pin against set_posterior's support after every step. The literal probe source pools every scenario file's authored sets, so Tauros has two variants (Choice Band in narrowing_choice_band, Leftovers in narrowing_refusals); Electabuzz's Hidden Power sets collapse to one (the prepared move id is the bare hiddenpower), and every other species here has one.",
+ "teams": [
+  [
+   {
+    "species": "Tauros",
+    "moves": [
+     "return",
+     "earthquake",
+     "rockslide",
+     "splash"
+    ],
+    "ability": "Intimidate",
+    "item": "Leftovers"
+   },
+   {
+    "species": "Electabuzz",
+    "moves": [
+     "thunderbolt",
+     "hiddenpowerground",
+     "crosschop",
+     "splash"
+    ],
+    "ability": "Static",
+    "item": "",
+    "ivs": {
+     "spa": 30,
+     "spd": 30
+    }
+   },
+   {
+    "species": "Aggron",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "irontail"
+    ],
+    "ability": "Rock Head",
+    "item": ""
+   },
+   {
+    "species": "Gardevoir",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "psychic"
+    ],
+    "ability": "Synchronize",
+    "item": ""
+   },
+   {
+    "species": "Claydol",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "earthquake"
+    ],
+    "ability": "Levitate",
+    "item": ""
+   },
+   {
+    "species": "Cradily",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "gigadrain"
+    ],
+    "ability": "Suction Cups",
+    "item": ""
+   }
+  ],
+  [
+   {
+    "species": "Lapras",
+    "moves": [
+     "substitute",
+     "endure",
+     "splash",
+     "rest"
+    ],
+    "ability": "Water Absorb",
+    "item": ""
+   },
+   {
+    "species": "Golem",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "earthquake"
+    ],
+    "ability": "Rock Head",
+    "item": ""
+   },
+   {
+    "species": "Houndoom",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "flamethrower"
+    ],
+    "ability": "Flash Fire",
+    "item": ""
+   },
+   {
+    "species": "Gyarados",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "waterfall"
+    ],
+    "ability": "Intimidate",
+    "item": ""
+   },
+   {
+    "species": "Ninetales",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "flamethrower"
+    ],
+    "ability": "Flash Fire",
+    "item": ""
+   },
+   {
+    "species": "Xatu",
+    "moves": [
+     "splash",
+     "protect",
+     "rest",
+     "psychic"
+    ],
+    "ability": "Synchronize",
+    "item": ""
+   }
+  ]
+ ],
+ "script": [
+  [
+   "move 1",
+   "move 1"
+  ],
+  [
+   "move 1",
+   "move 3"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ],
+  [
+   "move 1",
+   "move 2"
+  ]
+ ],
+ "axes": [
+  {
+   "name": "roll",
+   "field": "draws.0.5",
+   "values": [
+    0,
+    15
+   ]
+  }
+ ],
+ "expect": {
+  "exact": true
+ },
+ "require_fields": [
+  "perish_counter",
+  "yawn_counter",
+  "partial_trap_counter",
+  "partial_trap_source",
+  "item_knocked",
+  "destiny_bond",
+  "effect"
+ ]
+}
