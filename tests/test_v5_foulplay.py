@@ -152,11 +152,14 @@ class V5FoulPlayTests(unittest.TestCase):
             self.assertEqual(trajectories[0].steps[0].metadata['archive_sha256'],'b'*64)
 
     def test_legacy_config_and_provenance_shapes_unchanged_and_default_cannot_admit_v5(self):
-        before=ast.parse(subprocess.check_output(['git','show','d0467340:src/pokezero/foulplay_bridge.py'],text=True))
+        # The approved owning fallback added an opt-in config field in #2009.
+        before=ast.parse(subprocess.check_output(['git','show','ea1f5c1d8:src/pokezero/foulplay_bridge.py'],text=True))
         after=ast.parse(Path(old.__file__).read_text())
         find=lambda tree:next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='ControlledFoulPlayConfig')
         self.assertEqual(ast.dump(find(before),include_attributes=False),ast.dump(find(after),include_attributes=False))
-        config=self.config();self.assertNotIn('actor_version',asdict(config))
+        config=self.config()
+        self.assertFalse(config.owning_allow_maybe_trapped_switches)
+        self.assertNotIn('actor_version',asdict(config))
         with self.assertRaises(ValueError):bridge.require_actor_factory(config,self.factory)
         with jax.default_matmul_precision('highest'):
             self.assertIs(bridge.require_actor_factory(config,self.factory,actor_version='v5'),self.factory)
