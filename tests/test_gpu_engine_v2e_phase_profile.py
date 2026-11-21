@@ -7,6 +7,7 @@ import importlib.util
 import inspect
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -22,9 +23,12 @@ from gpu_engine import v2e_census as cz, v2e_phase_profile as pp
 
 ROOT = Path(__file__).resolve().parents[1]
 # Statements of a stand-in step_with_chance on the real phase lines (A, B, D, E0, two actions E1/E4, F1, two residual events, G).
-CODE = {470: 'def step_with_chance(x, y):', 616: '    a = helper(x) + y', 680: '    b = a * y', 798: '    c = b - x', 932: '    c = c + 1',
-    958: '    for order in range(2):', 960: '        c = c * 2 + order', 2271: '        c = jnp.where(c > 0, c, -c)', 2410: '    d = c - y',
-    2534: '    for event in range(2):', 2535: '        d = d + event', 2645: '        d = d * 3', 2925: '    return d + a'}
+CODE = {cz.first('pre'): 'def step_with_chance(x, y):', cz.first('A'): '    a = helper(x) + y',
+    cz.first('B'): '    b = a * y', cz.first('D'): '    c = b - x', cz.first('E0'): '    c = c + 1',
+    cz.first('E1'): '    for order in range(2):', cz.first('E1') + 2: '        c = c * 2 + order',
+    cz.E_LATE: '        c = jnp.where(c > 0, c, -c)', cz.first('F1'): '    d = c - y',
+    cz.F2_LOOP: '    for event in range(2):', cz.F2_LOOP + 1: '        d = d + event',
+    cz.F2_BODY + 67: '        d = d * 3', cz.first('G'): '    return d + a'}
 HEADER = ['import jax', 'import jax.numpy as jnp', '', '', '@jax.jit', 'def helper(x):', '    return x * 3 + 1']
 LABELS = ['A', 'B', 'D', 'E0', 'E1.0', 'E4.0', 'E1.1', 'E4.1', 'F1', 'F2.0', 'F2.1', 'G']
 
@@ -60,18 +64,60 @@ def tiny_table():
 
 
 class PhaseTableTest(unittest.TestCase):
+    def test_shifted_phases_pass_and_changed_boundary_fails_by_name(self):
+        from gpu_engine import source_anchor as sa
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for relative in (cz.SOURCE, cz.CONSUMER, 'tests/source_anchors/gpu_engine/transition.py.json'):
+                target = root/relative;target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(ROOT/relative, target)
+            file = root/cz.SOURCE
+            source = file.read_text()
+            first = source.index('def step_with_chance(')
+            file.write_text(source[:first] + 'def _shift_control():\n    return 0\n\n' + source[first:])
+            span, phases, positions = cz.source_table(root)
+            self.assertEqual(span, tuple(n+3 for n in cz.SPAN))
+            self.assertEqual(phases, tuple((name, lo+3, hi+3, group) for name, lo, hi, group in cz.PHASES))
+            self.assertEqual(positions, {key: value+3 for key, value in cz._positions.items()})
+            with mock.patch.object(cz, 'PHASES', phases):
+                with mock.patch.dict(globals(), {'HLO': hlo_fixture()}):
+                    for name in unittest.defaultTestLoader.getTestCaseNames(JaxAttribTest):
+                        JaxAttribTest(name).debug()
+            shifted = file.read_text()
+            old = 'rows = jnp.arange(state.hp.shape[0])'
+            rows = shifted.splitlines(keepends=True)
+            line = next(lo for name, lo, _, _ in phases if name == 'A')
+            self.assertEqual(rows[line-1].strip(), old)
+            rows[line-1] = rows[line-1].replace(old, 'rows = jnp.arange(state.hp.shape[1])')
+            file.write_text(''.join(rows))
+            with self.assertRaisesRegex(sa.AnchorError, r'CHANGED gpu_engine/transition.py#v2e-a:'):
+                cz.source_table(root)
+
+    def test_phase_interior_and_comments_do_not_repin_headers(self):
+        from gpu_engine import source_anchor as sa
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for relative in (cz.SOURCE, cz.CONSUMER, 'tests/source_anchors/gpu_engine/transition.py.json'):
+                target = root/relative;target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(ROOT/relative, target)
+            file = root/cz.SOURCE
+            source = file.read_text()
+            needle = '        chosen_slot=slot[rows,side]'
+            self.assertEqual(source.count(needle), 1)
+            file.write_text(source.replace(needle, needle+'\n        interior_control = 1 # outside the phase header'))
+            self.assertEqual(sa.verify(root, consumer=cz.CONSUMER), [])
+            self.assertEqual(cz.source_table(root)[0][1], cz.SPAN[1]+1)
+
     def test_phases_tile_step_with_chance(self):
         self.assertEqual(cz.PHASES[0][1], cz.SPAN[0]);self.assertEqual(cz.PHASES[-1][2], cz.SPAN[1])
         for (_, _, last, _), (_, first, _, _) in zip(cz.PHASES, cz.PHASES[1:]):self.assertEqual(first, last + 1)
         self.assertEqual({g for *_, g in cz.PHASES} - {'pre'}, set(cz.GROUPS))
 
     def test_ranges_match_the_oracle_source(self):
-        """Line drift in transition.step_with_chance fails here: its span and every anchor line's text."""
+        """The resolved source span agrees with inspect on the actual engine function."""
         from gpu_engine import transition
         lines, start = inspect.getsourcelines(transition.step_with_chance)
         self.assertEqual((start, start + len(lines) - 1), cz.SPAN)
-        for line, text in cz.ANCHORS.items():
-            self.assertTrue(lines[line - start].strip().startswith(text), f'transition.py:{line} is {lines[line - start].strip()[:80]!r}, expected {text!r}')
         for line in (cz.E_LATE, cz.E_RESTART, cz.F2_LOOP, cz.F2_HEAD, cz.F2_BODY):self.assertIsNotNone(cz.phase_of(line))
         self.assertEqual(cz.phase_of(cz.E_LATE), 'E4');self.assertEqual(cz.phase_of(cz.E_RESTART), 'E1')
         self.assertEqual(cz.phase_of(cz.F2_LOOP), 'F2');self.assertEqual(cz.phase_of(cz.F2_HEAD), 'F2')
@@ -81,7 +127,10 @@ class PhaseTableTest(unittest.TestCase):
         for tag, label in cz.BOUNDARIES:self.assertTrue(label == 'END' or cz.base(label) in names, tag)
 
     def test_label_lines(self):
-        lines = [None, 617, 680, 718, 832, 942, 971, 1246, 1677, 2271, 971, 1246, 2347, 2421, 2527, 2535, 2645, 2540, 2566, 2543, 2944, None]
+        lines = [None, cz.first('A')+1, cz.first('B'), cz.first('C')+1, cz.first('D')+34,
+            cz.first('E0')+10, cz.first('E1')+13, cz.first('E2')+50, cz.first('E3')+76, cz.E_LATE,
+            cz.first('E1')+13, cz.first('E2')+50, cz.E_LATE+66, cz.first('F1')+11, cz.first('F2')+1,
+            cz.F2_LOOP+1, cz.F2_BODY+67, cz.F2_LOOP+6, cz.F2_BODY+2, cz.F2_LOOP+9, cz.first('G')+18, None]
         want = ['outside', 'A', 'B', 'C', 'D', 'E0', 'E1.0', 'E2.0', 'E3.0', 'E4.0', 'E1.1', 'E2.1', 'E4.1', 'F1', 'F2.pre', 'F2.0', 'F2.0',
             'F2.1', 'F2.1', 'F2.2', 'G', 'outside']
         self.assertEqual(cz.label_lines(lines), want)
@@ -90,7 +139,7 @@ class PhaseTableTest(unittest.TestCase):
 
     def test_listing_lines(self):
         with tempfile.TemporaryDirectory() as d:
-            path = Path(d, 'listing.txt');path.write_text('  481:   check\n  616:   rows\n  680:   speed\n 2421:   x\n 2988:   return\nnoise\n')
+            path = Path(d, 'listing.txt');path.write_text(''.join(f'{cz.first(name)+offset}: source\n' for name, offset in [('pre',11),('A',0),('B',0),('F1',11),('G',61)]) + 'noise\n')
             self.assertEqual(cz.listing_lines(path), {'pre': 1, 'A': 1, 'B': 1, 'F1': 1, 'G': 1})
 
 
@@ -158,7 +207,7 @@ class MarkMathTest(unittest.TestCase):
 
 
 # Generated by jax 0.12 (CPU) for outer -> step_with_chance -> leaf: note each parent_frame_id printed one above.
-HLO = '''HloModule jit_outer, is_scheduled=true
+HLO_TEMPLATE = '''HloModule jit_outer, is_scheduled=true
 
 FileNames
 1 "/x/gpu_engine/transition.py"
@@ -173,9 +222,9 @@ FunctionNames
 FileLocations
 1 {file_name_id=1 function_name_id=1 line=10 end_line=10 column=4 end_column=35}
 2 {file_name_id=1 function_name_id=2 line=9 end_line=9 column=11 end_column=30}
-3 {file_name_id=1 function_name_id=3 line=966 end_line=966 column=8 end_column=15}
+3 {file_name_id=1 function_name_id=3 line=@E1@ end_line=@E1@ column=8 end_column=15}
 4 {file_name_id=2 function_name_id=4 line=4 end_line=4 column=11 end_column=23}
-5 {file_name_id=1 function_name_id=3 line=2421 end_line=2421 column=11 end_column=16}
+5 {file_name_id=1 function_name_id=3 line=@F1@ end_line=@F1@ column=11 end_column=16}
 
 StackFrames
 1 {file_location_id=1 parent_frame_id=1}
@@ -201,18 +250,25 @@ ENTRY %main.1 (x.1: f32[4]) -> f32[4] {
 '''
 
 
+def hlo_fixture():
+    return HLO_TEMPLATE.replace('@E1@', str(cz.first('E1')+8)).replace('@F1@', str(cz.first('F1')+11))
+
+
+HLO = hlo_fixture()
+
+
 class JaxAttribTest(unittest.TestCase):
     def test_stacks_reach_the_outermost_frame(self):
         stack = pp.hlo_stacks(HLO.splitlines())
         self.assertEqual(stack.offset, 1)
-        self.assertEqual(stack(4), [('lane_index.py', 'leaf', 4), ('transition.py', 'step_with_chance', 966), ('transition.py', 'outer', 9),
+        self.assertEqual(stack(4), [('lane_index.py', 'leaf', 4), ('transition.py', 'step_with_chance', cz.first('E1')+8), ('transition.py', 'outer', 9),
             ('transition.py', '<module>', 10)])
-        self.assertEqual([f[2] for f in stack(5)], [2421, 9, 10])
+        self.assertEqual([f[2] for f in stack(5)], [cz.first('F1')+11, 9, 10])
 
     def test_index_and_attribution(self):
         index = pp.phase_hlo_index(HLO)
-        self.assertEqual((index['fusion.1']['line'], index['fusion.1']['module'], index['fusion.1']['scope']), (966, 'lane_index', 'step'))
-        self.assertEqual(index['fusion.2']['line'], 2421);self.assertIsNone(index['fusion.3']['line']);self.assertEqual(index['fusion.4']['scope'], 'forward')
+        self.assertEqual((index['fusion.1']['line'], index['fusion.1']['module'], index['fusion.1']['scope']), (cz.first('E1')+8, 'lane_index', 'step'))
+        self.assertEqual(index['fusion.2']['line'], cz.first('F1')+11);self.assertIsNone(index['fusion.3']['line']);self.assertEqual(index['fusion.4']['scope'], 'forward')
         event = lambda op, dur: dict(name=op, dur=dur, start=0, end=dur, line='Stream #1', stats={'hlo_op': op})
         events = [event('fusion.1', 4_000_000), event('fusion.2', 2_000_000), event('fusion.3', 1_000_000), event('fusion.4', 8_000_000),
             event('unknown.9', 5), dict(name='memcpy', dur=9, start=0, end=9, line='Stream #1', stats={})]
@@ -221,7 +277,7 @@ class JaxAttribTest(unittest.TestCase):
         self.assertEqual(got['ms_per_tick_by_phase'], {'E1': 2.0, 'F1': 1.0, 'outside': 0.5})
         self.assertEqual(got['ms_per_tick_by_group_category']['E'], {'tracker': 2.0})
         self.assertAlmostEqual(got['step_ms_per_tick'], 3.5);self.assertIn('forward', got['ms_per_tick_by_scope'])
-        # fusion.2 (root op at 2421, F1) fuses an op from line 966 (E1): charged whole to F1, and counted as spanning two phases.
+        # fusion.2 (root op in F1) fuses an op from E1: charged whole to F1, and counted as spanning two phases.
         self.assertEqual(index['fusion.2']['phases'], ['E1', 'F1']);self.assertEqual(index['fusion.1']['phases'], ['E1'])
         self.assertAlmostEqual(got['multi_phase_fusion_share'], 2 / 7);self.assertAlmostEqual(got['multi_group_fusion_share'], 2 / 7)
         self.assertIn('root op', got['caveat'])
@@ -231,7 +287,7 @@ class JaxAttribTest(unittest.TestCase):
         for k, p in ((2, 1), (3, 2), (4, 3), (5, 2)):
             fixed = fixed.replace(f'{k} {{file_location_id={k} parent_frame_id={p + 1}}}', f'{k} {{file_location_id={k} parent_frame_id={p}}}')
         stack = pp.hlo_stacks(fixed.splitlines());self.assertEqual(stack.offset, 0)
-        self.assertEqual([f[2] for f in stack(4)], [4, 966, 9, 10])
+        self.assertEqual([f[2] for f in stack(4)], [4, cz.first('E1')+8, 9, 10])
 
 
 class DivergenceTest(unittest.TestCase):

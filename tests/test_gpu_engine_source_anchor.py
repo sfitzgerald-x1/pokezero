@@ -154,6 +154,22 @@ class Scratch(unittest.TestCase):
 
 
 class ResolveTests(Scratch):
+    def test_header_pins_a_repeated_guard_without_pinning_its_body(self):
+        file = self.root/'header.py'
+        source = 'def f():\n    for k in range(2):\n        if k:\n            unique = k + 1\n    return 0\n'
+        file.write_text(source)
+        inner = sa.Anchor('header.py', 'f', 'unique =', 'header')
+        outer = sa.Anchor('header.py', 'f', 'unique =', 'header:2')
+        self.assertEqual(sa.resolve(inner, self.root), sa.Span('header.py', 3, 3))
+        self.assertEqual(sa.resolve(outer, self.root), sa.Span('header.py', 2, 2))
+        original = sa.digest(outer, self.root)
+        file.write_text(source.replace('k + 1', 'k + 2'))
+        self.assertEqual(sa.digest(outer, self.root), original)
+        file.write_text(source.replace('range(2)', 'range(3)'))
+        self.assertNotEqual(sa.digest(outer, self.root), original)
+        with self.assertRaises(sa.AnchorError):
+            sa.resolve(sa.Anchor('header.py', 'f', 'unique =', 'header:8'), self.root)
+
     def test_through_extent_tracks_its_endpoint_and_rejects_missing_or_ambiguous_ends(self):
         file = self.root/'span.py'
         file.write_text('def f():\n    start = 1\n    finish = 2\n    return finish\n')

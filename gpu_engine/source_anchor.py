@@ -66,8 +66,10 @@ class Anchor:
     path: repo-relative POSIX path. scope: '' for the whole file, or (.py only) the dotted qualname of a def/class,
     nested by plain dots ('Cls.method', 'outer.inner'). extent: 'line' | 'stmt' (.py only: the statement starting on
     the needle's line) | 'block' (.py only: the innermost compound statement whose body holds the needle's line, for
-    a guard whose own first line is not unique) | int n >= 1 | {'through': endpoint}, where endpoint has scope,
-    needle and extent and names the last included code line. Through spans survive inserted comments/docstrings.
+    a guard whose own first line is not unique) | 'header' or 'header:N' (the header of the Nth enclosing compound
+    statement, innermost first, excluding its body) | int n >= 1.
+    Or {'through': endpoint}, where endpoint has scope, needle and extent and names the last included code line;
+    through spans survive inserted comments/docstrings.
     """
     path: str
     scope: str
@@ -174,6 +176,19 @@ class _Source:
                     best = span
         return best
 
+    def header(self, line, levels=1):
+        """Header of the innermost compound statement holding a unique body needle.
+
+        This pins a repeated guard or loop header without pinning its body.
+        """
+        nodes = sorted((n for n in ast.walk(self.tree) if isinstance(n, ast.stmt)
+                        and hasattr(n, 'body') and _head(n) < line <= n.end_lineno),
+                       key=lambda n: n.end_lineno - _head(n))
+        if len(nodes) < levels:
+            return None
+        node = nodes[levels - 1]
+        return _head(node), max(_head(node), node.body[0].lineno - 1)
+
     def slice(self, start, end):
         (row, col), (end_row, end_col) = start, end
         if row == end_row:
@@ -246,10 +261,11 @@ def _resolve(src, anchor):
         if span is None:
             raise AnchorError(f'no statement starts on {anchor.path}:{line}: {src.lines[line - 1].strip()}')
         return Span(anchor.path, *span)
-    if extent == 'block':
+    header = re.fullmatch(r'header(?::([1-9][0-9]*))?', extent) if isinstance(extent, str) else None
+    if extent == 'block' or header:
         if not src.python:
-            raise AnchorError(f'{anchor.path}: extent block on a non-.py file')
-        span = src.block(line)
+            raise AnchorError(f'{anchor.path}: extent {extent} on a non-.py file')
+        span = src.header(line, int(header.group(1) or 1)) if header else src.block(line)
         if span is None:
             raise AnchorError(f'no compound statement holds {anchor.path}:{line}: {src.lines[line - 1].strip()}')
         return Span(anchor.path, *span)
@@ -267,7 +283,7 @@ def _resolve(src, anchor):
         if not line <= finish <= last:
             raise AnchorError(f'{anchor.path}: endpoint {finish} is outside the span starting at {line} in {where}')
         return Span(anchor.path, line, finish)
-    raise AnchorError(f'{anchor.path}: extent {extent!r} is not line, stmt, block or an int >= 1')
+    raise AnchorError(f'{anchor.path}: extent {extent!r} is not line, stmt, block, header, through or an int >= 1')
 
 
 def _code_units(src):

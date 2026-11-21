@@ -19,9 +19,13 @@ Reports, into census.json and census.md in a new --out directory:
 - device lines per phase from the pruned step_with_chance listing (--listing, lines 'NNN: source').
 
 PHASES is the one phase line table (design section 1.1) every phase tool uses (v2e_phase_profile's subcommands too);
-tests check it against transition.step_with_chance's source, so line drift fails loudly. Paths are arguments.
+content anchors verify each boundary; unrelated line drift leaves census content unchanged. Paths are arguments.
 """
 import argparse
+import ast
+import inspect
+import linecache
+import types
 import collections
 import json
 import os
@@ -32,55 +36,88 @@ import time
 import numpy as np
 
 SCHEMA = 'pokezero.v2e-census.v1'
-# transition.step_with_chance: def line and last line (design note section 1.1; tree 5bc2fe8c, shifted by fidelity A1, A2, R, B, M1, M2, R1, WH and R2).
-SPAN = (470, 3017)
-# (phase, first line, last line, group). 'pre' is the host-side argument checks; boundary statements open the next phase.
-PHASES = (
-    ('pre', 470, 615, 'pre'),
-    ('A', 616, 677, 'A'),      # request kind, validity, resuming draws, key split, age, initialize, Lum
-    ('B', 678, 716, 'B'),      # speeds, switches, saved actor, slot, Struggle, charge, recharge, Focus Punch preparation
-    ('C', 717, 797, 'C'),      # Pursuit per side
-    ('D', 798, 931, 'D'),      # switch order, Baton, depart/install/enter, forced replacement entries, post-switch Lum
-    ('E0', 932, 957, 'E'),     # ordering
-    ('E1', 958, 1188, 'E'),     # per action: pre-move (the recharge turn included)
-    ('E2', 1189, 1600, 'E'),    # damage
-    ('E3', 1601, 2252, 'E'),   # effects (Perish Song, Yawn, the Substitute's trap release and Wrap's trap included)
-    ('E4', 2253, 2409, 'E'),   # post (recoil, move weather, Spikes, drag, Baton, fainted boosts)
-    ('F1', 2410, 2525, 'F'),   # defer/ready, end speeds, Wish, weather
-    ('F2', 2526, 2924, 'F'),   # residual events (argsort at 2533, the 14-event loop at 2534), the Perish pass, White Herb's order 29 and the recharge tick
-    ('G', 2925, 3017, 'G'),    # end of turn
-)
+# Phase identities pin their opening statement, never an absolute line. Repeated
+# headers use a unique body needle and the header extent, so phase interiors can grow.
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = 'gpu_engine/transition.py'
+CONSUMER = 'gpu_engine/v2e_census.py'
+PHASE_CITATIONS = (
+    ('pre', 'gpu_engine/transition.py#v2e-pre', 'pre'),
+    ('A', 'gpu_engine/transition.py#v2e-a', 'A'),
+    ('B', 'gpu_engine/transition.py#v2e-b', 'B'),
+    ('C', 'gpu_engine/transition.py#v2e-c', 'C'),
+    ('D', 'gpu_engine/transition.py#v2e-d', 'D'),
+    ('E0', 'gpu_engine/transition.py#v2e-e0', 'E'),
+    ('E1', 'gpu_engine/transition.py#v2e-e1', 'E'),
+    ('E2', 'gpu_engine/transition.py#v2e-e2', 'E'),
+    ('E3', 'gpu_engine/transition.py#v2e-e3', 'E'),
+    ('E4', 'gpu_engine/transition.py#v2e-e4', 'E'),
+    ('F1', 'gpu_engine/transition.py#v2e-f1', 'F'),
+    ('F2', 'gpu_engine/transition.py#v2e-f2', 'F'),
+    ('G', 'gpu_engine/transition.py#v2e-g', 'G'),
+ )
+MARKER_CITATIONS = {
+    'end': 'gpu_engine/transition.py#v2e-end',
+    'E_LATE': 'gpu_engine/transition.py#v2e-e-late',
+    'E_RESTART': 'gpu_engine/transition.py#v2e-e-restart',
+    'F2_LOOP': 'gpu_engine/transition.py#v2e-f2-loop',
+    'F2_HEAD': 'gpu_engine/transition.py#v2e-f2-head',
+    'F2_BODY': 'gpu_engine/transition.py#v2e-f2-body',
+}
+
+
+def source_table(root=ROOT):
+    """Resolve and verify phase boundaries in a tree, without importing its engine.
+
+    inspect reads the function's compiled code object; compilation does not execute
+    imports or annotations. A scratch root therefore needs only source and stores.
+    """
+    from gpu_engine import source_anchor as sa
+    errors = sa.verify(root, consumer=CONSUMER)
+    if errors:
+        raise sa.AnchorError('\n'.join(errors))
+    file = Path(root) / SOURCE
+    source = file.read_text()
+    tree = ast.parse(source)
+    code = compile(source, str(file.resolve()), 'exec', dont_inherit=True)
+    step = next(c for c in code.co_consts if isinstance(c, types.CodeType) and c.co_name == 'step_with_chance')
+    linecache.cache.pop(str(file.resolve()), None)
+    body, start = inspect.getsourcelines(step)
+    span = (start, start + len(body) - 1)
+    entries = sa.load_store(sa.store_file(root, SOURCE))['anchors']
+    def resolve(cite):
+        return sa.resolve(sa.Anchor.from_entry(SOURCE, entries[cite.split('#')[1]]), root)
+    starts = [(name, resolve(cite).first, group) for name, cite, group in PHASE_CITATIONS]
+    if starts[0][1] != span[0] or any(a[1] >= b[1] for a, b in zip(starts, starts[1:])):
+        raise sa.AnchorError('v2e phase boundaries are out of source order')
+    if resolve(MARKER_CITATIONS['end']).last != span[1]:
+        raise sa.AnchorError('v2e-end no longer closes step_with_chance')
+    phases = tuple((name, first, starts[i+1][1]-1 if i+1 < len(starts) else span[1], group)
+                   for i, (name, first, group) in enumerate(starts))
+    markers = {key: resolve(cite) for key, cite in MARKER_CITATIONS.items()}
+    # The loop body restarts after this accounting block's header, before its
+    # first statement; intervening comments/blank lines do not define a boundary.
+    block = markers['F2_BODY']
+    node = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
+                and (n.lineno, n.end_lineno) == (block.first, block.last))
+    positions = dict(E_LATE=markers['E_LATE'].last, E_RESTART=markers['E_RESTART'].last,
+                     F2_LOOP=markers['F2_LOOP'].first, F2_HEAD=markers['F2_HEAD'].first,
+                     F2_BODY=node.body[0].lineno-1)
+    return span, phases, positions
+
+
+SPAN, PHASES, _positions = source_table()
+E_LATE, E_RESTART = _positions['E_LATE'], _positions['E_RESTART']
+F2_LOOP, F2_HEAD, F2_BODY = (_positions[k] for k in ('F2_LOOP', 'F2_HEAD', 'F2_BODY'))
 GROUPS = ('A', 'B', 'C', 'D', 'E', 'F', 'G')
 GROUP = {name: group for name, _, _, group in PHASES}
-# Source text each line must start with (stripped): a line shift anywhere above an anchor fails the drift test.
-ANCHORS = {
-    470: 'def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,',
-    616: 'rows = jnp.arange(state.hp.shape[0])',
-    678: '# All action speeds are frozen before ordinary switches.',
-    680: 'speed = _speeds(work,table)',
-    717: 'pursuit_used = jnp.zeros_like(switches)',
-    798: 'bench = bench_indices(state.active)',
-    931: 'else:work = _lum_update(work,table,live,_device_public=_device_public)',
-    932: 'priority = table.priority[moves]',
-    958: 'for order in range(2):',
-    959: '_faint_before_hp=work.hp',
-    1189: 'attack_stats = _active(work.stats, work, side)',
-    1601: 'if table.effects is not None:',
-    2253: '# Gen3 applies contact DamagingHit',
-    2355: 'work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],',
-    2410: 'turn_context = live & (~replacement | state.pending_residual)',
-    2526: 'event_sides = jnp.array(residual_order.EVENT_SIDES)',
-    2533: 'event_order = jnp.argsort(event_keys,axis=1)',
-    2534: 'for order in range(residual_order.EVENTS):',
-    2549: 'if _status_residual_context is not None:',
-    2925: 'work=linking.prune(work)',
-    3008: 'work = jax.tree.map(lambda old, new: jnp.where(live.reshape(',
-    3017: 'return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)',
-}
-# Iteration rules over lines in program order (the scratch census's): an E1..E4 line <= E_RESTART after one >= E_LATE
-# starts the second action; in F2 a line <= F2_HEAD after one > F2_BODY starts the next of the 14 residual events.
-E_LATE, E_RESTART = 2271, 1046
-F2_LOOP, F2_HEAD, F2_BODY = 2534, 2549, 2564
+
+
+def first(phase):
+    """Current first source line of a named phase, for profile fixtures and readers."""
+    return next(lo for name, lo, _, _ in PHASES if name == phase)
+
+
 # Design boundaries: the phase label whose first equation each one is (b0: the first step_with_chance equation; b8: the end).
 BOUNDARIES = (('b0', 'A'), ('b1', 'B'), ('b2', 'D'), ('b3', 'E0'), ('b4', 'E1.0'), ('b5', 'E1.1'), ('b6', 'F1'), ('b7', 'G'), ('b8', 'END'))
 TRACKERS = {'engine_device_public_hooks', 'engine_device_trackers', 'engine_device_public_port', 'engine_device_visible_belief',
