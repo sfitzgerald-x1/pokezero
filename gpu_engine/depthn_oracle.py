@@ -90,7 +90,7 @@ class DepthNOracle(d2.Oracle):
         specs, rows, flat = self._flat(stack, specs, 2 + 2 * plies)
         if not len(specs):return dict(specs=specs)
         fn, kind = self._fn(plies, False);raw = (('own', 'learner', 'raw'),) if self.raw_forward is not None else ()
-        facts, outputs, _ = self._map(kind, fn, stack, flat, params, (('own', 'learner'), ('peer', 'opponent')) + raw)
+        facts, outputs, _ = self._map(kind, fn, stack, flat, params, (('own', 'learner'), ('peer', 'child_opponent')) + raw)
         own_logits, own_value, own_usable = outputs['own'];peer_logits, _, peer_usable = outputs['peer'];owner = stack.owner[rows]
         status, error = classify(facts['invalid'], facts['done'], facts['winner'], facts['own_error'], own_usable, owner, scored=STATUS_EXPANDED)
         status, error = child_codes(status, error, facts['peer_error'], facts['peer_requested'], peer_usable)

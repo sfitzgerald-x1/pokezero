@@ -416,7 +416,7 @@ class CodexLikeBackendTests(unittest.TestCase):
         self.assertEqual(sum(o is None for o in outs), served.count('crash'))   # the client sees EOF; no second backend gets it
 
 
-def identity_backend(name, script, seen, *, tree='t1', archive='a1', worlds=16, precision='highest', K=8, reply=None, view_b=False, views='jit'):
+def identity_backend(name, script, seen, *, tree='t1', archive='a1', worlds=16, precision='highest', K=8, reply=None, view_b=False, views='jit', reply_below_root=None):
     """Answers each framed request with the next status in `script` (COMPLETE, or a refusal cause) and the identity fields."""
     steps = iter(script)
     async def handle(reader, writer):
@@ -427,7 +427,8 @@ def identity_backend(name, script, seen, *, tree='t1', archive='a1', worlds=16, 
                 refusal=None, rung=q['rung'], archive_sha256=archive, requested_worlds=worlds, root_operator='ARGMAX_MEAN_COMPLETED_Q',
                 tree_commit=tree, pricer=dict(matmul_precision=precision, K=K, W=worlds),
                 **({} if reply is None else dict(reply_prior=dict(operator='br_fp', views=views, reply_archive_sha256=reply))),
-                **(dict(peer_view_b=dict(enabled=True)) if view_b else {}))).encode()
+                **(dict(peer_view_b=dict(enabled=True)) if view_b else {}),
+                **(dict(reply_below_root=reply_below_root) if reply_below_root is not None else {}))).encode()
             writer.write(struct.pack('!I', len(out)) + out);await writer.drain()
         except asyncio.IncompleteReadError:pass
         finally:writer.close()
@@ -482,6 +483,20 @@ class IdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'disagree'):self.go([('a', [], brfp), ('b', [], dict(brfp, views='eager'))])   # mixed views
         with self.assertRaisesRegex(SystemExit, 'differs from the expected'):
             self.go([('a', [], dict(brfp, views='eager'))], expect=dict(self.EXPECT, reply_archive_sha256='r' * 64, reply_views='jit'))
+
+    def test_reply_route_is_pinned_and_mixed_pools_are_refused(self):
+        brfp=dict(reply='r'*64,view_b=True)
+        routed=dict(brfp,reply_below_root=True)
+        ready,_=self.go([('a',[],routed)],expect=dict(self.EXPECT,reply_below_root='on'))
+        self.assertEqual(ready['identity']['reply_below_root'],'on')
+        ready,_=self.go([('a',[],brfp)],expect=dict(self.EXPECT,reply_below_root='off'))
+        self.assertNotIn('reply_below_root',ready['identity'])
+        with self.assertRaisesRegex(SystemExit,'disagree'):
+            self.go([('a',[],routed),('b',[],brfp)])
+        with self.assertRaisesRegex(SystemExit,'differs from the expected'):
+            self.go([('a',[],brfp)],expect=dict(self.EXPECT,reply_below_root='on'))
+        with self.assertRaisesRegex(SystemExit,'non-boolean reply_below_root'):
+            self.go([('a',[],dict(brfp,reply_below_root=1))])
 
     def test_backends_that_disagree_refuse_to_start(self):
         for kw in (dict(tree='t2'), dict(K=4)):   # tree commit, or any pricer field

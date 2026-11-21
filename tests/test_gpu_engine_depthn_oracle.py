@@ -418,6 +418,26 @@ class OracleNTests(FixtureN, unittest.TestCase):
             for name in ('status', 'error', 'value', 'digest', 'head_value'):np.testing.assert_array_equal(walked[name], leaves[name], err_msg=name)
             self.assertFalse(walked['broken_path'].any())
 
+    def test_the_child_opponent_is_used_by_both_oracles_below_the_root(self):
+        from gpu_engine import depth2_oracle as d2
+        base=(replace(self.requests[1],opponent_actor=0),)
+        routed=(replace(base[0],child_opponent_actor=1),)
+        alternate=(replace(base[0],opponent_actor=1),)
+        cells=[(0,0,0,1)]
+        descendants=[(0,0,0,1,2,0)]
+        with self.engine():
+            worlds=batch._numpy_worlds(base,self.tables,self.recipe)
+            a,e,other=(reference.stack(requests,worlds)for requests in (base,routed,alternate))
+            two=d2.Oracle(self.ex,object(),chunk=8)
+            root=two.roots(a,base,PARAMS)[(0,0)]['peer_logits']
+            np.testing.assert_array_equal(root,two.roots(e,routed,PARAMS)[(0,0)]['peer_logits'])
+            for read in (lambda s:two.children(s,cells,PARAMS),
+                         lambda s:self.oracle.nodes(s,cells,1,PARAMS),
+                         lambda s:self.oracle.nodes(s,descendants,2,PARAMS)):
+                champion,reply,control=(read(s)['peer_logits']for s in (a,e,other))
+                self.assertFalse(np.array_equal(champion,reply))
+                np.testing.assert_array_equal(reply,control)
+
     def test_every_step_draws_the_nodes_own_chance(self):
         """Mode 18 re-keys chance from each step's actions: a ply-3 leaf's value is 200 + sum over steps of
         a*30 + r*20 + sample(that step's node)."""

@@ -349,7 +349,8 @@ def identity(answer):
     return dict(rung=answer.get('rung'), archive_sha256=answer.get('archive_sha256'), requested_worlds=answer.get('requested_worlds'),
         root_operator=answer.get('root_operator'), matmul_precision=pricer.get('matmul_precision'), tree_commit=answer.get('tree_commit'),
         pricer=answer.get('pricer'), reply_archive_sha256=reply.get('reply_archive_sha256') or 'none', reply_views=reply.get('views') or 'none',
-        peer_view_b='on' if 'peer_view_b' in answer else 'off')
+        peer_view_b='on' if 'peer_view_b' in answer else 'off',
+        **({'reply_below_root': 'on'} if answer.get('reply_below_root') is True else {}))
 
 
 NEXT_ROOT = ('constructor_refused', 'depthn_refused', 'class_refused')
@@ -370,12 +371,16 @@ async def probe_backend(backend, requests, *, timeout):
             raise ProbeFailed(f'identity probe failed: {type(error).__name__}: {error}') from None
         if type(answer) is not dict or answer.get('request_id') != body['request_id']:raise ProbeFailed('answer is not for the probe')
         tried.append((answer.get('status'), answer.get('cause')))
-        if answer.get('status') == 'COMPLETE':return identity(answer)
+        if answer.get('status') == 'COMPLETE':
+            if type(answer.get('reply_below_root', False)) is not bool:
+                raise ProbeFailed('COMPLETE response has a non-boolean reply_below_root marker')
+            return identity(answer)
         if answer.get('cause') not in NEXT_ROOT:break
     raise ProbeFailed(f'no COMPLETE identity probe (tried {tried}; last refusal {answer.get("refusal")!r})')
 
 
 def differences(found, expect):
+    found = {'reply_below_root': 'off', **found}
     return {k: (found[k], v) for k, v in expect.items() if found[k] != v}
 
 
@@ -544,6 +549,7 @@ def main(argv=None):
     p.add_argument('--expect-reply-archive-sha256', help="the served reply model's archive sha256 (br_fp), or 'none' for a server without one")
     p.add_argument('--expect-peer-view-b', choices=('on', 'off'), help='whether the COMPLETE probe answer was built with peer view b')
     p.add_argument('--expect-reply-views', choices=('eager', 'jit', 'check', 'none'), help="the reply model's views mode (br_fp), or 'none'")
+    p.add_argument('--expect-reply-below-root', choices=('on', 'off'), help='whether the reply model prices opponent rows below the root')
     p.add_argument('--expect-worlds', type=int)
     p.add_argument('--connection-log', help='JSONL, appended: one row per client connection (backend, timings, bytes)')
     args = p.parse_args(argv)
@@ -554,7 +560,7 @@ def main(argv=None):
         if not args.backend:p.error('--backends-file: one or more backends required')
     expect = {k: v for k, v in dict(rung=args.expect_rung, archive_sha256=args.expect_archive_sha256, root_operator=args.expect_root_operator,
         matmul_precision=args.expect_matmul_precision, requested_worlds=args.expect_worlds, reply_archive_sha256=args.expect_reply_archive_sha256,
-        peer_view_b=args.expect_peer_view_b, reply_views=args.expect_reply_views).items() if v is not None}
+        peer_view_b=args.expect_peer_view_b, reply_views=args.expect_reply_views, reply_below_root=args.expect_reply_below_root).items() if v is not None}
     if args.probe_requests is None and expect:p.error('--expect-* needs --probe-requests')
     probe = None
     if args.probe_requests is not None:

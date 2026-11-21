@@ -100,7 +100,8 @@ def gate(search, blocks, wide, requests, *, min_priced=25, negative_control=Fals
             item = cw.prepare_roots(search.constructor, [{k: request[k] for k in live.PROTOCOL_KEYS}], device=search.device, **search._redaction())[0]
             if type(item) is not cw.Prepared or not item.made.fully_constructed:
                 row.update(status='REFUSED', reason=getattr(item, 'reason', None) or 'world refusals'); tally['refused'] += 1; rows.append(row); continue
-            made = cw.build(search.constructor, [item], blocks, search.params, binding=search.binding, recipe=search.recipe, only_complete=True)
+            made = cw.build(search.constructor, [item], blocks, search.params, binding=search.binding, recipe=search.recipe, only_complete=True,
+                            **({} if getattr(search, 'child_opponent_actor', None) is None else dict(child_opponent_actor=search.child_opponent_actor)))
             if not made.requests:
                 row.update(status='REFUSED', reason='not built'); tally['refused'] += 1; rows.append(row); continue
             clock = time.perf_counter(); a, _ = cw.price(blocks, made, search.binding, search.recipe, search.params); row['blocks_seconds'] = time.perf_counter() - clock
