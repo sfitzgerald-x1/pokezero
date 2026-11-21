@@ -21,5 +21,6 @@ The explicit wide-draw Perish side-index correction moves it to 500dcc84.
 The Shed Skin composition retains that correction and adds the saved cure bank at f62255ca.
 Gen 3 Toxic SwitchIn composes with the saved Shed Skin cure bank at 85abfe4f.
 The device Focus Punch preparation order is bound at 1123d927.
+Narrowing A adds opt-in strike callbacks while preserving the default transition at f5e0eda1.
 """
-CURRENT_TRANSITION = '1123d9278abe4eec3542fb4458898ae5f7a7faab'
+CURRENT_TRANSITION = 'f5e0eda128f56f813603157ff8b22024be4ad3e6'
