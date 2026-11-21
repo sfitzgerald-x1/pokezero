@@ -5,7 +5,10 @@ module never draws teams, allocates a job, loads a legacy warm start, evaluates
 a holdout, or promotes an arm. Real execution needs Torch and the separately
 prepared original engine/JAX backend. Source readiness is not qualification.
 """
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, is_dataclass, replace
+from functools import cached_property
+from itertools import accumulate
 import hashlib
 import json
 import math
@@ -79,6 +82,64 @@ class Batch:
             if len(self.gender_root_ids)!=len(self.games):raise ValueError('literal per-game gender root IDs required')
             for value in self.gender_root_ids:_seed(value)
         elif self.gender_domain is not None or self.gender_root_ids:raise ValueError('complete explicit gender recipe required')
+
+
+@dataclass(frozen=True)
+class GameRange(Sequence):
+    """An ordered bank slice with the same identities as the literal smoke bank."""
+
+    run_id: str
+    first_ordinal: int
+    game_count: int
+    stream_start: int
+    identity_seed_start: int
+    team_start: int
+
+    def __post_init__(self):
+        if type(self.run_id) is not str or not self.run_id:
+            raise ValueError('game range needs the declared run ID')
+        for value in (self.first_ordinal, self.game_count, self.stream_start, self.identity_seed_start, self.team_start):
+            _seed(value)
+        if (self.game_count == 0 or not 0 < self.stream_start <= self.stream_start + self.game_count - 1 < 2**31
+                or self.team_start + 2 * self.game_count > 2**31
+                or self.identity_seed_start + self.game_count > 2**32):
+            raise ValueError('game range exceeds the constructor or identity integer bounds')
+
+    def __len__(self):
+        return self.game_count
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return tuple(self[i] for i in range(*index.indices(self.game_count)))
+        if index < 0:
+            index += self.game_count
+        if not 0 <= index < self.game_count:
+            raise IndexError(index)
+        team = self.team_start + 2 * index
+        return Game(self.stream_start + index, f'{self.run_id}-{self.first_ordinal + index:05d}',
+                    self.identity_seed_start + index, (team, team + 1))
+
+
+@dataclass(frozen=True)
+class CampaignBatch:
+    games: GameRange
+    constructor_seed: int
+    sampling_seed: int
+    gender_seed: int
+    gender_domain: int
+    gender_root_start: int
+
+    def __post_init__(self):
+        if type(self.games) is not GameRange:
+            raise ValueError('campaign batch must use a game range')
+        for seed in (self.constructor_seed, self.sampling_seed, self.gender_seed, self.gender_domain, self.gender_root_start):
+            _seed(seed)
+        if self.gender_root_start + len(self.games) > 2**32:
+            raise ValueError('gender root range exceeds uint32')
+
+    @property
+    def gender_root_ids(self):
+        return range(self.gender_root_start, self.gender_root_start + len(self.games))
 
 
 @dataclass(frozen=True)
@@ -290,7 +351,7 @@ class Plan:
     model:V5ModelConfig
     loss:V5LossConfig
     train:training.TrainConfig
-    iterations:tuple[tuple[Batch,...],...]
+    iterations:tuple[tuple[Batch|CampaignBatch,...],...]
     pool_sha256:str
     selection_seed:int
     historical_fraction:float
@@ -319,7 +380,7 @@ class Plan:
         if (type(self.run_id) is not str or not self.run_id or type(self.model) is not V5ModelConfig
                 or type(self.loss) is not V5LossConfig or type(self.train) is not training.TrainConfig
                 or self.loss.arm!=self.model.arm or type(self.watchdog) is not Watchdog
-                or not self.iterations or any(not x or any(type(b) is not Batch for b in x) for x in self.iterations)):
+                or not self.iterations or any(not x or any(type(b) not in (Batch, CampaignBatch) for b in x) for x in self.iterations)):
             raise ValueError('explicit same-arm scratch model/loss/trainer and finite declaration required')
         if (self.model.width,self.model.layers,self.model.attention_heads,self.model.expert_width,self.model.value_hidden,self.model.value_bins)!=(512,3,8,512,(512,512),101):
             raise ValueError('initial Phase C512x3/three512-role-expert architecture required')
@@ -333,10 +394,26 @@ class Plan:
                 or not math.isfinite(self.historical_fraction) or not 0<=self.historical_fraction<=1
                 or (self.model.arm=='A')!=(self.historical_fraction==0)):
             raise ValueError('declared A selfplay or treatment historical mixture/window required')
-        games=self.games
-        if (len({g.stream_id for g in games})!=len(games) or len({g.battle_id for g in games})!=len(games)
-                or len({t for g in games for t in g.team_indices})!=2*len(games)):
-            raise ValueError('one fixed ordered bank, no reused roots/teams required')
+        if self.compact:
+            ordinal = stream_end = team_end = 0
+            for iteration in self.iterations:
+                for batch in iteration:
+                    if type(batch) is not CampaignBatch:
+                        raise ValueError('campaign declarations require ranges in every batch')
+                    games = batch.games
+                    if (games.run_id != self.run_id or games.first_ordinal != ordinal
+                            or games.stream_start < stream_end or games.team_start < team_end):
+                        raise ValueError('campaign ranges must be ordered and cannot reuse roots or teams')
+                    ordinal += len(games)
+                    stream_end = games.stream_start + len(games)
+                    team_end = games.team_start + 2 * len(games)
+        else:
+            if any(type(batch) is not Batch for iteration in self.iterations for batch in iteration):
+                raise ValueError('literal declarations require literal batches throughout')
+            games=self.games
+            if (len({g.stream_id for g in games})!=len(games) or len({g.battle_id for g in games})!=len(games)
+                    or len({t for g in games for t in g.team_indices})!=2*len(games)):
+                raise ValueError('one fixed ordered bank, no reused roots/teams required')
         if self.evaluation is not None:
             if type(self.evaluation) is not EvaluationProtocol:raise ValueError('typed evaluation protocol required')
             self.evaluation_milestones()
@@ -348,7 +425,18 @@ class Plan:
         return evaluation_milestones(counts, self.evaluation.interval_games)
 
     @property
-    def games(self):return tuple(g for iteration in self.iterations for batch in iteration for g in batch.games)
+    def compact(self):
+        return type(self.iterations[0][0]) is CampaignBatch
+
+    @cached_property
+    def game_offsets(self):
+        return tuple(accumulate((sum(len(batch.games) for batch in iteration) for iteration in self.iterations), initial=0))
+
+    @property
+    def games(self):
+        if self.compact:
+            raise ValueError('campaign games are available one batch at a time')
+        return tuple(g for iteration in self.iterations for batch in iteration for g in batch.games)
 
     def manifest(self):
         value=dict(schema=SCHEMA,run_id=self.run_id,model=self.model.metadata(),loss=self.loss.metadata(),
@@ -509,9 +597,8 @@ def learning_rate_window(plan,iteration):
     """Progress uses every DECLARED game ordinal, never accepted/cache rows."""
     if type(plan) is not Plan or type(iteration) is not int or not 0<=iteration<len(plan.iterations):
         raise ValueError('original declared iteration required for schedule window')
-    counts=[sum(len(batch.games) for batch in batches) for batches in plan.iterations]
-    start=sum(counts[:iteration])
-    return training.DeclaredGameWindow(start,start+counts[iteration],sum(counts))
+    offsets = plan.game_offsets
+    return training.DeclaredGameWindow(offsets[iteration], offsets[iteration + 1], offsets[-1])
 
 
 def _evaluation_binding(store,snapshot):
@@ -720,6 +807,8 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
     if type(iteration_policy_lag)is not int or iteration_policy_lag not in (0,1):
         raise ValueError('explicit zero or one iteration policy lag required')
     if enable_v5 is not True or type(plan) is not Plan:raise ValueError('explicit v5 finite run enablement required')
+    if plan.compact:
+        raise ValueError('campaign game ranges require the fused V2 runner')
     milestones = plan.evaluation_milestones()
     deferred = plan.evaluation is not None and plan.evaluation.deferred
     if deferred and iteration_policy_lag:

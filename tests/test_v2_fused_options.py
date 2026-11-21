@@ -1,7 +1,10 @@
 """The fused production entry keeps learner acceleration options explicit."""
 import unittest
 from dataclasses import asdict, dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
+from gpu_engine import v2_fused
 from gpu_engine.v2_fused import argument_parser, parse_args, select_learner_precision
 from pokezero import v5_run, v5_training
 
@@ -81,6 +84,15 @@ class LearnerPrecisionTests(unittest.TestCase):
             select_learner_precision(context, 'float16')
         self.assertIs(context['plan'], original)
         self.assertEqual(context['declared'], declared)
+
+
+class ResumeOptionsTests(unittest.TestCase):
+    def test_require_resume_refuses_missing_out_before_initialization(self):
+        with TemporaryDirectory() as directory:
+            out = Path(directory) / 'new-output'
+            with self.assertRaisesRegex(ValueError, 'needs a committed state.json'):
+                v2_fused.main(['--config', 'unused', '--reference-run', 'unused', '--out', str(out), '--require-resume'])
+            self.assertFalse(out.exists())
 
 
 if __name__ == '__main__':

@@ -113,8 +113,13 @@ def construct(context, backend, iteration, current, past, ordinal, *, shard=None
         offset += len(batch.games)
         if end <= begin:
             continue
-        assignments = tuple(runs.assignment(plan, g, ordinal[g.stream_id], current, past, history=window) for g in batch.games)
-        recorded = json.loads(runs._json(assignments[begin:end]))
+        games = batch.games
+        assignments = tuple(
+            runs.assignment(plan, game, games.first_ordinal + index if ordinal is None else ordinal[game.stream_id],
+                            current, past, history=window)
+            for index, game in enumerate(games[begin:end], start=begin)
+        )
+        recorded = json.loads(runs._json(assignments))
         for a in recorded:kinds[a['opponent_kind']] += 1
         required = tuple(dict.fromkeys([current.archive_sha256, *(a['opponent']['archive_sha256'] for a in recorded)]))
         bindings = rollout.Bindings(plan.model.category_vocabulary_sha256, plan.model.label_vocabulary, prepared.source_sha256,
@@ -192,7 +197,7 @@ def write_json(path, value, *, durable=False):
             os.close(descriptor)
 
 
-def select_learner_precision(context, precision):
+def select_learner_precision(context, precision, *, record_hash=True):
     """Record an explicit learner override without changing the initial binding."""
     plan = context['plan']
     if precision is None:
@@ -200,12 +205,13 @@ def select_learner_precision(context, precision):
     from pokezero import v5_run as runs
     plan = replace(plan, train=replace(plan.train, precision=precision))
     context['plan'] = plan
-    context['declared'] = dict(context['declared'], learner_precision=precision,
-        effective_plan_sha256=runs._sha(plan.manifest()))
+    context['declared'] = dict(context['declared'], learner_precision=precision)
+    if record_hash:
+        context['declared']['effective_plan_sha256'] = runs._sha(plan.manifest())
     return plan
 
 
-def select_learner_lr_start(context, lr_start):
+def select_learner_lr_start(context, lr_start, *, record_hash=True):
     """Override the effective learner recipe after binding the original initializer."""
     plan = context['plan']
     if lr_start is None:
@@ -214,8 +220,9 @@ def select_learner_lr_start(context, lr_start):
     peak = scaled_peak_rate(plan.train.batch_size, lr_start.scaling)
     plan = replace(plan, train=replace(plan.train, learning_rate=peak, learning_rate_schedule='constant'))
     context['plan'] = plan
-    context['declared'] = dict(context['declared'], lr_start=asdict(lr_start),
-        effective_plan_sha256=runs._sha(plan.manifest()))
+    context['declared'] = dict(context['declared'], lr_start=asdict(lr_start))
+    if record_hash:
+        context['declared']['effective_plan_sha256'] = runs._sha(plan.manifest())
     return plan
 
 
@@ -223,12 +230,13 @@ def _validate_lr_start_reports(runtime, reports, plan, policy):
     """Bind the fused round ledger and declared games to the loaded checkpoint."""
     if not reports or len(reports) > len(plan.iterations):
         raise ValueError('resuming LR start requires its committed fused rounds')
+    total_games = sum(len(batch.games) for batches in plan.iterations for batch in batches)
     start_update = start_row = start_game = 0
     campaign = CampaignSchedule() if runtime.v2_config.campaign is not None else None
     for iteration, report in enumerate(reports):
         games = sum(len(batch.games) for batch in plan.iterations[iteration])
         end_game = start_game + games
-        window = dict(start_game=start_game, end_game=end_game, total_games=len(plan.games))
+        window = dict(start_game=start_game, end_game=end_game, total_games=total_games)
         training = report['training']
         start = training.get('lr_start')
         steps, rows = training['steps'], training['rows']
@@ -259,6 +267,8 @@ def argument_parser():
     parser.add_argument('--runtime');parser.add_argument('--runtime-sha256');parser.add_argument('--plan-arm')
     parser.add_argument('--reference-run', required=True, help='run root holding the initial snapshot (journal + artifacts)')
     parser.add_argument('--out', required=True)
+    parser.add_argument('--require-resume', action='store_true',
+        help='refuse to start without a committed fused state in --out')
     parser.add_argument('--arm', default='B', help='model shape for --config')
     parser.add_argument('--iterations', type=int, default=2, help='iterations for --config (1 or 2)')
     parser.add_argument('--max-iterations', type=int, default=None, help='stop after this many declared iterations')
@@ -354,7 +364,11 @@ def main(argv=None, *, distribution=None):
     args = parse_args(argv)
     lr_start = args.lr_start
     if bool(args.config) == bool(args.declaration):raise SystemExit('exactly one of --config or --declaration')
-    out = Path(args.out);(out / 'artifacts').mkdir(parents=True, exist_ok=True);(out / 'audit').mkdir(exist_ok=True)
+    out = Path(args.out)
+    state_path = out / 'state.json'
+    if args.require_resume and not state_path.is_file():
+        raise ValueError('--require-resume needs a committed state.json in --out')
+    (out / 'artifacts').mkdir(parents=True, exist_ok=True);(out / 'audit').mkdir(exist_ok=True)
     wall_start = time.perf_counter()
     import torch
     from pokezero import v5_run as runs, v2_trainer as v2t
@@ -366,21 +380,22 @@ def main(argv=None, *, distribution=None):
     if args.recipe is not None:
         from pokezero.v2_distributed import recipe_train
         plan = replace(plan, train=recipe_train(initial_train, args.recipe));context['plan'] = plan
-        context['declared'] = dict(context['declared'], recipe=args.recipe,
-            effective_plan_sha256=runs._sha(plan.manifest()))
-    plan = select_learner_precision(context, args.learner_precision)
-    plan = select_learner_lr_start(context, lr_start)
+        context['declared'] = dict(context['declared'], recipe=args.recipe)
+    plan = select_learner_precision(context, args.learner_precision, record_hash=False)
+    plan = select_learner_lr_start(context, lr_start, record_hash=False)
     lr_start_policy = context['declared'].get('lr_start') if lr_start is not None else None
+    declaration_bytes = runs._json(plan.manifest()).encode()
+    declaration_sha256 = hashlib.sha256(declaration_bytes).hexdigest()
+    if args.recipe is not None or args.learner_precision is not None or lr_start is not None:
+        context['declared']['effective_plan_sha256'] = declaration_sha256
     base_campaign = CampaignSchedule() if args.campaign_anneal else None
     if base_campaign is not None:
         # Distributed resume compares this contract with the persisted JSON value.
         context['declared'] = dict(context['declared'], campaign_anneal=json.loads(runs._json(asdict(base_campaign))))
     if distribution is not None:
         distribution.bind(context, args)
-    declaration_sha256 = runs._sha(plan.manifest())
     deferred = plan.evaluation is not None and plan.evaluation.deferred
     dispatch = None
-    state_path = out / 'state.json'
     if deferred:
         from pokezero.v5_deferred_evaluation import MilestoneDispatch, retain_full_checkpoints, sync_actor, sync_directory
 
@@ -393,7 +408,7 @@ def main(argv=None, *, distribution=None):
                 if runs._sha(json.loads(declaration.read_bytes())) != declaration_sha256:
                     raise ValueError('original fused evaluation declaration differs')
             else:
-                runs._publish(declaration, runs._json(plan.manifest()).encode())
+                runs._publish(declaration, declaration_bytes)
                 sync_directory(out)
             dispatch = MilestoneDispatch(out, plan.evaluation, plan.evaluation_milestones(), declaration_sha256,
                 report_observer_error=lambda reason: log('EVALUATION_STOP_READ_ERROR', reason=reason))
@@ -403,7 +418,9 @@ def main(argv=None, *, distribution=None):
     if args.torch_memory_fraction > 0:
         # The runtime probe caps Torch for the file pipeline; V2 holds the row store in Torch too.
         torch.cuda.set_per_process_memory_fraction(args.torch_memory_fraction, 0)
-    log('PREPARED', seconds=context['preparation_seconds'], iterations=len(plan.iterations), games=len(plan.games), **context['declared'])
+    del declaration_bytes
+    total_games = sum(len(batch.games) for batches in plan.iterations for batch in batches)
+    log('PREPARED', seconds=context['preparation_seconds'], iterations=len(plan.iterations), games=total_games, **context['declared'])
     _, _, events = encoding.verified_run(args.reference_run)
     initial = [e['payload'] for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1]
     if len(initial) != 1:raise ValueError('one initial snapshot required in the reference run')
@@ -418,6 +435,8 @@ def main(argv=None, *, distribution=None):
         try:
             saved = json.loads(state_path.read_bytes())
         except FileNotFoundError:
+            if args.require_resume:
+                raise ValueError('--require-resume needs a committed state.json in --out')
             return None
         if type(saved) is not dict:
             raise ValueError('fused resume manifest must be a JSON object')
@@ -496,7 +515,7 @@ def main(argv=None, *, distribution=None):
             params[digest] = load_actor(plan, snapshot, roots[digest])
         return params[digest]
     backend = RuntimeBackend(context['prepared'], context['pool'], gender_policy=context['gender']);backend.check_plan(plan)
-    ordinal = {g.stream_id: i for i, g in enumerate(plan.games)}
+    ordinal = None if getattr(plan, 'compact', False) else {g.stream_id: i for i, g in enumerate(plan.games)}
     collectors = {}
     reference_ends = {e['payload']['stream_id']: e['payload'] for e in events if e['kind'] == 'GAME_END'}
     last = len(plan.iterations) if args.max_iterations is None else min(len(plan.iterations), args.max_iterations)
