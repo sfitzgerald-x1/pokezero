@@ -9,6 +9,6 @@
   "defer-yawn": {"scope": "_defer_yawn", "needle": "_defer_yawn", "extent": "stmt", "digest": "7f9f03b89664", "cited_by": ["scripts/depthn_carry_audit.py"]},
   "map-spec": {"scope": "materialize_protocol", "needle": "map_spec", "extent": "line", "digest": "a458155af7a6", "cited_by": ["scripts/depthn_carry_audit.py"]},
   "perish-counts": {"scope": "_perish_counts", "needle": "_perish_counts", "extent": "stmt", "digest": "2c2d10706439", "cited_by": ["scripts/depthn_carry_audit.py"]},
-  "public-item-swap-not-supported": {"scope": "", "needle": "def _removed_items", "extent": "stmt", "digest": "9d156364b96f", "cited_by": ["scripts/depthn_carry_audit.py"]}
+  "public-item-swap-not-supported": {"scope": "_removed_items", "needle": "            raise ValueError", "extent": {"through": {"scope": "_removed_items", "needle": "if any('currentItem' in row for row in side['pokemon']):raise ValueError('PUBLIC_ITEM_SWAP_NOT_SUPPORTED')", "extent": "line"}}, "digest": "7ac856af425e", "cited_by": ["scripts/depthn_carry_audit.py"]}
  }
 }
