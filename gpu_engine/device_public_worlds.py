@@ -411,6 +411,17 @@ def plan_starts(root, source, recipe):
     hidden slots use its original without-replacement species/variant sampler.
     Source masks never become a synthetic generator-frequency prior. Refused
     slots are retained at weight1/2, never replaced or survivor-renormalized.
+
+    This path does not apply set_posterior's damage-likelihood weights: Root
+    retains an owner-safe snapshot and public carry, but no protocol prefix or
+    historical own request for reconstructing strikes. The surviving revealed
+    variants are therefore uniform even when the protocol constructor's
+    set_posterior path would weight them differently. This affects callers in
+    v5_device_teacher, v2_search_head_to_head and the D3 gates; their source
+    draws are not evidence of parity with damage-weighted protocol worlds.
+    Sharing those weights requires owner-safe strike history on the root (or
+    a validated equivalent likelihood), with uniform draws preserving this
+    RNG call. Missing history must not be recovered from private opponent data.
     """
     if type(root) is not Root or type(source) is not Source or type(recipe) is not Recipe:
         raise ValueError('typed detached root, bound public source and original recipe required')
