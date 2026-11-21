@@ -290,19 +290,29 @@ def source_commit():
         ["git", "rev-parse", "HEAD"], text=True).strip()
 
 
-def wait_for(path, message, *, peer_terminal=None, seconds=JOIN_SECONDS):
+def wait_for(path, message, *, peer_terminal=None, seconds=JOIN_SECONDS, min_attempt=None,
+             peer_attempt=0):
     start = time.monotonic()
     while True:
         try:
-            return json.loads(path.read_bytes())
+            value = json.loads(path.read_bytes())
         except FileNotFoundError:
             pass
-        if peer_terminal is not None and peer_terminal.is_file():
-            terminal = json.loads(peer_terminal.read_bytes())
-            raise ValueError(f'peer exited {terminal["exit_code"]} before publishing {path.name}')
-        if time.monotonic() - start >= seconds:
+        else:
+            if min_attempt is None or value.get("attempt", 0) >= min_attempt:
+                return value
+        if peer_terminal is not None:
+            try:
+                terminal = json.loads(peer_terminal.read_bytes())
+            except FileNotFoundError:
+                pass
+            else:
+                if terminal.get("attempt", 0) >= peer_attempt:
+                    raise ValueError(f'peer exited {terminal["exit_code"]} before publishing {path.name}')
+        remaining = start + seconds - time.monotonic()
+        if remaining <= 0:
             raise TimeoutError(message)
-        time.sleep(2)
+        time.sleep(min(2, remaining))
 
 
 def pack_bridge(path):
@@ -565,6 +575,7 @@ def main(argv=None):
     parser.add_argument("--bridge-sha")
     parser.add_argument("--shard", type=Shard.parse, default=Shard(), metavar="I/N")
     parser.add_argument("--resume", action="store_true", help="continue only unattempted cells of the same shard")
+    parser.add_argument("--attempt", type=int, default=0)
     parser.add_argument("--join-seconds", type=float, default=JOIN_SECONDS)
     parser.add_argument("--spec", type=Path, help="registered production inputs; omit for the unscored scratch roster")
     args = parser.parse_args(argv)
@@ -593,7 +604,7 @@ def main(argv=None):
     else:
         manifest = wait_for(manifest_path, "Showdown did not prepare a run manifest",
                             peer_terminal=root / "showdown.done.json" if args.side == "engine" else None,
-                            seconds=args.join_seconds)
+                            seconds=args.join_seconds, peer_attempt=args.attempt)
         if (manifest["schema"] != SCHEMA or manifest["source_commit"] != source_commit()
                 or manifest["config"]["runtime_sha256"] != args.runtime_sha):
             raise ValueError("worker source or runtime differs from the run manifest")

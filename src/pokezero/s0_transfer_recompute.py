@@ -283,9 +283,46 @@ def score_directory(root, *, publish_stop=False, lock_seconds=0):
         return _score_directory(root, publish_stop=publish_stop)
 
 
+def preserve_stop_evidence(root, source):
+    from . import v5_run
+    from .v5_deferred_evaluation import sync_directory
+    from .v5_evaluation import Artifact
+
+    blob = source.read_bytes()
+    sha = hashlib.sha256(blob).hexdigest()
+    path = root / "stop-evidence" / (sha + ".json")
+    if not path.exists():
+        v5_run._publish(path, blob)
+    sync_directory(path.parent)
+    ref = Artifact(str(path.resolve()), sha)
+    ref.verify()
+    return ref
+
+
+def deliver_pinned_stop(root, manifest, intent):
+    from .v5_deferred_evaluation import publish_route_failures
+    from .v5_evaluation import Artifact
+
+    if intent["manifest_sha256"] != digest(manifest):
+        raise ValueError("pending stop belongs to a different manifest")
+    def evidence(sha):
+        return Artifact(str((root / "stop-evidence" / (sha + ".json")).resolve()), sha)
+    result = evidence(intent["verdict_sha256"])
+    verdict = result.document()
+    scores = evidence(verdict["primary_result_sha256"]).document()
+    refs = [Artifact(**record) for record in manifest["dispatches"].values()]
+    publish_route_failures(refs, result)
+    write_json(root / "route-verdict.json", verdict)
+    write_json(root / "scores.json", scores)
+    return scores
+
+
 def _score_directory(root, *, publish_stop):
     manifest = json.loads((root / "manifest.json").read_bytes())
     manifest_sha = digest(manifest)
+    intent_path = root / "stop-decision.json"
+    if publish_stop and intent_path.exists():
+        return deliver_pinned_stop(root, manifest, json.loads(intent_path.read_bytes()))
     files = {}
     def rows():
         for side in ("engine", "showdown"):
@@ -302,11 +339,12 @@ def _score_directory(root, *, publish_stop):
         path = root / "route-verdict.json"
         write_json(path, verdict)
         if publish_stop and verdict["verdict"] == "FAIL":
-            from .v5_deferred_evaluation import publish_route_failures
-            from .v5_evaluation import Artifact
-            result = Artifact(str(path.resolve()), hashlib.sha256(path.read_bytes()).hexdigest())
-            refs = [Artifact(**record) for record in manifest["dispatches"].values()]
-            publish_route_failures(refs, result)
+            from .v5_deferred_evaluation import _publish_equal
+            preserve_stop_evidence(root, root / "scores.json")
+            result = preserve_stop_evidence(root, path)
+            intent = dict(manifest_sha256=manifest_sha, verdict_sha256=result.sha256)
+            _publish_equal(intent_path, intent)
+            return deliver_pinned_stop(root, manifest, intent)
     return scores
 
 

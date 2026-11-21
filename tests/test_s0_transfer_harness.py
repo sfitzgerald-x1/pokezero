@@ -331,7 +331,7 @@ def test_prepare_roster_independent_of_actor_self_moves(monkeypatch):
 
 def test_supervisor_scores_durable_rows_after_timeouts(monkeypatch, tmp_path):
     import sys
-    from pokezero import s0_transfer_supervise as supervisor
+    from pokezero import s0_transfer_harness as harness, s0_transfer_supervise as supervisor
     from pokezero.s0_transfer_roster import panel_lock
 
     (tmp_path / "manifest.json").write_text("{}")
@@ -340,18 +340,29 @@ def test_supervisor_scores_durable_rows_after_timeouts(monkeypatch, tmp_path):
     (tmp_path / "engine.done.json").write_text('{"exit_code":124}')
     monkeypatch.setattr(sys, "argv", ["supervisor", "showdown", str(tmp_path), "--resume", "--publish-stop"])
 
-    def worker(*args, **kwargs):
-        assert not done.exists()
+    participants = []
+    def worker(root, side, args, **kwargs):
+        participants.append(side)
+        assert args[args.index("--attempt") + 1] == "1"
+        assert not (root / f"{side}.done.json").exists()
         with pytest.raises(BlockingIOError), panel_lock(tmp_path, scoring=True):
             pytest.fail("scoring overlapped live worker")
         return 124
 
+    def late_peer(seconds):
+        # Called by the real join only once it has read the stale attempt-zero receipt.
+        assert participants == ["showdown"]
+        assert supervisor.main(["engine", str(tmp_path), "--resume"]) == 124
+
     def score(command, *, check, timeout):
+        assert participants == ["showdown", "engine"]
+        assert json.loads((tmp_path / "engine.done.json").read_bytes())["attempt"] == 1
         assert "--publish-stop" in command and "--lock-seconds" in command and timeout == 300
         assert not done.exists()
         with panel_lock(tmp_path, scoring=True):
             return SimpleNamespace(returncode=0)
 
+    monkeypatch.setattr(harness.time, "sleep", late_peer)
     monkeypatch.setattr(supervisor, "run_worker", worker)
     monkeypatch.setattr(supervisor.subprocess, "run", score)
     assert supervisor.main() == 124

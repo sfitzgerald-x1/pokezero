@@ -94,13 +94,15 @@ def raw(cell, *, failure=True):
     return cell, "COMPLETE", evidence
 
 
-def synthetic_panel(root, n, key, **fixture):
+def synthetic_panel(root, n, key, *, leave_one=False, **fixture):
     manifest, trainers = synthetic(root, n, key, **fixture)
     roster = expected_cells(manifest["banks"], dry_run=False)
     for side, shard in (("engine", Shard()), ("showdown", Shard(0, 2)), ("showdown", Shard(1, 2))):
         expected = {k: c for k, c in roster.items() if c["environment"] == side and shard.owns(c)}
         for resume in (False, True):
             with terminal_writer(root, side, shard, expected, digest(manifest), resume=resume) as (cells, publish):
+                if resume and leave_one and side == "engine":
+                    cells = cells[:-1]
                 for cell in cells if resume else cells[:3]:
                     publish(raw(cell))
     del roster
@@ -152,6 +154,39 @@ def test_mount_aliases_and_two_signer_preflight(tmp_path, monkeypatch):
     valid = tmp_path / "valid"
     valid.mkdir()
     assert synthetic_panel(valid, 20, key, mount_alias=True)["trainer_stops"] == 2
+
+
+def test_stop_delivery_recovers_original_decision_after_resume(tmp_path, monkeypatch):
+    key = secrets.token_bytes(32)
+    monkeypatch.setenv(deferred.STOP_KEY_ENV, key.hex())
+    monkeypatch.setattr(scorer, "CLUSTERS_PER_REPLICA", 20)
+    monkeypatch.setattr(scorer, "REGISTERED_DRAWS", 256)
+    original = deferred._publish_equal
+    def interrupt(path, value):
+        if path == tmp_path / "1/evaluation-stop.json":
+            raise OSError("interrupted second write")
+        return original(path, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(deferred, "_publish_equal", interrupt)
+        with pytest.raises(OSError, match="interrupted second write"):
+            synthetic_panel(tmp_path, 20, key, leave_one=True)
+    first = json.loads((tmp_path / "0/evaluation-stop.json").read_bytes())
+    sha = first["payload"]["independent_verdict_sha256"]
+    assert not (tmp_path / "1/evaluation-stop.json").exists()
+
+    manifest = json.loads((tmp_path / "manifest.json").read_bytes())
+    expected = {k: c for k, c in expected_cells(manifest["banks"], dry_run=False).items()
+                if c["environment"] == "engine"}
+    with terminal_writer(tmp_path, "engine", Shard(), expected, digest(manifest), resume=True) as (cells, publish):
+        assert len(cells) == 1
+        publish(raw(cells[0]))
+    assert scorer.score_directory(tmp_path)["missing_cells"] == 0
+    assert run._file_sha(tmp_path / "route-verdict.json") != sha
+
+    assert scorer.score_directory(tmp_path, publish_stop=True)["missing_cells"] == 1
+    second = json.loads((tmp_path / "1/evaluation-stop.json").read_bytes())
+    assert second["payload"]["independent_verdict_sha256"] == run._file_sha(tmp_path / "route-verdict.json") == sha
 
 
 def test_verdict_floor_invalid_rows_and_boundaries(tmp_path, monkeypatch):
