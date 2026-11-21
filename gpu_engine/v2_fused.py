@@ -101,6 +101,14 @@ def history_window(plan, current, past, *, warmup_floor=None):
     return opponent_history(plan,current,past,warmup_floor=warmup_floor)
 
 
+def collector_history_slots(plan, count):
+    """Reserve the full declared history layout from the first campaign round."""
+    from gpu_engine import v2_collector as v2
+    if getattr(plan, 'compact', False) and plan.model.arm != 'A' and plan.historical_fraction:
+        return plan.historical_window
+    return v2.history_slots(count)
+
+
 def construct(context, backend, iteration, current, past, ordinal, *, shard=None):
     """Original per-block constructor calls and planner assignments for one iteration."""
     import jax
@@ -134,7 +142,8 @@ def construct(context, backend, iteration, current, past, ordinal, *, shard=None
         if begin or end != len(batch.games):
             carry = jax.tree.map(lambda value: value[begin:end], carry)
         blocks.append((carry, bank, batch.sampling_seed))
-    archives, groups = v2.canonical_groups(current.archive_sha256, historical, slots=v2.history_slots(len(historical)))
+    slots = collector_history_slots(plan, len(historical))
+    archives, groups = v2.canonical_groups(current.archive_sha256, historical, slots=slots)
     roster = v2.roster_from_blocks(blocks, archives=archives, groups=groups);jax.block_until_ready(roster.device)
     return roster, kinds, len(historical)
 
@@ -687,7 +696,7 @@ def main(argv=None, *, distribution=None):
                 backend.labels, roster, lanes=args.lanes, max_requests=plan.max_requests,
                 layout_counts=v2c.expected_counts(roster.groups, roster.games, plan.historical_fraction))
             compile_timings = collector.compile(tree, threads=args.compile_threads);reused = False
-            collectors.clear();collectors[key] = collector  # history only grows: older layouts never recur
+            collectors.clear();collectors[key] = collector
         mark('collector_compile')
         result = collector.run(tree);mark('collect')
         rows = v2c.finalize(result, loss_config=plan.loss, discount=plan.discount);mark('finalize')
@@ -763,7 +772,7 @@ def main(argv=None, *, distribution=None):
         games = roster.games;total = time.perf_counter() - start;steady = total - phase['collector_compile'] - phase['audit']
         stats = result.stats;updates = train_report['updates']
         report = dict(iteration=iteration, games=games, rows=rows.n, dispositions=rows.stats['dispositions'], opponents=kinds,
-            history=history, history_slots=v2c.history_slots(history), lane_groups=len(roster.groups), collector_reused=reused,
+            history=history, history_slots=(len(roster.groups) - 1) // 2, lane_groups=len(roster.groups), collector_reused=reused,
             compile_timings=compile_timings, phase_seconds=phase, iteration_seconds=total, steady_seconds=steady,
             games_per_second=games / total, games_per_second_steady=games / steady,
             training=dict(updates=len(updates), steps=runtime.steps, rows=runtime.rows, mode=trainer.mode_report(),
