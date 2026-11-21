@@ -76,7 +76,14 @@ console.log(JSON.stringify({clear:H(clear),copy:H(copy),par:H(par.onBeforeMove),
         old=ast.parse(subprocess.check_output(['git','show','b8092a85:gpu_engine/engine_baton_pass_callbacks.py'],text=True));new=ast.parse(Path(cb.__file__).read_text())
         changed={'compile_data','_quiet','begin_start','before_copy','suspension_shape'}
         dump=lambda tree:{n.name:ast.dump(n,include_attributes=False)for n in tree.body if isinstance(n,ast.FunctionDef)and n.name not in changed}
-        self.assertEqual(dump(old),dump(new))
+        expected = dump(old)
+        # #2000 moved the Toxic reset from departure to the actual SwitchIn callback.
+        toxic_reset = ast.parse(subprocess.check_output(
+            ['git', 'show', 'fd26beec5e7f801594d540cbb2bb47e10af70d79:gpu_engine/engine_baton_pass_callbacks.py'],
+            text=True,
+        ))
+        expected['departed_private'] = dump(toxic_reset)['departed_private']
+        self.assertEqual(expected,dump(new))
 
 class BatonParalysisComponent(unittest.TestCase):
     setUpClass=classmethod(OriginalFixture.setUpClass.__func__)
