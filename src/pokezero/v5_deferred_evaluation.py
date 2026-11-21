@@ -46,6 +46,10 @@ def _signature(payload, key):
                     hashlib.sha256).hexdigest()
 
 
+def _key_fingerprint(key):
+    return hashlib.sha256(b'pz-stop' + key).hexdigest()[:16]
+
+
 def _stop_key():
     value = os.environ.get(STOP_KEY_ENV, '')
     if not value:
@@ -141,6 +145,11 @@ class MilestoneDispatch:
             self.stop_key = _stop_key() if stop_key is None else stop_key
             if type(self.stop_key) is not bytes or len(self.stop_key) < 32:
                 raise ValueError('S0 route requires a configured stop verification key')
+
+        authority = dict(route_declaration_sha256=policy.route_declaration_sha256,
+                         enabled=self.stop_key is not None,
+                         key_fingerprint=_key_fingerprint(self.stop_key) if self.stop_key else None)
+        _publish_equal(self.root / 'route-stop-authority.json', authority)
 
     def path(self, games):
         return _milestone_path(self.root, games)
@@ -266,6 +275,10 @@ def publish_route_failure(reference, verdict_reference, *, key=None):
         raise ValueError('verified failed r2 verdict for this request required')
     for field in ('raw_cells_sha256', 'primary_result_sha256', 'independent_code_sha256'):
         run.c._binding(verdict[field])
+    authority, _ = _small_document(request.run_directory / 'route-stop-authority.json')
+    if authority != dict(enabled=True, route_declaration_sha256=value['route_declaration_sha256'],
+                         key_fingerprint=_key_fingerprint(key)):
+        raise ValueError('route stop signer differs from the trainer binding')
     endpoints = verdict['completion_endpoints_pp']
     boundaries = {'D': 2, 'G': 3, 'J': 3, 'Q_FP': 2, 'Q_H2H': 2}
     if set(endpoints) != set(boundaries):

@@ -77,6 +77,6 @@ def evaluate_game(config, cell, *, factories, packed_start, check_start, max_req
                 env.close()
     except PermissionError:
         raise
-    except (ValueError, RuntimeError, TimeoutError, OSError) as error:
-        status = "REFUSED" if isinstance(error, ValueError) else "FAILED"
+    except (KeyError, IndexError, StopIteration, ValueError, TypeError, RuntimeError, OSError) as error:
+        status = "REFUSED" if isinstance(error, (ValueError, TypeError, KeyError, IndexError, StopIteration)) else "FAILED"
         return status, dict(frames=frames, reason=f"{type(error).__name__}: {error}")

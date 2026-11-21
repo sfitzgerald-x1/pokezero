@@ -119,8 +119,9 @@ def test_recompute_retains_unknown_cells_and_does_not_issue_dry_verdict():
     bounded = report["contrasts"]["G"]["missingness_bounded_ci90_pp"]
     assert bounded[0] < 50.0 == bounded[1]
     assert scorer.recompute(manifest, rows[:-1])["missing_cells"] == 2
-    with pytest.raises(ValueError, match="duplicate"):
-        scorer.recompute(manifest, rows + [rows[-1]])
+    damaged = scorer.recompute(manifest, rows + [rows[-1]])
+    assert damaged["invalid_rows"] == damaged["integrity_errors"] == 1
+    assert damaged["missing_cells"] == 2
 
 
 def test_recompute_uses_literal_winner_and_rejects_wrong_seat_or_roster():
@@ -336,7 +337,8 @@ def test_supervisor_does_not_score_until_engine_exits(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", ["supervisor", "showdown", str(tmp_path)])
     monkeypatch.setattr(s0_transfer_supervise, "run_worker", lambda *a, **k: 0)
 
-    def wait(*args):
+    def wait(*args, seconds):
+        assert 900 < seconds <= 14400
         raise TimeoutError("engine still running")
 
     def score(*args, **kwargs):
@@ -346,3 +348,27 @@ def test_supervisor_does_not_score_until_engine_exits(monkeypatch, tmp_path):
     monkeypatch.setattr(s0_transfer_supervise.subprocess, "run", score)
     assert s0_transfer_supervise.main() == 1
     assert json.loads((tmp_path / "showdown.done.json").read_text())["exit_code"] == 1
+
+
+def test_resume_two_shards_preserves_280_original_attempts(tmp_path):
+    from pokezero.s0_transfer_roster import Shard, terminal_writer, raw_paths
+
+    manifest, rows = scratch_rows()
+    sha = digest(manifest)
+    expected = expected_cells(manifest["banks"], dry_run=True)
+    by_key = {cell_key(row): row for row in rows}
+    for side, count in (("engine", 1), ("showdown", 2)):
+        for i in range(count):
+            shard = Shard(i, count)
+            cells = {k: c for k, c in expected.items() if c["environment"] == side and shard.owns(c)}
+            for resume in (False, True):
+                with terminal_writer(tmp_path, side, shard, cells, sha, resume=resume) as (pending, publish):
+                    for cell in pending if resume else pending[:5]:
+                        row = by_key[cell_key(cell)]
+                        publish((cell, row["status"], row["evidence"]))
+                if not resume:
+                    with (tmp_path/(shard.stem(side)+".jsonl")).open("ab") as stream:
+                        stream.write(b'{"uncommitted"')
+    merged = [row for side in ("engine", "showdown") for path in raw_paths(tmp_path, side, sha)
+              for row in read_terminals(path, manifest_sha256=sha)]
+    assert len(merged) == 280 and scorer.recompute(manifest, merged)["missing_cells"] == 0
