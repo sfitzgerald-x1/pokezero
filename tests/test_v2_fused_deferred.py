@@ -233,7 +233,6 @@ def run_four(root, attempt, **options):
     return [json.loads((root / f'{attempt}-{rank}.json').read_bytes()) for rank in range(4)]
 
 
-@unittest.skipIf(torch is None, 'torch required')
 class CollectorAuditTests(unittest.TestCase):
     def test_empty_audit_does_not_touch_the_device_store(self):
         self.assertEqual(v2_fused.audit(None, [], None), [])
@@ -264,6 +263,7 @@ class CollectorAuditTests(unittest.TestCase):
             self.assertEqual([call.args[0].shape for call in take.call_args_list], [(2,)] * 4)
 
 
+@unittest.skipIf(torch is None, 'torch required')
 class FusedDeferredTests(unittest.TestCase):
     def test_production_profile_freezes_after_first_commit_of_each_attempt(self):
         with tempfile.TemporaryDirectory() as directory:
