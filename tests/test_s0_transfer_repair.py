@@ -1,5 +1,5 @@
 """Focused deferred route tests. Executing this file exercises a full synthetic look."""
-from dataclasses import asdict, replace
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
@@ -8,6 +8,7 @@ import tempfile
 import time
 
 import numpy as np
+import pytest
 
 from pokezero import s0_transfer_recompute as scorer
 from pokezero import v5_deferred_evaluation as deferred, v5_evaluation as ev, v5_run as run
@@ -18,7 +19,7 @@ from pokezero.s0_transfer_roster import (
 )
 
 
-def fake_fused(root, replica, policy, key):
+def fake_fused(root, replica, policy, key, *, mount_alias=False):
     root.mkdir()
     model = {"replicate": replica}
     declarations = [[{"games": [0] * 20_000}]] * 50
@@ -38,21 +39,31 @@ def fake_fused(root, replica, policy, key):
     state = dict(snapshots=list(map(asdict, snapshots)), declaration_sha256=digest(declaration),
                  checkpoint_encoding_receipts={}, reports=[dict(iteration=i, games=20_000) for i in range(50)])
     write_json(root / "state.json", state)
-    receipt = trainer.publish_committed(t, report_error=lambda reason: (_ for _ in ()).throw(ValueError(reason)))
-    ref = ev.Artifact(str(root / receipt.request), receipt.request_sha256)
+    if mount_alias:
+        # Both trainers see their respective volume at /out. Write those wire
+        # bytes once at the mount used by the evaluator.
+        alias = Path("/out")
+        request = run.EvaluationRequest(1_000_000, digest(declaration), policy.protocol_sha256,
+                                        t, alias, alias / t.checkpoint, alias / t.archive)
+        record = deferred._milestone_document(request, policy.route_declaration_sha256, None)
+        ref = deferred._publish_equal(trainer.path(request.declared_games), record)
+    else:
+        receipt = trainer.publish_committed(t, report_error=lambda reason: (_ for _ in ()).throw(ValueError(reason)))
+        ref = ev.Artifact(str(root / receipt.request), receipt.request_sha256)
     entry = dict(dispatch=asdict(ref), run=str(root))
     _, _, b, trained, _ = fused_snapshots(entry, 50, policy.route_declaration_sha256)
     assert b == snapshots[0] and trained == t
     return trainer, ref, asdict(t)
 
 
-def synthetic(root, n, key):
+def synthetic(root, n, key, *, mount_alias=False, second_key=None):
     route = digest("synthetic route")
     policy = run.EvaluationProtocol(digest("synthetic protocol"), 1_000_000, "deferred", route)
     banks, starts, actors, refs, trainers = {}, {}, {}, {}, []
     for i in range(2):
         replica = str(i)
-        trainer, ref, actor = fake_fused(root / replica, i, policy, key)
+        trainer, ref, actor = fake_fused(root / replica, i, policy, second_key if i and second_key else key,
+                                        mount_alias=mount_alias)
         refs[replica], actors[replica] = asdict(ref), {"T": actor}
         trainers.append(trainer)
         banks[replica] = {}
@@ -83,8 +94,8 @@ def raw(cell, *, failure=True):
     return cell, "COMPLETE", evidence
 
 
-def synthetic_panel(root, n, key):
-    manifest, trainers = synthetic(root, n, key)
+def synthetic_panel(root, n, key, **fixture):
+    manifest, trainers = synthetic(root, n, key, **fixture)
     roster = expected_cells(manifest["banks"], dry_run=False)
     for side, shard in (("engine", Shard()), ("showdown", Shard(0, 2)), ("showdown", Shard(1, 2))):
         expected = {k: c for k, c in roster.items() if c["environment"] == side and shard.owns(c)}
@@ -120,7 +131,6 @@ def test_sharded_fused_stop(tmp_path, monkeypatch):
     manifest = json.loads((tmp_path/"manifest.json").read_bytes())
     ref = ev.Artifact(**manifest["dispatches"]["0"])
     path = tmp_path / "route-verdict.json"
-    import pytest
     with pytest.raises(ValueError, match="signer differs"):
         deferred.publish_route_failure(ref, ev.Artifact(str(path), run._file_sha(path)), key=secrets.token_bytes(32))
     state_path = tmp_path/"0/state.json"
@@ -129,6 +139,19 @@ def test_sharded_fused_stop(tmp_path, monkeypatch):
     write_json(state_path, state)
     with pytest.raises(ValueError, match="committed fused milestone"):
         fused_snapshots(dict(run=str(tmp_path/"0"), dispatch=asdict(ref)), 50, manifest["route_declaration_sha256"])
+
+
+def test_mount_aliases_and_two_signer_preflight(tmp_path, monkeypatch):
+    key = secrets.token_bytes(32)
+    monkeypatch.setenv(deferred.STOP_KEY_ENV, key.hex())
+    monkeypatch.setattr(scorer, "CLUSTERS_PER_REPLICA", 20)
+    monkeypatch.setattr(scorer, "REGISTERED_DRAWS", 256)
+    with pytest.raises(ValueError, match="signer differs"):
+        synthetic_panel(tmp_path, 20, key, mount_alias=True, second_key=secrets.token_bytes(32))
+    assert not any((tmp_path / str(i) / "evaluation-stop.json").exists() for i in range(2))
+    valid = tmp_path / "valid"
+    valid.mkdir()
+    assert synthetic_panel(valid, 20, key, mount_alias=True)["trainer_stops"] == 2
 
 
 def test_verdict_floor_invalid_rows_and_boundaries(tmp_path, monkeypatch):
@@ -143,6 +166,8 @@ def test_verdict_floor_invalid_rows_and_boundaries(tmp_path, monkeypatch):
     bad[0]["evidence"].pop("players")
     report = scorer.recompute(manifest, rows)
     assert report["invalid_rows"] == report["missing_cells"] == 1 and report["known_floor"]
+    report = scorer.recompute(manifest, [*rows, None])
+    assert report["integrity_errors"] == 0 and report["invalid_rows"] == 2 and report["known_floor"]
     bad[1]["evidence"]["marker"] = []
     report = scorer.recompute(manifest, [*rows, None])
     assert not report["known_floor"] and report["invalid_rows"] == 3 and report["verdict"] == "VOID"

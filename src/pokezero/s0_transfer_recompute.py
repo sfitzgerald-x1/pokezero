@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .s0_transfer_roster import FP, H2H, SCHEMA, cell_key, digest, expected_cells, raw_paths, read_terminals, write_json
+from .s0_transfer_roster import FP, H2H, SCHEMA, cell_key, digest, expected_cells, panel_lock, raw_paths, read_terminals, write_json
 
 
 CONTRASTS = {
@@ -65,6 +65,7 @@ def collect_scores(manifest, rows, *, counts=None):
             key = cell_key(row)
             spec = expected.get(key)
             if spec is None:
+                integrity += 1
                 raise ValueError("extra roster cell")
             if key in scores:
                 integrity += 1
@@ -88,8 +89,6 @@ def collect_scores(manifest, rows, *, counts=None):
             if key is not None and all(isinstance(x, (int, str)) for x in key) and key in expected:
                 scores[key] = None
                 statuses[key] = "REFUSED"
-            else:
-                integrity += 1
     if counts is not None:
         dispositions = Counter(statuses.values())
         absent = len(expected) - len(statuses)
@@ -244,7 +243,7 @@ def recompute(manifest, rows):
 
 def route_verdict(scores, manifest, raw_sha, primary_sha):
     """Translate independently scored, dispatch-bound rows to the trainer stop contract."""
-    from .v5_deferred_evaluation import read_milestone
+    from .v5_deferred_evaluation import read_owned_milestone
     from .v5_evaluation import Artifact
     if manifest["dry_run"] or scores["verdict"] not in {"FAIL", "VOID", "NOT-FAILED"}:
         raise ValueError("a registered transfer look is required")
@@ -255,7 +254,7 @@ def route_verdict(scores, manifest, raw_sha, primary_sha):
     route = manifest["route_declaration_sha256"]
     for replica, record in sorted(refs.items()):
         ref = Artifact(**record)
-        request = read_milestone(ref)
+        request = read_owned_milestone(ref)
         target = manifest["actors"][replica]["T"]
         if (not route or ref.document()["route_declaration_sha256"] != route
                 or request.run_directory in paths
@@ -279,7 +278,12 @@ def route_verdict(scores, manifest, raw_sha, primary_sha):
                 completion_endpoints_pp=endpoints)
 
 
-def score_directory(root, *, publish_stop=False):
+def score_directory(root, *, publish_stop=False, lock_seconds=0):
+    with panel_lock(root, scoring=True, wait_seconds=lock_seconds):
+        return _score_directory(root, publish_stop=publish_stop)
+
+
+def _score_directory(root, *, publish_stop):
     manifest = json.loads((root / "manifest.json").read_bytes())
     manifest_sha = digest(manifest)
     files = {}
@@ -298,11 +302,11 @@ def score_directory(root, *, publish_stop=False):
         path = root / "route-verdict.json"
         write_json(path, verdict)
         if publish_stop and verdict["verdict"] == "FAIL":
-            from .v5_deferred_evaluation import publish_route_failure
+            from .v5_deferred_evaluation import publish_route_failures
             from .v5_evaluation import Artifact
             result = Artifact(str(path.resolve()), hashlib.sha256(path.read_bytes()).hexdigest())
-            for ref in manifest["dispatches"].values():
-                publish_route_failure(Artifact(**ref), result)
+            refs = [Artifact(**record) for record in manifest["dispatches"].values()]
+            publish_route_failures(refs, result)
     return scores
 
 
@@ -310,8 +314,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("--publish-stop", action="store_true", help="sign and deliver a robust FAIL to both trainers")
+    parser.add_argument("--lock-seconds", type=int, default=0, help="wait this long for active workers")
     args = parser.parse_args()
-    score_directory(args.directory, publish_stop=args.publish_stop)
+    score_directory(args.directory, publish_stop=args.publish_stop, lock_seconds=args.lock_seconds)
 
 
 if __name__ == "__main__":

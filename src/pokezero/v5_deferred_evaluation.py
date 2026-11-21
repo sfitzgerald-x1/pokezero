@@ -258,14 +258,13 @@ class MilestoneDispatch:
             return None
 
 
-def publish_route_failure(reference, verdict_reference, *, key=None):
-    """Called by the trusted r2 recompute owner after its registered verdict."""
+def _prepare_route_failure(reference, verdict_reference, key, reader):
     if key is None:
         key = _stop_key()
     if type(key) is not bytes or len(key) < 32:
         raise ValueError('S0 route stop signing key required')
     value = reference.document()
-    request = read_milestone(reference)
+    request = reader(reference)
     verdict = verdict_reference.document()
     if (not value['route_declaration_sha256'] or verdict['schema'] != 's0.transfer.r2'
             or verdict['verdict'] != 'FAIL'
@@ -299,7 +298,26 @@ def publish_route_failure(reference, verdict_reference, *, key=None):
         independent_verdict_sha256=verdict_reference.sha256)
     path = request.run_directory / 'evaluation-stop.json'
     require_live_milestone(request)
-    return _publish_equal(path, dict(payload=payload, signature=_signature(payload, key)))
+    envelope = dict(payload=payload, signature=_signature(payload, key))
+    if path.exists() and path.read_bytes() != run._json(envelope).encode():
+        raise ValueError('a different immutable stop already exists')
+    return path, envelope
+
+
+def publish_route_failure(reference, verdict_reference, *, key=None):
+    """Publish one verdict in the original trainer filesystem namespace."""
+    return _publish_equal(*_prepare_route_failure(reference, verdict_reference, key, read_milestone))
+
+
+def publish_route_failures(references, verdict_reference, *, key=None):
+    """Preflight both trainer mounts before delivering either immutable stop."""
+    if len(references) != 2:
+        raise ValueError('both trainer dispatches required')
+    stops = [_prepare_route_failure(ref, verdict_reference, key, read_owned_milestone)
+             for ref in references]
+    if stops[0][0] == stops[1][0]:
+        raise ValueError('two distinct trainer roots required')
+    return [_publish_equal(path, envelope) for path, envelope in stops]
 
 
 def retained_full_checkpoints(checkpoints, milestones):
@@ -446,7 +464,7 @@ def _restore(value):
     return request
 
 
-def _restore_milestone(value, *, staged_run_root=None):
+def _restore_milestone(value, *, staged_run_root=None, original_root_visible=True):
     keys = ('schema', 'request', 'route_declaration_sha256', 'full_checkpoint')
     if 'published_unix' in value:
         keys += ('published_unix',)
@@ -464,7 +482,7 @@ def _restore_milestone(value, *, staged_run_root=None):
         root = Path(staged_run_root).resolve()
         request = replace(request, run_directory=root, archive_path=root / request.snapshot.archive,
                           checkpoint_path=root / request.snapshot.checkpoint)
-    require_live_milestone(request, published_root=original)
+    require_live_milestone(request, published_root=original if original_root_visible else None)
     declaration = json.loads((request.run_directory / 'declaration.json').read_bytes())
     policy = declaration['evaluation']
     if (run._sha(declaration) != request.declaration_sha256
@@ -498,6 +516,18 @@ def read_milestone(reference, *, staged_run_root=None):
     if Path(reference.path).resolve() != path:
         raise ValueError('original owned milestone dispatch path required')
     return request
+
+
+def read_owned_milestone(reference):
+    """Read through the evaluator's live mount of the trainer's run directory."""
+    path = Path(reference.path).resolve()
+    value = reference.document()
+    games = value['request']['declared_games']
+    suffix = _milestone_path(Path(), games)
+    if path.parts[-len(suffix.parts):] != suffix.parts:
+        raise ValueError('original owned milestone dispatch path required')
+    root = path.parents[len(suffix.parts) - 1]
+    return _restore_milestone(value, staged_run_root=root, original_root_visible=False)
 
 
 def execute_assay(reference, protocol, assay, *, resume=False):

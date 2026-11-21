@@ -1,6 +1,8 @@
 """Run a transfer worker with a hard job deadline and a single terminal status."""
 
 import argparse
+import fcntl
+import json
 import os
 from pathlib import Path
 import signal
@@ -10,7 +12,7 @@ import threading
 import time
 
 from .s0_transfer_harness import wait_for
-from .s0_transfer_roster import Shard, write_json
+from .s0_transfer_roster import Shard, panel_lock, write_json
 
 
 SCRATCH_DEADLINE = {"engine": 5400, "showdown": 14400}
@@ -34,27 +36,55 @@ def run_worker(root, side, rest, *, deadline):
             return 124 if isinstance(error, subprocess.TimeoutExpired) else 130
 
 
+def score_after_workers(root, peers, finish, score_seconds, publish_stop):
+    paths = [root / f"{peer}.done.json" for peer in peers]
+    for path in paths:
+        try:
+            wait_for(path, f"{path.name} unavailable", seconds=max(0, finish - time.monotonic()))
+        except TimeoutError:
+            break  # Unstarted and evicted peers contribute missing cells.
+    command = [sys.executable, "-m", "pokezero.s0_transfer_recompute", str(root),
+               "--lock-seconds", str(score_seconds)]
+    if publish_stop:
+        command.append("--publish-stop")
+    try:
+        score_code = subprocess.run(command, check=False, timeout=score_seconds).returncode
+    except subprocess.TimeoutExpired:
+        score_code = 124
+    except OSError as error:
+        print(f"{type(error).__name__}: {error}", file=sys.stderr)
+        score_code = 1
+    peer_code = 0
+    for path in paths:
+        try:
+            status = json.loads(path.read_bytes())["exit_code"]
+        except FileNotFoundError:
+            status = 124
+        peer_code = peer_code or status
+    return score_code, peer_code
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("side", choices=tuple(SCRATCH_DEADLINE))
     parser.add_argument("directory", type=Path)
     parser.add_argument("--deadline-seconds", type=int)
+    parser.add_argument("--score-seconds", type=int, default=300, help="additional wall for quiescence and scoring")
     parser.add_argument("--shard", type=Shard.parse, default=Shard())
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--publish-stop", action="store_true")
     args, rest = parser.parse_known_args()
     deadline = args.deadline_seconds if args.deadline_seconds is not None else SCRATCH_DEADLINE[args.side]
-    if deadline <= 0:
+    if min(deadline, args.score_seconds) <= 0:
         parser.error("a positive job deadline is required")
     root = args.directory.resolve()
+    root.mkdir(parents=True, exist_ok=True)
     name = args.shard.stem(args.side)
     done = root / f"{name}.done.json"
     finish = time.monotonic() + deadline
     sharded = args.shard.count > 1
     if args.side == "engine" and sharded:
         parser.error("only CPU workers are sharded by this supervisor")
-    if done.exists() and not args.resume:
-        parser.error("previous attempt exists. Use --resume to continue the same shard")
     worker_args = [*rest, "--shard", f"{args.shard.index}/{args.shard.count}",
                    "--join-seconds", str(deadline)]
     if args.resume:
@@ -72,36 +102,40 @@ def main():
             maximum = size if maximum is None else max(maximum, size)
             stop.wait(1)
 
-    monitor = None
-    if not peak.is_file() and current.is_file():
-        monitor = threading.Thread(target=sample_memory, daemon=True)
-        monitor.start()
-    code = 1
-    try:
-        code = run_worker(root, args.side, worker_args, deadline=deadline)
-        if code == 0 and args.side == "showdown" and args.shard.index == 0 and (root / "manifest.json").is_file():
-            peers = ["engine"] + [Shard(i, args.shard.count).stem("showdown")
-                                  for i in range(1, args.shard.count)]
-            for peer in peers:
-                terminal = wait_for(root / f"{peer}.done.json", f"{peer} terminal status unavailable",
-                                    seconds=max(0, finish - time.monotonic()))
-                if terminal["exit_code"]:
-                    code = terminal["exit_code"]
-                    return code
-            command = [sys.executable, "-m", "pokezero.s0_transfer_recompute", str(root)]
-            if args.publish_stop:
-                command.append("--publish-stop")
-            code = subprocess.run(command, check=False, timeout=max(0, finish - time.monotonic())).returncode
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
-        print(f"{type(error).__name__}: {error}", file=sys.stderr)
-        code = code or 1
-    finally:
-        stop.set()
-        if monitor is not None:
-            monitor.join()
-        write_json(done, dict(
-            exit_code=code, memory_peak_bytes=int(peak.read_text()) if peak.is_file() else maximum,
-        ))
+    with (root / f"{name}.attempt.lock").open("a") as attempt:
+        fcntl.flock(attempt, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if done.exists() and not args.resume:
+            parser.error("previous attempt exists. Use --resume to continue the same shard")
+        monitor = None
+        if not peak.is_file() and current.is_file():
+            monitor = threading.Thread(target=sample_memory, daemon=True)
+            monitor.start()
+        receipt = {}
+        try:
+            with panel_lock(root):
+                done.unlink(missing_ok=True)
+                try:
+                    code = run_worker(root, args.side, worker_args, deadline=deadline)
+                except (OSError, ValueError, subprocess.SubprocessError) as error:
+                    print(f"{type(error).__name__}: {error}", file=sys.stderr)
+                    code = 1
+                receipt.update(worker_exit_code=code, exit_code=code)
+                coordinator = args.side == "showdown" and args.shard.index == 0 and (root / "manifest.json").is_file()
+                if not coordinator:
+                    receipt["memory_peak_bytes"] = int(peak.read_text()) if peak.is_file() else maximum
+                    write_json(done, receipt)
+            if coordinator:
+                peers = ["engine"] + [Shard(i, args.shard.count).stem("showdown")
+                                      for i in range(1, args.shard.count)]
+                score_code, peer_code = score_after_workers(root, peers, finish, args.score_seconds, args.publish_stop)
+                code = code or peer_code or score_code
+                receipt.update(exit_code=code, score_exit_code=score_code,
+                               memory_peak_bytes=int(peak.read_text()) if peak.is_file() else maximum)
+                write_json(done, receipt)
+        finally:
+            stop.set()
+            if monitor is not None:
+                monitor.join()
     return code
 
 

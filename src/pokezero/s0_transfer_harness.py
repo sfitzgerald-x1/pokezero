@@ -129,11 +129,11 @@ def scratch_actors(root, config):
 def fused_snapshots(entry, cycles, route_sha):
     """Bind the published milestone to the committed fused state and original B."""
     from . import v5_run
-    from .v5_deferred_evaluation import read_milestone
+    from .v5_deferred_evaluation import read_owned_milestone
     from .v5_evaluation import Artifact
 
     ref = Artifact(**entry["dispatch"])
-    request = read_milestone(ref)
+    request = read_owned_milestone(ref)
     base = request.run_directory
     state = json.loads((base / "state.json").read_bytes())
     declaration = json.loads((base / "declaration.json").read_bytes())
@@ -292,14 +292,17 @@ def source_commit():
 
 def wait_for(path, message, *, peer_terminal=None, seconds=JOIN_SECONDS):
     start = time.monotonic()
-    while not path.is_file():
+    while True:
+        try:
+            return json.loads(path.read_bytes())
+        except FileNotFoundError:
+            pass
         if peer_terminal is not None and peer_terminal.is_file():
             terminal = json.loads(peer_terminal.read_bytes())
             raise ValueError(f'peer exited {terminal["exit_code"]} before publishing {path.name}')
         if time.monotonic() - start >= seconds:
             raise TimeoutError(message)
         time.sleep(2)
-    return json.loads(path.read_bytes())
 
 
 def pack_bridge(path):

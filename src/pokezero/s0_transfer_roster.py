@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 
 
 SCHEMA = "pokezero.s0-transfer.r2-simple"
@@ -176,36 +177,55 @@ def read_terminals(path, *, manifest_sha256, hasher=None):
 
 
 @contextmanager
-def terminal_writer(root, side, shard, expected, manifest_sha, *, resume):
-    bind_shards(root, side, shard.count, manifest_sha)
-    path = root / (shard.stem(side) + ".jsonl")
-    with path.open("a+b" if resume else "x+b") as output:
-        fcntl.flock(output, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        output.seek(0)
-        header = canonical(dict(manifest_sha256=manifest_sha)) + b"\n"
-        line = output.readline()
-        if line != header:
-            if not header.startswith(line):
-                raise ValueError("ledger belongs to a different run manifest")
-            output.seek(0)
-            output.truncate()
-            output.write(header)
-            output.flush()
-        remaining = dict(expected)
-        for row in iter(output.readline, b""):
-            if not row.endswith(b"\n"):
-                output.truncate(output.tell() - len(row))
-                break
+def panel_lock(root, *, scoring=False, wait_seconds=0):
+    """Writers can overlap. A scorer holds a stable cut of every shard."""
+    mode = fcntl.LOCK_EX if scoring else fcntl.LOCK_SH
+    with (root / "workers.lock").open("a") as lock:
+        deadline = time.monotonic() + wait_seconds
+        while True:
             try:
-                key = cell_key(json.loads(row))
-                remaining.pop(key, None)  # includes refused and failed attempts
-            except (ValueError, TypeError, KeyError, UnicodeError):
-                # Unattributable attempted cell: never replay unresolved identities.
-                raise ValueError("cannot resume a shard with an unidentifiable committed cell")
-        def publish(result):
-            cell, status, witness = result
-            if remaining.pop(cell_key(cell), None) != cell:
-                raise ValueError("unexpected or duplicate terminal in shard")
-            output.write(canonical(dict(cell, status=status, evidence=witness)) + b"\n")
-            output.flush()
-        yield tuple(remaining.values()), publish
+                fcntl.flock(lock, mode | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                time.sleep(min(1, remaining))
+        yield
+
+
+@contextmanager
+def terminal_writer(root, side, shard, expected, manifest_sha, *, resume):
+    with panel_lock(root):
+        bind_shards(root, side, shard.count, manifest_sha)
+        path = root / (shard.stem(side) + ".jsonl")
+        with path.open("a+b" if resume else "x+b") as output:
+            fcntl.flock(output, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            output.seek(0)
+            header = canonical(dict(manifest_sha256=manifest_sha)) + b"\n"
+            line = output.readline()
+            if line != header:
+                if not header.startswith(line):
+                    raise ValueError("ledger belongs to a different run manifest")
+                output.seek(0)
+                output.truncate()
+                output.write(header)
+                output.flush()
+            remaining = dict(expected)
+            for row in iter(output.readline, b""):
+                if not row.endswith(b"\n"):
+                    output.truncate(output.tell() - len(row))
+                    break
+                try:
+                    key = cell_key(json.loads(row))
+                    remaining.pop(key, None)  # includes refused and failed attempts
+                except (ValueError, TypeError, KeyError, UnicodeError):
+                    # Unattributable attempted cell: never replay unresolved identities.
+                    raise ValueError("cannot resume a shard with an unidentifiable committed cell")
+            def publish(result):
+                cell, status, witness = result
+                if remaining.pop(cell_key(cell), None) != cell:
+                    raise ValueError("unexpected or duplicate terminal in shard")
+                output.write(canonical(dict(cell, status=status, evidence=witness)) + b"\n")
+                output.flush()
+            yield tuple(remaining.values()), publish
