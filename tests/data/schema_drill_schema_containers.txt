@@ -65,11 +65,9 @@
 #     so the drill will not register its synthetic schema there and the resulting failure is charged
 #     to the codebase -- the exact loop this file exists to end, still open for two of four roots.
 #
-#  3. TWO UNNAMED CONTAINERS ON ONE PHYSICAL LINE cannot be told apart; the key is (file, line,
-#     members, name). This no longer produces a short count silently -- the census compares matched
-#     AST nodes against distinct entries and aborts -- but the remedy it offers is "separate the
-#     lines", not "classify both". The per-(file, members) ordinal that would tell them apart is a
-#     PREDICTION; nobody has built it.
+#  3. INDISTINGUISHABLE INLINE OWNERS cannot share a row. Keys use the enclosing function
+#     and assignment/call owner, so unrelated movement does not change identity. Two nodes
+#     with the same owner and members abort even on separate lines; give them distinct owners.
 #
 #  4. A MIXED-CONVENTION CONTAINER IS INVISIBLE, and this gap was missing from the list above until
 #     review pointed out that a list calling itself exhaustive had four members, not three. The
@@ -85,29 +83,26 @@
 #     drill injects into. BLAST RADIUS: the same as gap 2, but reachable inside the scanned roots,
 #     so it is the cheapest way to add an unregistered schema container to src/ with a green gate.
 #
-# Format:  REGISTER|PARTIAL|MIRRORED  <file>  <members>  <variable name or <inline:LINE>>
-# Keyed on file + members + VARIABLE NAME. Every container needs its OWN row: the census aborts if the
-# counts differ, because a shared row means one container is classified by another's decision, which
-# is how a new table got registered for free twice. An unnamed container is keyed <inline:LINE>; that
-# does reintroduce line sensitivity for those, deliberately -- a drifting line is a loud reclassify,
-# whereas a silent collision is a free pass.
+# Format:  REGISTER|PARTIAL|MIRRORED  <file>  <members>  <variable name or <inline:scope/owner>>
+# Each container needs its own stable identity. Unknown owners, stale rows and duplicate
+# identities fail; line numbers are rendered only for diagnostics and are not classification keys.
 #
 # ---------------------------------------------------------------------------------------------
-REGISTER  scripts/export_encoder_tables.py  v2.2,v3,v4  <inline:357>
-REGISTER  scripts/export_encoder_tables.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  <inline:375>
+REGISTER  scripts/export_encoder_tables.py  v2.2,v3,v4  <inline:main/parser.add_argument[--observation-schema]>
+REGISTER  scripts/export_encoder_tables.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  <inline:main>
 REGISTER  scripts/schema_identity_gate_scan.py  pokezero.observation.v2,pokezero.observation.v2.1,pokezero.observation.v2.2,pokezero.observation.v3,pokezero.observation.v4  VERSION_LITERALS
-PARTIAL   scripts/vocab_shift_probe.py  pokezero.observation.v2.2,pokezero.observation.v3  <inline:65>
+PARTIAL   scripts/vocab_shift_probe.py  pokezero.observation.v2.2,pokezero.observation.v3  <inline:main/turn_merged>
 REGISTER  src/pokezero/engine_env.py  v2.2,v3,v4  _EXPORTABLE_TABLE_SCHEMAS
 REGISTER  src/pokezero/mcts_eval/lattice.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  _EXPORTER_SCHEMA_CHOICES
 REGISTER  src/pokezero/mcts_eval/resolver.py  pokezero.observation.v2.2,pokezero.observation.v3,pokezero.observation.v4  SUPPORTED_OBSERVATION_SCHEMAS
-REGISTER  src/pokezero/neural_cli.py  v2.1,v2.2,v3,v4  <inline:476>
-REGISTER  src/pokezero/neural_cli.py  v2.1,v2.2,v3,v4  <inline:2026>
+REGISTER  src/pokezero/neural_cli.py  v2.1,v2.2,v3,v4  <inline:build_arg_parser/train.add_argument[--observation-schema]>
+REGISTER  src/pokezero/neural_cli.py  v2.1,v2.2,v3,v4  <inline:build_arg_parser/iterate.add_argument[--observation-schema]>
 MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  SUPPORTED_OBSERVATION_SCHEMA_VERSIONS
 MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3  TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS
 MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  GROUPED_LAYOUT_OBSERVATION_SCHEMA_VERSIONS
 MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  V2_1_LINEAGE_OBSERVATION_SCHEMA_VERSIONS
 MIRRORED  src/pokezero/observation.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  REPLAY_TRANSITION_TOKEN_COUNTS_BY_SCHEMA
-REGISTER  src/pokezero/rollout_cli.py  v2.1,v2.2,v3,v4  <inline:178>
+REGISTER  src/pokezero/rollout_cli.py  v2.1,v2.2,v3,v4  <inline:build_arg_parser/collect_selfplay_cache.add_argument[--observation-schema]>
 MIRRORED  src/pokezero/showdown.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  REPLAY_OBSERVATION_SPECS_BY_SCHEMA
 MIRRORED  src/pokezero/showdown.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  _MINIMUM_CATEGORICAL_CENSUS_BY_SCHEMA
 MIRRORED  src/pokezero/showdown.py  OBSERVATION_SCHEMA_VERSION_V2,OBSERVATION_SCHEMA_VERSION_V2_1,OBSERVATION_SCHEMA_VERSION_V2_2,OBSERVATION_SCHEMA_VERSION_V3,OBSERVATION_SCHEMA_VERSION_V4  _MINIMUM_NUMERIC_CENSUS_BY_SCHEMA

@@ -72,13 +72,27 @@ from pathlib import Path
 from typing import Any, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 DIFFERENTIAL = REPO_ROOT / "scripts/engine_transition_differential.py"
 ENGINE_WORLD = REPO_ROOT / "src/pokezero/engine_world.py"
 
-def _anchor(relative: str, needle: str, occurrence: int | None = None) -> int:
+
+def _citation(relative: str, line: int, *, root=None) -> str:
+    """A regenerated source identity and statement digest, with no committed location."""
+    from gpu_engine.source_citation import citation_at
+    return citation_at(relative, line, REPO_ROOT if root is None else root)
+
+
+def _next_statement(relative: str, after: int) -> int:
+    """The next executable statement, rather than the next physical line."""
+    tree = ast.parse((REPO_ROOT / relative).read_text(encoding='utf-8'))
+    return min(node.lineno for node in ast.walk(tree) if isinstance(node, ast.stmt) and node.lineno > after)
+
+
+def _anchor(relative: str, needle: str, occurrence: int | None = None, *, root=None) -> int:
     """1-based line number for `needle` in `relative`. UNIQUE unless an index is given.
 
     ⚠ EVERY LINE NUMBER THIS MODULE PRINTS COMES THROUGH HERE OR `_raise_line`, and that
@@ -101,7 +115,7 @@ def _anchor(relative: str, needle: str, occurrence: int | None = None) -> int:
     waiting to happen, so it is an error rather than a guess.
     """
 
-    lines = (REPO_ROOT / relative).read_text(encoding="utf-8").splitlines()
+    lines = ((REPO_ROOT if root is None else Path(root)) / relative).read_text(encoding="utf-8").splitlines()
     hits = [n for n, line in enumerate(lines, 1) if needle in line]
     if not hits:
         raise SystemExit(
@@ -495,17 +509,17 @@ STRUCTURAL_DIVERGENCE_CLASSES = {
     "mapper_lossy": (
         "`evaluate_boundary_strict` returns the verdict `skip_lossy` carrying the trigger "
         "body \"every branch rendered lossy\" at "
-        f"`{ETD}:{_anchor(ETD, _NEEDLE_SKIP_LOSSY_RETURN)}`, "
+        f"`{_citation(ETD, _anchor(ETD, _NEEDLE_SKIP_LOSSY_RETURN))}`, "
         "and the run loop `continue`s at the `verdict == \"skip_lossy\"` branch at "
-        f"`:{_anchor(ETD, _NEEDLE_SKIP_LOSSY_BRANCH)}` -- BEFORE the "
-        f"`divergence_class:` line at `:{_anchor(ETD, _NEEDLE_DIVERGENCE_CLASS_COUNT)}`, which "
+        f"`{_citation(ETD, _anchor(ETD, _NEEDLE_SKIP_LOSSY_BRANCH))}` -- BEFORE the "
+        f"`divergence_class:` line at `{_citation(ETD, _anchor(ETD, _NEEDLE_DIVERGENCE_CLASS_COUNT))}`, which "
         "runs only under `verdict == \"diverged\"`. The classifier can never be handed the "
         "body that returns this class."
     ),
     "no_usable_branch": (
         "The trigger body \"mapper produced no usable branch\" is produced by NO CODE in the "
         "repository: the only occurrence on any execution path is the classifier's own test "
-        f"of it at `{ETD}:{_anchor(ETD, _NEEDLE_NO_USABLE_BRANCH_TEST)}`, "
+        f"of it at `{_citation(ETD, _anchor(ETD, _NEEDLE_NO_USABLE_BRANCH_TEST))}`, "
         "so no input can make `classify_divergence` return this class. Stated as 'no "
         "producer' rather than 'nowhere in the repository', which a first draft wrote and "
         "its own commit falsified -- the phrase then also appeared in this docstring and in "
@@ -592,18 +606,18 @@ DYNAMIC_FAMILY_EXCLUSIONS = {"skip:world_error:": {"skip:world_error:no_construc
 # never-fired claim, and it earns the same standard of evidence.
 CENSUS_CANNOT_REACH = {
     "skip:world_unsupported:rest_sleep_refund_pending_precounts_legacy": (
-        f"Raised at `{EW}:{_raise_line(EW, 'rest_sleep_refund_pending_precounts_legacy')}` only "
+        f"Raised at `{_citation(EW, _raise_line(EW, 'rest_sleep_refund_pending_precounts_legacy'))}` only "
         "when a row has `restSleepActiveRefundPending` and NO `restSleepAttempts`. ⚠ The "
         "naive reading -- that live rows always carry the counts -- is WRONG: "
         "`local_showdown._apply_rest_sleep_provenance` sets the pending flag at "
-        f"`{LS}:{_anchor(LS, _NEEDLE_LS_ACTIVE_REFUND_SET)}` and then "
-        f"`continue`s at `:{_anchor_after(LS, _NEEDLE_LS_PROVENANCE_UNREP, _anchor(LS, _NEEDLE_LS_ACTIVE_REFUND_SET)) + 1}` "
+        f"`{_citation(LS, _anchor(LS, _NEEDLE_LS_ACTIVE_REFUND_SET))}` and then "
+        f"`continue`s at `{_citation(LS, _next_statement(LS, _anchor_after(LS, _NEEDLE_LS_PROVENANCE_UNREP, _anchor(LS, _NEEDLE_LS_ACTIVE_REFUND_SET))))}` "
         "without writing them. What closes the path is the ORDER of the tests: that same "
         "branch sets `restSleepProvenanceUnrepresentable` at "
-        f"`:{_anchor_after(LS, _NEEDLE_LS_PROVENANCE_UNREP, _anchor(LS, _NEEDLE_LS_ACTIVE_REFUND_SET))}`, and "
+        f"`{_citation(LS, _anchor_after(LS, _NEEDLE_LS_PROVENANCE_UNREP, _anchor(LS, _NEEDLE_LS_ACTIVE_REFUND_SET)))}`, and "
         f"`_hp_and_status` raises on THAT at "
-        f"`{EW}:{_raise_line(EW, 'rest_sleep_provenance_unrepresentable', 1)}`, before it ever "
-        f"reaches `:{_raise_line(EW, 'rest_sleep_refund_pending_precounts_legacy')}`. The "
+        f"`{_citation(EW, _raise_line(EW, 'rest_sleep_provenance_unrepresentable', 1))}`, before it ever "
+        f"reaches `{_citation(EW, _raise_line(EW, 'rest_sleep_refund_pending_precounts_legacy'))}`. The "
         "surviving way in is a row carrying the pending flag, no counts and no "
         "unrepresentable flag, which no live producer emits. `engine_world.py` calls the "
         "neighbouring branch a CANARY whose expected count in a fresh post-split era is "
@@ -611,51 +625,51 @@ CENSUS_CANNOT_REACH = {
         "about coverage."
     ),
     "skip:world_unsupported:rest_sleep_refund_pending_unsplit_legacy": (
-        f"Raised at `{EW}:{_raise_line(EW, 'rest_sleep_refund_pending_unsplit_legacy')}` only "
+        f"Raised at `{_citation(EW, _raise_line(EW, 'rest_sleep_refund_pending_unsplit_legacy'))}` only "
         "when a row carries the pre-split `restSleepRefundPending` flag and NEITHER "
         "producer flag -- and `_hp_and_status` tests both producer flags first, at "
-        f"`:{_anchor(EW, _NEEDLE_EW_ATTEMPT_UNSETTLED)}` and "
-        f"`:{_anchor(EW, _NEEDLE_EW_ACTIVE_REFUND)}`. "
+        f"`{_citation(EW, _anchor(EW, _NEEDLE_EW_ATTEMPT_UNSETTLED))}` and "
+        f"`{_citation(EW, _anchor(EW, _NEEDLE_EW_ACTIVE_REFUND))}`. "
         "`_mark_legacy_rest_refund_pending` has exactly TWO call sites in "
-        f"`local_showdown.py` (`:{_anchor(LS, '_mark_legacy_rest_refund_pending(row)', 1)}` "
-        f"and `:{_anchor(LS, '_mark_legacy_rest_refund_pending(row)', 2)}`) and each is "
+        f"`local_showdown.py` (`{_citation(LS, _anchor(LS, '_mark_legacy_rest_refund_pending(row)', 1))}` "
+        f"and `{_citation(LS, _anchor(LS, '_mark_legacy_rest_refund_pending(row)', 2))}`) and each is "
         "preceded on the same row by a producer flag "
-        f"(`restSleepAttemptUnsettled` at `:{_anchor(LS, _NEEDLE_LS_ATTEMPT_UNSETTLED)}`, "
-        f"`restSleepActiveRefundPending` at `:{_anchor(LS, _NEEDLE_LS_ACTIVE_REFUND_SET)}`), "
+        f"(`restSleepAttemptUnsettled` at `{_citation(LS, _anchor(LS, _NEEDLE_LS_ATTEMPT_UNSETTLED))}`, "
+        f"`restSleepActiveRefundPending` at `{_citation(LS, _anchor(LS, _NEEDLE_LS_ACTIVE_REFUND_SET))}`), "
         "so a live row always trips an earlier branch. Reachable only by replaying a "
         "pre-split corpus. Same canary: zero is the designed value, not an unmeasured "
         "absence."
     ),
     "skip:world_unsupported:override_side_missing": (
-        f"Raised at `{EW}:{_raise_line(EW, 'override_side_missing')}` when "
+        f"Raised at `{_citation(EW, _raise_line(EW, 'override_side_missing'))}` when "
         "`override.player_teams.get(slot)` is falsy. The differential builds that mapping "
-        f"at `{ETD}:{_anchor(ETD, 'packed = {slot: true_teams[slot]')}` as "
+        f"at `{_citation(ETD, _anchor(ETD, 'packed = {slot: true_teams[slot]'))}` as "
         '`{slot: true_teams[slot]["packed"] for slot in ("p1", "p2")}` -- a comprehension '
         "over exactly the two slots the loop then iterates, so a slot cannot be ABSENT. "
         "The residual way in is an empty packed string from the bridge snapshot, which "
         "would mean a battle started with an empty team; 10,000 games produced none."
     ),
     "skip:world_unsupported:deferred_opponent_action": (
-        f"Raised at `{EW}:{_raise_line(EW, 'deferred_opponent_action')}` on "
+        f"Raised at `{_citation(EW, _raise_line(EW, 'deferred_opponent_action'))}` on "
         '`payload.get("deferredOpponentActions") or payload.get("deferredOpponentActionPriors")`. '
         "The payload always CARRIES both keys -- "
         "`local_showdown._public_materialization_payload` emits them at "
-        f"`{LS}:{_anchor(LS, _NEEDLE_DEFERRED_OPP_ACTIONS)}` -- so a "
+        f"`{_citation(LS, _anchor(LS, _NEEDLE_DEFERRED_OPP_ACTIONS))}` -- so a "
         "claim that it never carries them would be false. They are always EMPTY, and the "
         "closure is a frame HIGHER than a first draft placed it: the payload that reaches "
         "this raise is not one the differential builds at all. `world_battle_spec` "
-        f"constructs its own at `{EW}:{_anchor(EW, 'payload = _public_materialization_payload(state)')}` "
+        f"constructs its own at `{_citation(EW, _anchor(EW, 'payload = _public_materialization_payload(state)'))}` "
         "with NEITHER deferred argument -- both are keyword-only and default to `None` "
-        f"(`{LS}:{_anchor(LS, 'deferred_opponent_actions: Mapping[PlayerId, int] | None = None', 2)}`, "
-        f"`dict(... or {{}})` at `:{_anchor(LS, 'deferred_actions = dict(deferred_opponent_actions or {})')}`) "
+        f"(`{_citation(LS, _anchor(LS, 'deferred_opponent_actions: Mapping[PlayerId, int] | None = None', 2))}`, "
+        f"`dict(... or {{}})` at `{_citation(LS, _anchor(LS, 'deferred_actions = dict(deferred_opponent_actions or {})'))}`) "
         f"-- and passes it to `battle_spec_from_payload`, which reaches "
-        f"`_reject_unsupported_globals` at `:{_anchor(EW, '_reject_unsupported_globals(payload)')}`. "
+        f"`_reject_unsupported_globals` at `{_citation(EW, _anchor(EW, '_reject_unsupported_globals(payload)'))}`. "
         "An empty dict is falsy, so the guard never fires FOR ANY CALLER of "
         "`world_battle_spec`, which is stronger than a claim about the differential's own "
-        f"`:{_anchor(ETD, 'payload = _public_materialization_payload(mstate)')}` payload -- "
+        f"`{_citation(ETD, _anchor(ETD, 'payload = _public_materialization_payload(mstate)'))}` payload -- "
         "that exists, but feeds the truant scan and is not on the path to this raise. The "
         "function's own docstring at "
-        f"`{EW}:{_anchor(EW, 'opponent actions are deliberately not forwarded')}` says it."
+        f"`{_citation(EW, _anchor(EW, 'def world_battle_spec('))}` says it."
     ),
     "divergence_class:mapper_lossy": (
         "Structural, not instrumental -- see the demonstration on the entry itself."
@@ -812,7 +826,7 @@ def granularity(entry: dict[str, Any], sites: list[dict[str, Any]]) -> dict[str,
     return {
         "granularity": kind,
         "denominator": denominator,
-        "sites": [f"{s['function']}:{s['line']}" for s in sorted(matched, key=lambda s: s["line"])],
+        "sites": sorted(_citation(ETD, s['line']) for s in matched),
     }
 
 

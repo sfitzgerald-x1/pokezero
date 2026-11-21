@@ -625,9 +625,8 @@ class WhatTheCensusCannotSettleIsNamedTests(unittest.TestCase):
         that they were traced rather than asserted, invalidated by a merge, on the change
         whose subject is exactly that.
 
-        The generator now resolves every number at generation time (`_anchor`,
-        `_anchor_after`, `_raise_line`), so a moved anchor follows the code and a deleted
-        one raises. This pin is the other half: it re-resolves them HERE and compares to
+        The generator now resolves each citation to a scoped statement and code digest,
+        so a moved anchor leaves the record unchanged and a deleted one raises. This pin is the other half: it re-resolves them HERE and compares to
         what the committed artifact recorded, so an artifact generated against an older
         tree and not regenerated is red rather than quietly wrong.
         """
@@ -642,14 +641,12 @@ class WhatTheCensusCannotSettleIsNamedTests(unittest.TestCase):
             key = f"divergence_class:{name}"
             with self.subTest(entry=key):
                 self.assertEqual(recorded[key]["structural_demonstration"], demonstration)
-        # Anti-vacuity: the demonstrations must actually carry resolved numbers, or the
-        # comparison above is between two identical pieces of prose and proves nothing.
-        cited = re.findall(
-            r":(\d{2,5})`",
-            " ".join(CENSUS_SCRIPT.CENSUS_CANNOT_REACH.values())
-            + " ".join(CENSUS_SCRIPT.STRUCTURAL_DIVERGENCE_CLASSES.values()),
-        )
-        self.assertGreater(len(cited), 20, "the demonstrations carry no line citations")
+        # Anti-vacuity: stable identities must carry source-checked digests.
+        from gpu_engine import source_citation
+        text = "\n".join([*CENSUS_SCRIPT.CENSUS_CANNOT_REACH.values(), *CENSUS_SCRIPT.STRUCTURAL_DIVERGENCE_CLASSES.values()])
+        cited = list(source_citation.PATTERN.finditer(text))
+        self.assertGreater(len(cited), 20, 'the demonstrations carry no source citations')
+        self.assertEqual(source_citation.verify_text(text, REPO), [])
 
     def test_every_unreachable_entry_carries_its_demonstration(self) -> None:
         demonstrated = 0

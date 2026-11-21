@@ -498,7 +498,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 sys.path.insert(0, str(REPO / "tests"))
 
 import engine_build_fingerprint  # noqa: E402
-from c153_wide_negative_census import _anchor  # noqa: E402
+from c153_wide_negative_census import _anchor, _citation  # noqa: E402
 from engine_build_fingerprint import compute_fingerprint  # noqa: E402
 from test_ledger_table_uniformity import (  # noqa: E402
     _REACHABILITY_HEADER,
@@ -785,7 +785,7 @@ def differential_constant_names() -> list[str]:
     ]
 
 
-def residual_disjoint_band_sites() -> list[tuple[int, str]]:
+def residual_disjoint_band_sites(root=None) -> list[tuple[int, str]]:
     """`(line, ceiling argument)` for every CALL of `residual_disjoint_bands`.
 
     Read out of the TRACKED PATCH. `third_party/poke-engine-src/` is gitignored and absent
@@ -795,7 +795,7 @@ def residual_disjoint_band_sites() -> list[tuple[int, str]]:
     positional argument, taken by position rather than by matching a name.
     """
 
-    lines = _text(THRESHOLD_PATCH).splitlines()
+    lines = ((REPO if root is None else Path(root)) / THRESHOLD_PATCH).read_text().splitlines()
     sites: list[tuple[int, str]] = []
     for number, line in enumerate(lines, 1):
         stripped = line.lstrip("+ ")
@@ -893,6 +893,29 @@ def g33c_repro() -> dict:
     raise AssertionError(f"{G33C_SHARD} no longer carries 1000513/121")
 
 
+def source_citation_facts(root=None) -> dict[str, str]:
+    """Source identities for Appendix A; the independent fingerprint gates remain intact."""
+    from c153_wide_negative_census import _anchor as locate, _citation as cite
+    root = REPO if root is None else Path(root)
+    _anchor = lambda path, needle: locate(path, needle, root=root)
+    _citation = lambda path, line: cite(path, line, root=root)
+    facts = {}
+    sites = residual_disjoint_band_sites(root)
+    hp_sites = [line for line, ceiling in sites if ceiling == "defender_active.hp"]
+    max_sites = [line for line, ceiling in sites if ceiling == "i16::MAX"]
+    consumer = _anchor(EVENTS, "if active.item == Items::LEFTOVERS && !leftovers_truncated[i] {")
+    facts["t2.hp_ceiling_site_citations"] = ", ".join(sorted(_citation(THRESHOLD_PATCH, line) for line in hp_sites))
+    facts["t2.i16max_ceiling_site_citations"] = ", ".join(sorted(_citation(THRESHOLD_PATCH, line) for line in max_sites))
+    facts["t3.tie_refusal_citation"] = (
+        f"{_citation(EVENTS, _anchor(EVENTS, '_ => NO_TRUNCATION,'))}"
+    )
+    facts["t4.leftovers_truncated_consumer_citation"] = f"{_citation(EVENTS, consumer)}"
+    facts["t6.section_4_population_anchor"] = (
+        f"{_citation(LEDGER, _anchor(LEDGER, 'cannot be reached in gen3 randbats'))}"
+    )
+    return facts
+
+
 def derive() -> dict[str, str]:
     """Every fact the register's Appendix A states, re-derived from the tree."""
 
@@ -962,8 +985,6 @@ def derive() -> dict[str, str]:
     max_sites = [line for line, ceiling in sites if ceiling == "i16::MAX"]
     facts["t2.hp_ceiling_sites"] = str(len(hp_sites))
     facts["t2.i16max_ceiling_sites"] = str(len(max_sites))
-    facts["t2.hp_ceiling_site_lines"] = ", ".join(str(line) for line in hp_sites)
-    facts["t2.i16max_ceiling_site_lines"] = ", ".join(str(line) for line in max_sites)
     gates = [hunk for hunk in split_hunks() if hunk["adds_split_gate"]]
     facts["t2.split_hunks"] = str(len(gates))
     facts["t2.split_hunks_touching_an_hp_ceiling_site"] = str(
@@ -998,9 +1019,6 @@ def derive() -> dict[str, str]:
             if row["arm"] == "order_le_10" and row["winner_heals_before"] > 0
         )
     )
-    facts["t3.tie_refusal_line"] = (
-        f"{EVENTS}:{_anchor(EVENTS, '_ => NO_TRUNCATION,')}"
-    )
 
     # -- T4, G33c ---------------------------------------------------------
     repro = g33c_repro()
@@ -1012,11 +1030,7 @@ def derive() -> dict[str, str]:
     facts["t4.branch_miss_pct"] = percentages[0]
     references = leftovers_truncated_references()
     facts["t4.leftovers_truncated_references"] = str(len(references))
-    consumer = _anchor(
-        EVENTS, "if active.item == Items::LEFTOVERS && !leftovers_truncated[i] {"
-    )
     facts["t4.leftovers_truncated_consumers"] = str(len(references) - 1)
-    facts["t4.leftovers_truncated_consumer_line"] = f"{EVENTS}:{consumer}"
     diverged, measured = wide_shard_totals()
     facts["t4.wide_census_divergent_rows"] = f"{diverged} of {measured}"
     # THE SECOND ROW OF THE SAME CLASS, which is what deriving found and transcribing did
@@ -1082,9 +1096,6 @@ def derive() -> dict[str, str]:
     facts["t6.pool_showdown_commit"] = c154["pool"]["showdown_commit"]
     facts["t6.workflow_steps_checking_out_showdown"] = str(
         len(workflow_showdown_checkouts())
-    )
-    facts["t6.section_4_population_anchor"] = (
-        f"{LEDGER}:{_anchor(LEDGER, 'cannot be reached in gen3 randbats')}"
     )
 
     # -- how much of the ledger has actually been re-examined ---------------
@@ -1161,6 +1172,7 @@ def derive() -> dict[str, str]:
     # figure an artefact of the rounding in the row above it.
     facts["power.divergences_for_a_tenfold_tighter_bound"] = str(classified * 10)
 
+    facts.update(source_citation_facts())
     return facts
 
 
