@@ -203,13 +203,29 @@ def _bench(distribution, device, *, floats, record=None):
         results['stages'].append(f'all_reduce_{size}'); record(results)
         del gradient
     results['all_reduce_ms'] = results[f'all_reduce_{floats}_ms']
-    chunk = floats // world * world
-    sent, received = torch.ones(chunk, device=device), torch.empty(chunk, device=device)
-    timed(lambda: dist.all_to_all_single(received, sent, group=group), 2)
-    seconds = timed(lambda: dist.all_to_all_single(received, sent, group=group), 5)
-    results['all_to_all_ms'] = seconds * 1e3
-    results['all_to_all_gbps_per_rank'] = chunk * 4 * 8 * (world - 1) / world / seconds / 1e9
-    results['stages'].append('all_to_all'); record(results)
+    # Row-exchange path: all-to-all sweep, host tensors over a gloo group first (independent of the NCCL net
+    # transport), then device tensors over the main group. Per-rank payload per message = size_mb.
+    gloo = dist.new_group(backend='gloo', timeout=datetime.timedelta(seconds=120)) if device == 'cuda' else group
+    for label, exchange_group, exchange_device in (('gloo', gloo, 'cpu'), ('nccl' if device == 'cuda' else 'gloo2', group, device)):
+        for size_mb in (1, 4, 16, 64, 256):
+            n = min(floats, size_mb << 18)             # floats per rank (4 bytes each)
+            chunk = max(world, n // world * world)
+            sent, received = torch.ones(chunk, device=exchange_device), torch.empty(chunk, device=exchange_device)
+            try:
+                timed(lambda: dist.all_to_all_single(received, sent, group=exchange_group), 1)
+                seconds = timed(lambda: dist.all_to_all_single(received, sent, group=exchange_group), 3)
+            except Exception as error:   # record the failure and stop this transport's sweep
+                results[f'{label}_all_to_all_{size_mb}MB_error'] = f'{type(error).__name__}: {str(error)[:200]}'
+                results['stages'].append(f'{label}_all_to_all_{size_mb}MB_failed'); record(results)
+                break
+            results[f'{label}_all_to_all_{size_mb}MB_ms'] = seconds * 1e3
+            results[f'{label}_all_to_all_{size_mb}MB_gbps_per_rank'] = chunk * 4 * 8 * (world - 1) / world / seconds / 1e9
+            results['stages'].append(f'{label}_all_to_all_{size_mb}MB'); record(results)
+            del sent, received
+            if n < (size_mb << 18):
+                break
+    results['all_to_all_ms'] = results.get('nccl_all_to_all_16MB_ms', results.get('gloo_all_to_all_1MB_ms'))
+    results['all_to_all_gbps_per_rank'] = results.get('nccl_all_to_all_16MB_gbps_per_rank', results.get('gloo_all_to_all_1MB_gbps_per_rank'))
     return results
 
 
