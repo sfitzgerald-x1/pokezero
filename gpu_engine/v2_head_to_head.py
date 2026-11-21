@@ -30,10 +30,11 @@ SWAP_OFFSET = 1_000_000_000
 
 
 def snapshot(run, iteration):
-    from pokezero import v5_run as runs
+    from pokezero import v2_fused_state, v5_run as runs
     state = Path(run, 'state.json')
     if state.exists():
-        found = [x for x in json.loads(state.read_text())['snapshots'] if x['iteration'] == iteration]
+        found = [x for x in v2_fused_state.read_state(state.parent, include_full_reports=False)['snapshots']
+                 if x['iteration'] == iteration]
     else:
         found = [e['payload'] for e in journal(run) if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == iteration]
     if len(found) < 1:raise ValueError(f'no snapshot for iteration {iteration} in {run}')

@@ -98,10 +98,60 @@ class ChampionProfile:
 
 def bind_plan(profile,vocabulary,*,category_vocabulary,run_id,arm,replicate,iterations,pool_sha256,selection_seed):
     """Bind only an already declared full bank, never create/redraw its cells."""
-    config=profile.configurations(vocabulary,category_vocabulary=category_vocabulary,arm=arm,replicate=replicate)
     iterations=tuple(tuple(batch for batch in iteration) for iteration in iterations)
     if sum(len(batch.games) for iteration in iterations for batch in iteration)!=GAMES_PER_ARM:
         raise ValueError('complete predeclared2M game bank required; no refill or smaller production substitute')
+    if any(type(batch) is not runs.Batch for iteration in iterations for batch in iteration):
+        raise ValueError('Phase C original declarations require literal games')
+    return _bind_plan(profile, vocabulary, category_vocabulary, run_id, arm, replicate, iterations,
+                      pool_sha256, selection_seed)
+
+
+CAMPAIGN_GAMES_PER_ROUND = 20_000
+CAMPAIGN_ROUNDS = (20, 250, 5000)
+
+
+def campaign_iterations(run_id, rounds, *, stream_start, team_start, identity_seed_start, constructor_seed_start,
+                        sampling_seed_start, gender_seed, gender_domain, gender_root_start):
+    """Declare a fixed bank from externally allocated ranges."""
+    if type(rounds) is not int or rounds not in CAMPAIGN_ROUNDS:
+        raise ValueError('campaign needs the full 0.4M, 5M or 100M horizon')
+    for value in (stream_start, team_start, identity_seed_start, constructor_seed_start,
+                  sampling_seed_start, gender_seed, gender_domain, gender_root_start):
+        runs._seed(value)
+    batch_rows = 2048
+    iterations = []
+    block = 0
+    for iteration in range(rounds):
+        start = iteration * CAMPAIGN_GAMES_PER_ROUND
+        stop = start + CAMPAIGN_GAMES_PER_ROUND
+        batches = []
+        for offset in range(start, stop, batch_rows):
+            games = runs.GameRange(run_id, offset, min(batch_rows, stop - offset), stream_start + offset,
+                                  identity_seed_start + offset, team_start + 2 * offset)
+            batches.append(runs.CampaignBatch(games, constructor_seed_start + block, sampling_seed_start + block,
+                                              gender_seed, gender_domain, gender_root_start + offset))
+            block += 1
+        iterations.append(tuple(batches))
+    return tuple(iterations)
+
+
+def bind_campaign_plan(profile, vocabulary, *, category_vocabulary, run_id, arm, replicate, iterations,
+                       pool_sha256, selection_seed):
+    """Bind the full V2 horizon using the same certified Phase C recipe."""
+    iterations = tuple(tuple(batches) for batches in iterations)
+    if len(iterations) not in CAMPAIGN_ROUNDS or any(
+        sum(len(batch.games) for batch in batches) != CAMPAIGN_GAMES_PER_ROUND
+        or any(type(batch) is not runs.CampaignBatch for batch in batches)
+        for batches in iterations
+    ):
+        raise ValueError('campaign requires complete 20,000-game rounds at the 0.4M, 5M or 100M horizon')
+    return _bind_plan(profile, vocabulary, category_vocabulary, run_id, arm, replicate, iterations,
+                      pool_sha256, selection_seed)
+
+
+def _bind_plan(profile, vocabulary, category_vocabulary, run_id, arm, replicate, iterations, pool_sha256, selection_seed):
+    config=profile.configurations(vocabulary,category_vocabulary=category_vocabulary,arm=arm,replicate=replicate)
     if 'learning_rate_schedule' not in {f.name for f in fields(training.TrainConfig)}:
         raise runs.MissingDependency('reviewed scheduled v5 trainer is not integrated')
     return runs.Plan(run_id,config['model'],config['loss'],training.TrainConfig(**config['training']),iterations,

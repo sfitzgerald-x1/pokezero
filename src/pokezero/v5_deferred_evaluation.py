@@ -460,7 +460,7 @@ def _restore_milestone(value, *, staged_run_root=None):
             or policy['route_declaration_sha256'] != value['route_declaration_sha256']):
         raise ValueError('milestone request declaration differs')
     milestones = run.evaluation_milestones(
-        (sum(len(batch['games']) for batch in iteration) for iteration in declaration['iterations']),
+        run.manifest_iteration_game_counts(declaration),
         policy['interval_games'])
     if milestones.get(request.snapshot.iteration) != request.declared_games:
         raise ValueError('request is outside declared milestone cadence')

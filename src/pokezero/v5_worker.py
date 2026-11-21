@@ -82,6 +82,11 @@ def _plan(document,profile,arm,category_vocabulary):
     for iteration in document['iterations']:
         batches=[]
         for batch in iteration:
+            if type(batch['games']) is dict:
+                _keys(batch, (f.name for f in fields(run.CampaignBatch)))
+                _keys(batch['games'], (f.name for f in fields(run.GameRange)))
+                batches.append(run.CampaignBatch(**dict(batch, games=run.GameRange(**batch['games']))))
+                continue
             _keys(batch,(f.name for f in fields(run.Batch)))
             games=[]
             for game in batch['games']:
@@ -102,7 +107,8 @@ def _plan(document,profile,arm,category_vocabulary):
         document['max_requests'],run.Watchdog(**document['watchdog']),
         checkpoint_updates=document['checkpoint_updates'],discount=document['discount'],**extras)
     if run._json(result.manifest())!=run._json(document):raise ValueError('full original plan differs; no default or discarded fields')
-    expected=phase.bind_plan(profile,model.label_vocabulary,category_vocabulary=category_vocabulary,run_id=result.run_id,arm=model.arm,
+    bind = phase.bind_campaign_plan if result.compact else phase.bind_plan
+    expected=bind(profile,model.label_vocabulary,category_vocabulary=category_vocabulary,run_id=result.run_id,arm=model.arm,
         replicate=model.replicate,iterations=result.iterations,pool_sha256=result.pool_sha256,selection_seed=result.selection_seed)
     if extras:expected=replace(expected,**extras)
     if expected!=result:raise ValueError('declared controls differ from Phase C direct9375 recipe')
