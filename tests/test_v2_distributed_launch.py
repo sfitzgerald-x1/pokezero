@@ -80,6 +80,41 @@ class IdleGuardTests(unittest.TestCase):
                         evidence.observe_progress(now, sample, list(ranks))
                         self.assertFalse(evidence.stalled(now, started=0))
 
+    def test_nested_autotune_write_restarts_the_idle_window(self):
+        evidence = v2_distributed._IdleEvidence(100)
+        ranks = [(1, 0, (0, 0))]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'compile-cache').write_bytes(b'compiled')
+            tune = root / 'xla_gpu_per_fusion_autotune_cache_dir'
+            nested = tune / 'device'
+            nested.mkdir(parents=True)
+            entry = nested / 'kernel'
+            entry.write_bytes(b'first')
+            for now in range(0, 2401, 15):
+                evidence.observe_gpu(now, True)
+                if now == 1200:
+                    entry.write_bytes(b'finished')
+                if now % 300 == 0:
+                    evidence.observe_progress(now, v2_distributed._cache_progress(root), ranks)
+                    self.assertEqual(evidence.stalled(now, started=0), now == 2400)
+
+    def test_unreadable_autotune_directory_makes_sample_incomplete(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            tune = root / 'xla_gpu_per_fusion_autotune_cache_dir'
+            tune.mkdir()
+            scandir = v2_distributed.os.scandir
+
+            def read_entries(path):
+                if path == tune:
+                    raise PermissionError('test cache scan interrupted')
+                return scandir(path)
+
+            with patch.object(v2_distributed.os, 'scandir', side_effect=read_entries):
+                with self.assertRaisesRegex(PermissionError, 'cache scan interrupted'):
+                    v2_distributed._cache_progress(root)
+
     def test_allocated_gpu_query_checks_presence_and_uniqueness(self):
         devices = ['GPU-a', 'GPU-b']
         with patch.object(v2_distributed.subprocess, 'check_output', return_value='GPU-a, 0\nGPU-b, 0\nGPU-c, 80'):

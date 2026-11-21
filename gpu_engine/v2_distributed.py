@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import queue
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -214,13 +215,38 @@ def _rank_progress(process, log):
 
 
 def _cache_progress(cache):
-    newest = count = 0
-    with os.scandir(cache) as entries:
-        for entry in entries:
-            if entry.name.endswith('-cache'):
-                count += 1
-                newest = max(newest, entry.stat().st_mtime_ns)
-    return count, newest
+    root = Path(cache).resolve(strict=True)
+    pending = [root]
+    inventory = {}
+
+    def signature(info):
+        return info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+    while pending:
+        directory = pending.pop()
+        before = directory.stat(follow_symlinks=False)
+        if not stat.S_ISDIR(before.st_mode):
+            raise OSError('cache directory changed during observation')
+        directory_key = str(directory.relative_to(root))
+        before_key = signature(before)
+        if directory_key in inventory and inventory[directory_key] != before_key:
+            raise OSError('cache directory changed during observation')
+        inventory[directory_key] = before_key
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                path = Path(entry.path)
+                info = entry.stat(follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
+                    raise OSError('cache sample contains a symbolic link')
+                inventory[str(path.relative_to(root))] = signature(info)
+                # JAX stores its kernel cache file at the root and autotune entries here.
+                if stat.S_ISDIR(info.st_mode) and (
+                    directory != root or entry.name == 'xla_gpu_per_fusion_autotune_cache_dir'
+                ):
+                    pending.append(path)
+        if signature(directory.stat(follow_symlinks=False)) != before_key:
+            raise OSError('cache directory changed during observation')
+    return inventory
 
 
 def _observe_idle(completed, processes, logs, identifiers, cache, started, retire):
