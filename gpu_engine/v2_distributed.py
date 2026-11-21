@@ -79,7 +79,8 @@ class Distribution:
         reports = self.gather(report)
         if any(r['snapshot'] != report['snapshot'] or r['training']['steps'] != report['training']['steps']
                 or r['training']['rows'] != report['training']['rows']
-                or r['training'].get('lr_start') != report['training'].get('lr_start') for r in reports):
+                or r['training'].get('lr_start') != report['training'].get('lr_start')
+                or r['training'].get('campaign_schedule') != report['training'].get('campaign_schedule') for r in reports):
             raise ValueError('rank snapshot/update accounting diverged')
         combined = dict(reports[0], ranks=reports, world_size=self.world_size)
         for key in ('games', 'rows'):

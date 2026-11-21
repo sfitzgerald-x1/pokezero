@@ -89,6 +89,8 @@ def _plan(document,profile,arm,category_vocabulary):
             batches.append(run.Batch(**dict(batch,games=tuple(games))))
         iterations.append(tuple(batches))
     extras={}
+    if 'historical_anchor_slots' in document:
+        extras['historical_anchor_slots']=document['historical_anchor_slots']
     if 'evaluation' in document:
         if not hasattr(run,'EvaluationProtocol'):raise run.MissingDependency('reviewed milestone source is not integrated')
         evaluation = document['evaluation']

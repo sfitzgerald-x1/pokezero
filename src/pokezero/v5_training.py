@@ -538,7 +538,7 @@ def load_checkpoint(path,*,enable_v5=False,expected_model_config=None,expected_l
     section=payload.get('v2')
     if isinstance(section,dict):
         settings=section.get('config')
-        if 'lr_start_origin' in section or isinstance(settings,dict) and 'lr_start' in settings:
+        if 'lr_start_origin' in section or isinstance(settings,dict) and ('lr_start' in settings or 'campaign' in settings):
             raise ValueError('LR-start checkpoints require V2 resume')
     metadata=payload.get('metadata',{})
     if (metadata.get('schema')!=CHECKPOINT_SCHEMA or payload.get('metadata_sha256')!=_sha(metadata)

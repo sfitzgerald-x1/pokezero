@@ -32,7 +32,7 @@ class BatonSubstituteGuards(unittest.TestCase):
   value=json.loads(subprocess.check_output(['node','-e',script,str(showdown_root())],text=True));self.assertEqual(value,dict(noCopy=False,onCopy='undefined',out=[dict(hp=n,old={},boosts=dict(spa=2))for n in(1,13,25)]))
   # transition.py is certified against CURRENT_TRANSITION (full AST plus mutations) by terminal_closeout and seismic_toss_components; entry, state, baton, the driver, full_v4_event_device and kernel_frame_risk: byte-exact against reviewed SOURCE_PINS in transition_observer_wiring's source-binding subtests.
   for n in ('public_active.py',):
-   self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show','b8092a85:gpu_engine/'+n]),n)
+   self.assertEqual(Path('gpu_engine',n).read_bytes(),subprocess.check_output(['git','show','3cfa43c75571912d016e929410c4a81fd2462cae:gpu_engine/'+n]),n)
   for names in [('gpu_engine.benchmark_retained_games','gpu_engine.engine_baton_pass_callbacks','gpu_engine.engine_full_v4_event_device'),('gpu_engine.engine_full_v4_event_device','gpu_engine.engine_baton_pass_callbacks','gpu_engine.benchmark_retained_games')]:
    out=subprocess.run([sys.executable,'-B','-c','import importlib;'+''.join('importlib.import_module('+repr(n)+');'for n in names)],env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1'),capture_output=True,text=True,timeout=30);self.assertEqual(out.returncode,0,out.stderr)
 
