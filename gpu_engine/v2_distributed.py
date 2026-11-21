@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import queue
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,11 @@ from uuid import UUID
 
 CHECKPOINT_WRITE_EXIT = 75
 CHECKPOINT_WRITE_EXIT_GRACE = 10
+IDLE_WINDOW_SECONDS = 900
+GPU_SAMPLE_SECONDS = 15
+GPU_PROBE_TIMEOUT = 8
+PROGRESS_SAMPLE_SECONDS = 300
+NEAR_ZERO_CPU = 1.0
 
 
 class Distribution:
@@ -142,7 +148,137 @@ def _stop(processes):
                 process.wait(timeout=10)
 
 
-def _wait_workers(completed, ranks, deadline):
+class _IdleEvidence:
+    """Track overlapping idle intervals using complete, consecutive samples."""
+    def __init__(self, ticks_per_second):
+        self.ticks_per_second = ticks_per_second
+        self.gpu_time = self.gpu_since = None
+        self.progress = self.quiet_since = None
+
+    def observe_gpu(self, now, idle):
+        consecutive = self.gpu_time is not None and 0 < now - self.gpu_time <= GPU_SAMPLE_SECONDS + GPU_PROBE_TIMEOUT
+        if not idle or not consecutive or self.gpu_since is None:
+            self.gpu_since = now if idle else None
+        self.gpu_time = now
+
+    def observe_progress(self, now, cache, ranks):
+        previous = self.progress
+        self.progress = None if cache is None else (now, cache, ranks)
+        if previous is not None and self.progress is not None:
+            last_time, last_cache, last_ranks = previous
+            elapsed = now - last_time
+            if (0 < elapsed <= PROGRESS_SAMPLE_SECONDS + GPU_SAMPLE_SECONDS + GPU_PROBE_TIMEOUT
+                    and cache == last_cache and len(last_ranks) == len(ranks)
+                    and all(
+                        start == old_start and log == old_log
+                        and 0 <= 100 * (ticks - old_ticks) < NEAR_ZERO_CPU * elapsed * self.ticks_per_second
+                        for (start, ticks, log), (old_start, old_ticks, old_log) in zip(ranks, last_ranks)
+                    )):
+                if self.quiet_since is None:
+                    self.quiet_since = last_time
+                return
+        self.quiet_since = None
+
+    def stalled(self, now, started):
+        return (self.gpu_since is not None and self.quiet_since is not None
+                and 0 <= now - self.gpu_time <= GPU_SAMPLE_SECONDS + GPU_PROBE_TIMEOUT
+                and now - started >= IDLE_WINDOW_SECONDS
+                and now - max(self.gpu_since, self.quiet_since) > IDLE_WINDOW_SECONDS)
+
+
+def _gpu_idle(identifiers):
+    output = subprocess.check_output([
+        'nvidia-smi', '--query-gpu=uuid,utilization.gpu', '--format=csv,noheader,nounits',
+    ], timeout=GPU_PROBE_TIMEOUT, text=True)
+    expected = {identifier.lower() for identifier in identifiers}
+    observed = {}
+    for line in output.splitlines():
+        uuid, utilization = (field.strip() for field in line.split(','))
+        uuid = uuid.lower()
+        if uuid not in expected:
+            continue
+        value = int(utilization)
+        if uuid in observed or not 0 <= value <= 100:
+            raise ValueError('invalid utilization for an allocated GPU')
+        observed[uuid] = value
+    if observed.keys() != expected:
+        raise ValueError('incomplete allocated GPU utilization sample')
+    return not any(observed.values())
+
+
+def _rank_progress(process, log):
+    fields = Path(f'/proc/{process.pid}/stat').read_text().rsplit(')', 1)[1].split()
+    if fields[0] == 'Z':
+        raise ProcessLookupError(process.pid)
+    stat = os.fstat(log.fileno())
+    return int(fields[19]), int(fields[11]) + int(fields[12]), (stat.st_size, stat.st_mtime_ns)
+
+
+def _cache_progress(cache):
+    root = Path(cache).resolve(strict=True)
+    pending = [root]
+    inventory = {}
+
+    def signature(info):
+        return info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+    while pending:
+        directory = pending.pop()
+        before = directory.stat(follow_symlinks=False)
+        if not stat.S_ISDIR(before.st_mode):
+            raise OSError('cache directory changed during observation')
+        directory_key = str(directory.relative_to(root))
+        before_key = signature(before)
+        if directory_key in inventory and inventory[directory_key] != before_key:
+            raise OSError('cache directory changed during observation')
+        inventory[directory_key] = before_key
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                path = Path(entry.path)
+                info = entry.stat(follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
+                    raise OSError('cache sample contains a symbolic link')
+                inventory[str(path.relative_to(root))] = signature(info)
+                # JAX stores its kernel cache file at the root and autotune entries here.
+                if stat.S_ISDIR(info.st_mode) and (
+                    directory != root or entry.name == 'xla_gpu_per_fusion_autotune_cache_dir'
+                ):
+                    pending.append(path)
+        if signature(directory.stat(follow_symlinks=False)) != before_key:
+            raise OSError('cache directory changed during observation')
+    return inventory
+
+
+def _observe_idle(completed, processes, logs, identifiers, cache, started, retire):
+    if not cache:
+        print('S0 idle guard needs JAX_COMPILATION_CACHE_DIR', file=sys.stderr, flush=True)
+        return
+    evidence = _IdleEvidence(os.sysconf('SC_CLK_TCK'))
+    next_progress = started
+    while not retire.is_set() and all(process.poll() is None for process in processes):
+        try:
+            gpu_idle = _gpu_idle(identifiers)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            print(f'S0 idle guard GPU sample unavailable: {error}', file=sys.stderr, flush=True)
+            gpu_idle = False
+        now = time.monotonic()
+        evidence.observe_gpu(now, gpu_idle)
+        if now >= next_progress:
+            try:
+                cache_progress = _cache_progress(cache)
+                ranks = [_rank_progress(process, log) for process, log in zip(processes, logs)]
+            except (OSError, ValueError, IndexError) as error:
+                print(f'S0 idle guard progress sample unavailable: {error}', file=sys.stderr, flush=True)
+                cache_progress, ranks = None, ()
+            now = time.monotonic()
+            evidence.observe_progress(now, cache_progress, ranks)
+            next_progress = now + PROGRESS_SAMPLE_SECONDS
+            if evidence.stalled(now, started) and not retire.is_set():
+                completed.put(('idle', now))
+        retire.wait(GPU_SAMPLE_SECONDS)
+
+
+def _wait_workers(completed, ranks, deadline, *, processes=(), retire=None):
     codes = {}
     checkpoint_deadline = None
     while len(codes) < ranks:
@@ -152,6 +288,24 @@ def _wait_workers(completed, ranks, deadline):
         except queue.Empty:
             codes['deadline'] = 124
             break
+        if rank == 'idle':
+            now = time.monotonic()
+            if now >= end:
+                codes['deadline'] = 124
+                break
+            if codes or not processes or not 0 <= now - code <= GPU_SAMPLE_SECONDS:
+                continue
+            try:
+                active = all(process.poll() is None for process in processes)
+            except OSError as error:
+                print(f'S0 idle guard could not confirm worker liveness: {error}', file=sys.stderr, flush=True)
+                continue
+            if active:
+                codes['idle'] = 124
+                break
+            continue
+        if retire is not None:
+            retire.set()
         codes[rank] = code
         if code == CHECKPOINT_WRITE_EXIT:
             if checkpoint_deadline is None:
@@ -166,6 +320,8 @@ def main(argv=None):
     parser.add_argument('--ranks', required=True, type=int, choices=(1, 2, 4))
     parser.add_argument('--timeout-seconds', required=True, type=int)
     parser.add_argument('--collective-timeout', type=int, default=1800)
+    parser.add_argument('--s0-idle-guard', action='store_true',
+                        help='add a timeout for verified GPU, rank, cache and log inactivity')
     parser.add_argument('--rank', type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument('--rendezvous', default=None, help=argparse.SUPPRESS)
     args, fused_args = parser.parse_known_args(argv)
@@ -199,6 +355,7 @@ def main(argv=None):
         rendezvous = str(Path(temporary) / 'store')
         processes = []; logs = []; completed = queue.Queue(); codes = {}
         started = time.monotonic(); deadline = started + args.timeout_seconds
+        retire = threading.Event() if args.s0_idle_guard else None
         try:
             for rank, identifier in enumerate(identifiers):
                 env = dict(os.environ, CUDA_VISIBLE_DEVICES=identifier, JAX_PLATFORMS='cuda',
@@ -210,8 +367,18 @@ def main(argv=None):
                 process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 processes.append(process)
                 threading.Thread(target=lambda r=rank, p=process: completed.put((r, p.wait())), daemon=True).start()
-            codes = _wait_workers(completed, args.ranks, deadline)
+            if retire is not None:
+                try:
+                    threading.Thread(target=_observe_idle, args=(
+                        completed, processes, logs, identifiers,
+                        os.environ.get('JAX_COMPILATION_CACHE_DIR'), started, retire,
+                    ), daemon=True).start()
+                except RuntimeError as error:
+                    print(f'S0 idle guard observer unavailable: {error}', file=sys.stderr, flush=True)
+            codes = _wait_workers(completed, args.ranks, deadline, processes=processes, retire=retire)
         finally:
+            if retire is not None:
+                retire.set()
             _stop(processes)
             for log in logs:
                 log.close()

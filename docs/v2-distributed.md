@@ -19,6 +19,14 @@ The finite horizon above is an example validation invocation. Production
 timeouts, declarations and initial snapshots must be bound separately. The
 original `gpu_engine.v2_fused` entry remains the single-device path.
 
+S0 GPU runs can enable `--s0-idle-guard` on the parent launcher and set
+`JAX_COMPILATION_CACHE_DIR` to the workers' persistent cache. The guard
+requires fifteen minutes of startup time and more than fifteen minutes of
+overlapping zero utilization on all allocated GPUs, near-zero CPU on every
+rank, and unchanged cache and rank logs. An unavailable sample restarts the
+affected observation interval. The finite wall deadline and normal rank-exit
+handling still apply. An accepted idle timeout appears in `rank-exit.json`.
+
 ## Games and batches
 
 A round's declared games divide into equal contiguous rank shards. Four ranks
