@@ -72,8 +72,8 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
       return result;
     };
   }
-  function take(c,role,side,value){
-    const key=role+':'+side;if(used.has(key))return unknown('REPEATED_ROLE',key);
+  function take(c,role,side,value,key=role+':'+side){
+    if(used.has(key))return unknown('REPEATED_ROLE',key);
     used.add(key);audit({kind:'COUPLED',nonce:c.nonce,role,side,raw:value});return value;
   }
   function effectDraw(c,role,side,column){
@@ -421,6 +421,16 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
         const first=take(c,'move_tie',0,c.draws[0][0]);
         group.sort((a,b)=>(a.pokemon.side.n===first?-1:1));items.splice(start,2,...group);return;
       }
+      const focusCallback=gen3Dex?.moves.get('focuspunch').beforeTurnCallback;
+      if(singles(battle)&&hasEntryTies(c)&&!c.resuming&&list===battle.queue.list&&group.length===2
+        &&group.every(x=>x.choice==='beforeTurnMove'&&x.order===5&&x.move?.id==='focuspunch'
+          &&focusCallback&&x.move.beforeTurnCallback===focusCallback&&active(battle,x.pokemon)&&x.pokemon.hp>0
+          &&list.some(a=>a.choice==='move'&&a.pokemon===x.pokemon&&a.move?.id==='focuspunch'))
+        &&group[0].pokemon.side!==group[1].pokemon.side&&Number.isFinite(group[0].speed)&&group[0].speed===group[1].speed){
+        // Both choices are moves, so the ordinary switch-order coordinate is free.
+        const first=take(c,'before_turn_move_tie',0,c.draws[0][11],'switch_tie:0');
+        group.sort((a,b)=>a.pokemon.side.n===first?-1:1);items.splice(start,2,...group);return;
+      }
       if(singles(battle)&&group.length===2&&['switch','instaswitch'].includes(group[0].choice)
         &&group.every(x=>x.choice===group[0].choice&&active(battle,x.pokemon))
         &&group[0].pokemon.side!==group[1].pokemon.side){
@@ -443,6 +453,12 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
       }
       if(singles(battle)&&fieldEventId==='Residual'&&group.length===2
         &&group.every(h=>active(battle,h.effectHolder))&&group[0].effectHolder.side!==group[1].effectHolder.side){
+        if(group.every(h=>h.effect===gen3Dex?.conditions.get('focuspunch')&&!h.callback&&!h.effect.onEnd
+          &&h.state?.duration===1&&!h.state.linkedPokemon&&h.effectHolder.volatiles.focuspunch===h.state
+          &&!h.effectHolder.fainted&&h.end===h.effectHolder.removeVolatile)){
+          // Each callback-free expiry removes only its own Focus Punch flag.
+          audit({kind:'INERT_RESIDUAL_TIE',nonce:c.nonce,effects:['focuspunch','focuspunch']});return;
+        }
         if(group.every(h=>h.effect?.id==='truant'&&h.order===27&&originalCallback(h,'Residual'))){
           audit({kind:'INERT_TRUANT_TIE',nonce:c.nonce});return;
         }
