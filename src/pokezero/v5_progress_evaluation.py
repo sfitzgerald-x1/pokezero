@@ -28,6 +28,7 @@ PROGRESS_FP_MS = 100
 INTERVAL_GAMES = 1_000_000
 Z95 = 1.959963984540054
 TERMINAL = ('p1', 'p2', 'tie')
+TRAP_SWITCH_SETTING = 'owning_allow_maybe_trapped_switches'
 
 
 def _ref(value):
@@ -52,10 +53,17 @@ def load_profile(dispatch, protocol):
     runtime = _ref(profile['runtime']).document()
     if profile['simulator_sha256'] != runtime['showdown']['compiled_tree_sha256']:
         raise ValueError('progress simulator identity differs from actual runtime')
-    if profile['actor_law_sha256'] != run._sha({
+    declared_games = sum(len(batch['games']) for batches in declaration['iterations'] for batch in batches)
+    trap_switches = profile.get(TRAP_SWITCH_SETTING, declared_games == 100_000_000)
+    if type(trap_switches) is not bool:
+        raise ValueError('deferred evaluation trap switch setting must be boolean')
+    actor_law = {
         'policy': 'raw_greedy', 'inference': 'float32', 'runtime': profile['runtime']['sha256'],
         'label_vocabulary': profile['label_vocabulary_sha256'],
-    }):
+    }
+    effective_actor_law = dict(actor_law, **{TRAP_SWITCH_SETTING: trap_switches})
+    declared_actor_law = effective_actor_law if TRAP_SWITCH_SETTING in profile else actor_law
+    if profile['actor_law_sha256'] != run._sha(declared_actor_law):
         raise ValueError('actual greedy FP32 actor law must match the declared identity')
     for field in ('opponent_law_sha256s', 'opponent_sha256s', 'shards'):
         if set(profile[field]) != set(OPPONENTS):
@@ -71,6 +79,17 @@ def load_profile(dispatch, protocol):
         raise ValueError('finite positive request limit required')
     if any(type(n) is not int or not 1 <= n <= len(banks[key]) for key, n in profile['shards'].items()):
         raise ValueError('fixed opponent-specific shard counts required')
+    # Derive an effective registry law even for an older declaration. Cells
+    # played under conservative masking cannot satisfy the enabled evaluation.
+    opponent_laws = dict(profile['opponent_law_sha256s'])
+    if trap_switches:
+        opponent_laws['champion_9375'] = run._sha({
+            'policy': 'untouched_raw_greedy',
+            'runtime': profile['runtime']['sha256'],
+            TRAP_SWITCH_SETTING: True,
+        })
+    profile = dict(profile, actor_law_sha256=run._sha(effective_actor_law if trap_switches else actor_law),
+                   opponent_law_sha256s=opponent_laws, **{TRAP_SWITCH_SETTING: trap_switches})
     return request, profile, banks
 
 
@@ -223,7 +242,8 @@ def run_shared_cell(registry, identity, evaluate, *, retry_unknown=False, requir
 def _fp_config(profile, request, bank, seat, fp_cpu=None):
     config = dict(profile['foul_play']['config'])
     config.update(checkpoint=str(request.checkpoint_path), seed_start=bank[0]['seed'], games=len(bank),
-                  pokezero_player=seat, foulplay_cpu_affinity=fp_cpu)
+                  pokezero_player=seat, foulplay_cpu_affinity=fp_cpu,
+                  owning_allow_maybe_trapped_switches=profile[TRAP_SWITCH_SETTING])
     cfg = evaluation._config(config)
     if (cfg.search_time_ms != PROGRESS_FP_MS or cfg.foulplay_mcts_iterations is not None
             or cfg.websocket_host != '127.0.0.1' or cfg.max_decision_rounds != profile['max_requests']):
@@ -274,26 +294,44 @@ def _mixed_game(env, current, opponent, row, seat, max_requests, battle_id):
         env.reset_with_start_override(seed=row['seed'], start_override=_packed(row['teams']))
         for i, (owner, actor) in enumerate(actors.items(), 1):
             actor.begin_game(battle_id=battle_id, owner=owner, seed=row['seed'], stream_id=i)
-        for _ in range(max_requests):
+        for decision_index in range(max_requests):
             if env.terminal() is not None:
                 break
             feed()
             actions = {}
             choices = {}
+            boundaries = {}
             for owner in env.requested_players():
                 if owner in actors:
                     actor = actors[owner]
                     boundary = actor.snapshot_boundary()
+                    boundaries[owner] = boundary
                     actions[owner] = actor.decide(boundary, rng=rng[owner]).action_index
                     choices[owner] = actor.choice(boundary)
                 else:
                     actions[owner] = opponent.select_action(env.observe(owner), rng=rng[owner]).action_index
             if not actions:
                 raise ValueError('nonterminal Showdown game has no actionable requests')
-            routed = env._choices_for_actions(actions)
-            if any(routed[owner] != choice for owner, choice in choices.items()):
+            tentative = {owner: choices[owner] for owner, boundary in boundaries.items()
+                         if actors[owner].tentative_switch(boundary)}
+            routed = (env._choices_for_actions(actions, exclude=tentative) if tentative
+                      else env._choices_for_actions(actions))
+            if any(routed[owner] != choice for owner, choice in choices.items() if owner not in tentative):
                 raise ValueError('owner-specific legal choice routing differs from the simulator')
-            env.step(actions)
+            if tentative:
+                def retry(owner):
+                    actor, boundary = actors[owner], boundaries[owner]
+                    actor.retry_trapped_switch(boundary, rng=rng[owner])
+                    choices[owner] = actor.choice(boundary)
+                    return choices[owner]
+
+                env.step_with_guarded_switches(dict(routed, **tentative), tentative, retry,
+                                               submission_id=decision_index)
+            else:
+                env.step(actions)
+            for owner, choice in choices.items():
+                if actors[owner].allow_maybe_trapped_switches is True:
+                    actors[owner].confirm_choice(choice)
         terminal = env.terminal()
         if terminal is None or terminal.capped:
             raise ValueError('Showdown decision cap')
@@ -337,7 +375,8 @@ def _evaluate_lane(dispatch, protocol, name, registry, selected, cores):
     runtime = _ref(profile['runtime']).document()
     policy = dict(runtime=profile['runtime'], model_sha256=request.snapshot.model_sha256,
                   label_vocabulary_sha256=profile['label_vocabulary_sha256'], deterministic=True)
-    current = evaluation._factory(policy, request, compute_dtype='float32', cpu_only=True)
+    current = evaluation._factory(policy, request, compute_dtype='float32', cpu_only=True,
+                                  allow_maybe_trapped_switches=profile[TRAP_SWITCH_SETTING])
     fp_configs = {seat: _fp_config(profile, request, banks['foul_play'], seat, fp_cpu) for seat in SEATS['foul_play']}
     show = runtime['showdown']
     if any(cfg.showdown_root.resolve() != Path(show['root']).resolve() or cfg.node_binary != show['node']['path']

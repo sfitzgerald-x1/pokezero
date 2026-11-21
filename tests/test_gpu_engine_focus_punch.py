@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import unittest
+from unittest.mock import patch
 
 NODE=os.environ.get('NODE') or shutil.which('node')
 SHOWDOWN=os.environ.get('POKEZERO_SHOWDOWN_ROOT')
@@ -54,6 +55,26 @@ class FocusPunchTests(unittest.TestCase):
         self.assertLess(int(a.hp[0,1,0]),1000)
         self.assertEqual((int(a.pp[0,0,0,0]),int(a.last_move[0,0,0])),(7,1))
         self.assertEqual(int(a.volatile[0,0,0])&(self.charge|self.lost),0)
+
+    def test_two_preparations_use_speed_and_independent_tie_draw(self):
+        j=self.j
+        s=self.live(3,foe=1)
+        s=s._replace(stats=s.stats.at[:,1,:,5].set(j.array([[300],[300],[301]])))
+        initialized=self.t.initialize_with_public(s,self.table)
+        chance=self.t.sample_chance_inputs(initialized.state)
+        chance=chance._replace(draws=chance.draws.at[:,0,0].set(0).at[:,0,11].set(j.array([0,1,0])))
+        seen=[]
+        move=self.t.device_public.move
+
+        def watch(carry,state,side,move_id,use,**kwargs):
+            if kwargs.get('preparation'):
+                seen.append((side.tolist(),use.tolist()))
+            return move(carry,state,side,move_id,use,**kwargs)
+
+        with patch.object(self.t.device_public,'move',watch):
+            self.t.step_with_public(initialized.state,j.zeros((3,2),j.int32),
+                self.table,initialized.trackers,chance_inputs=chance)
+        self.assertEqual(seen,[([0,1,1],[True]*3),([1,0,0],[True]*3)])
 
     def test_direct_hit_breaks_focus_after_pp_last_and_choice_pressure(self):
         s=self.live(foe=2);s=s._replace(item=s.item.at[0,0,0].set(1),ability=s.ability.at[0,1,0].set(1))
@@ -124,6 +145,20 @@ class FocusPunchTests(unittest.TestCase):
         r=self.t.step(s,actions,self.table)
         for x,y in zip(self.jax.tree.leaves(s),self.jax.tree.leaves(r.state)):
             self.assertTrue(bool(j.array_equal(x,y)))
+
+    @unittest.skipUnless(NODE and SHOWDOWN,'requires pinned Showdown')
+    def test_pinned_double_preparation_order_and_silent_expiry(self):
+        first, second, faster=json.loads(subprocess.check_output(
+            [NODE,str(Path(__file__).with_name('gpu_focus_punch_tie_oracle.cjs')),SHOWDOWN],text=True))
+        self.assertEqual([row['starts'] for row in (first,second,faster)],
+            [['p1','p2'],['p2','p1'],['p2','p1']])
+        self.assertEqual((first['attacks'],first['hp']),(second['attacks'],second['hp']))
+        for expected,row in enumerate((first,second)):
+            self.assertEqual([e['raw'] for e in row['events'] if e.get('role')=='before_turn_move_tie'],[expected])
+            self.assertEqual([e['raw'] for e in row['events'] if e.get('role')=='move_tie'],[0])
+            self.assertEqual([e['effects'] for e in row['events'] if e['kind']=='INERT_RESIDUAL_TIE'],
+                [['focuspunch','focuspunch']])
+        self.assertFalse(any(e.get('role')=='before_turn_move_tie' for e in faster['events']))
 
     @unittest.skipUnless(NODE and SHOWDOWN,'requires pinned Showdown')
     def test_pinned_gen3_hit_sub_pp_and_encore(self):

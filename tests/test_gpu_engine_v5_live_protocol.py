@@ -58,6 +58,32 @@ class V5LiveProtocolTests(unittest.TestCase):
         actor.accept_owner_stream(battle_id=actor.battle_id,owner=actor.owner,generation=actor.generation,
             prefix_sha256=actor.prefix_sha256,lines=tuple(lines))
 
+    def test_tentative_switch_reuses_v5_scores_for_moves_only_retry(self):
+        with jax.default_matmul_precision('highest'), jax.enable_x64(False):
+            factory = self.make_factory(deterministic=False, allow_maybe_trapped_switches=True)
+            actor = self.actor(factory=factory)
+            try:
+                request = self.f.fixture.request(0)
+                request['active'][0]['maybeTrapped'] = True
+                self.feed(actor, request=request)
+                snapshot = actor.snapshot_boundary()
+                initial = actor.decide(snapshot, rng=random.Random(2))
+                self.assertGreaterEqual(initial.action_index, 4)
+                self.assertTrue(actor.tentative_switch(snapshot))
+                old, public = actor.decision_v5_observation(snapshot, frame=0)
+                self.assertTrue(old.legal_action_mask[initial.action_index])
+                self.assertEqual(public.legal_action_mask, old.legal_action_mask)
+                retry = actor.retry_trapped_switch(snapshot, rng=random.Random(2))
+                old, public = actor.decision_v5_observation(snapshot, frame=0)
+                self.assertFalse(any(old.legal_action_mask[4:]))
+                self.assertEqual(public.legal_action_mask, old.legal_action_mask)
+                self.assertLess(retry.action_index, 4)
+                self.assertEqual(actor._backend._compiled_functions.calls, 1)
+                self.assertEqual(retry.metadata['policy_distribution'][4:], (0.,) * 5)
+                self.assertFalse(any(actor.decision_observation(snapshot).legal_action_mask[4:]))
+            finally:
+                actor.close_game()
+
     def test_same_actual_encode_step_v4_prefix_v5_public_tail_and_original_seeded_raw_rng(self):
         with jax.default_matmul_precision('highest'):
             results=[]

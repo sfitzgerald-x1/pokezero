@@ -515,7 +515,7 @@ async def _concurrent_panel(configs,factory,protocol,progress_path,namespace,*,i
     return json.loads(Path(progress_path).read_bytes())
 
 
-def _factory(protocol,request,*,compute_dtype='bfloat16',cpu_only=False):
+def _factory(protocol,request,*,compute_dtype='bfloat16',cpu_only=False,allow_maybe_trapped_switches=False):
     """Original public catalog for THIS archive; never load a champion model."""
     from . import v5_worker as worker
     from .v5_phasec import category_binding
@@ -571,7 +571,8 @@ def _factory(protocol,request,*,compute_dtype='bfloat16',cpu_only=False):
         expected_archive_sha256=request.snapshot.archive_sha256,expected_checkpoint_sha256=request.snapshot.checkpoint_sha256,
         expected_category_vocabulary_sha256=category_binding(v),
         expected_label_vocabulary_sha256=protocol['label_vocabulary_sha256'],compute_dtype=compute_dtype,learner_seconds=60.,
-        deterministic=protocol['deterministic'],enable_v5=True)
+        deterministic=protocol['deterministic'],enable_v5=True,
+        allow_maybe_trapped_switches=allow_maybe_trapped_switches)
     if run._sha(factory.config.metadata())!=protocol['model_sha256']:raise ValueError('exact frozen evaluation model configuration differs')
     return factory
 

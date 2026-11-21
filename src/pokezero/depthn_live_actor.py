@@ -71,7 +71,8 @@ SERVER_CAUSES=('constructor_refused','depthn_refused','expired_in_queue','server
 # The certified bf16 champion archive (gpu_engine/declared_bounds/champion-9375-bf16-*.json).
 CHAMPION_ARCHIVE_SHA256='e450515351bce1497ab50a712955fe17b761bbb5f424b23ec299e96cda5b165c'
 OWN_RECHARGE='OWN_RECHARGE_UNREPRESENTED'
-CAUSES=SERVER_CAUSES+('timeout','connection_error','illegal_action','bad_q',OWN_RECHARGE,'UNREPRESENTED_EFFECT')
+TRAPPED_SWITCH='trapped_switch'
+CAUSES=SERVER_CAUSES+('timeout','connection_error','illegal_action','bad_q',OWN_RECHARGE,'UNREPRESENTED_EFFECT',TRAPPED_SWITCH)
 SOURCES=('search','greedy_fallback','single_legal','raw_arm')
 REQUEST_KINDS=('move','switch','forced')
 Q_BOUND=1.+1e-9
@@ -259,6 +260,23 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None,archive_sha
         searcher=None if client is None else ThreadPoolExecutor(1,thread_name_prefix='depthn-search')
         class LivePolicy(RawPolicy):
             def claim(self,c):fallback.claim(c);super().claim(c)
+
+            def reselect(self, original, observation, *, rng):
+                row = pending['choice_row']
+                decision = fallback.reselect(original, observation, rng=rng)
+                row['attempted_action_index'] = row['played_action_index']
+                row['played_action_index'] = decision.action_index
+                if client is not None:
+                    row.update(source='greedy_fallback', cause=TRAPPED_SWITCH, search_differs=None)
+                return replace(decision, metadata={**dict(decision.metadata), 'depthn_live': dict(
+                    arm=arm, source=row['source'], cause=row['cause'],
+                    request_id=None if row['search'] is None else row['search']['request_id'])})
+
+            def confirm_choice(self, choice):
+                row = pending.pop('choice_row', None)
+                if row is not None:
+                    emit(encoded(row))
+
             def close(self):
                 try:fallback.close()
                 finally:
@@ -316,10 +334,16 @@ def factory(config,*,raw_factory,client,telemetry_path,arm,cell=None,archive_sha
                 row.update(search=response,played_action_index=decision.action_index,source=source,cause=cause,search_differs=None,
                     recharge_guard=None,guard_causes=[],archive_sha256=archive_sha256,archive_source='pinned')
                 blob=encoded(row)
-            emit(blob)
+            if raw_factory.allow_maybe_trapped_switches:
+                if 'choice_row' in pending:
+                    raise ValueError('previous DepthN choice requires acknowledgement')
+                pending['choice_row'] = row
+            else:
+                emit(blob)
             return decision
         return LivePolicy(contract,select,fallback.reset)
-    value=OwningActorFactory('jax-owning',raw_factory.contract,backend,policy)
+    value=OwningActorFactory('jax-owning',raw_factory.contract,backend,policy,
+                             allow_maybe_trapped_switches=raw_factory.allow_maybe_trapped_switches)
     from .owning_worker_runtime import register_factory
     # The champion's raw factory remains the owner of the shared compiled B2 functions.
     register_factory(value,lambda:{})

@@ -46,7 +46,8 @@ function validTape(c){
     &&(hasPhazing(c)?row(c.phazing,[60,60]):c.phazing===undefined)
     &&(hasEntryTies(c)?(row(c.entry_ties,[2,2])&&typeof c.resuming==='boolean'):
       c.entry_ties===undefined&&c.resuming===undefined)
-    &&(c.shed_skin===undefined||row(c.shed_skin,[100,100]));
+    &&(c.shed_skin===undefined||row(c.shed_skin,[100,100]))
+    &&(c.protect_stall_order===undefined||c.protect_stall_order===0||c.protect_stall_order===1);
 }
 function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',options={}) {
   const strictNoRng=options.strictNoRng===true;
@@ -71,8 +72,8 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
       return result;
     };
   }
-  function take(c,role,side,value){
-    const key=role+':'+side;if(used.has(key))return unknown('REPEATED_ROLE',key);
+  function take(c,role,side,value,key=role+':'+side){
+    if(used.has(key))return unknown('REPEATED_ROLE',key);
     used.add(key);audit({kind:'COUPLED',nonce:c.nonce,role,side,raw:value});return value;
   }
   function effectDraw(c,role,side,column){
@@ -420,6 +421,16 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
         const first=take(c,'move_tie',0,c.draws[0][0]);
         group.sort((a,b)=>(a.pokemon.side.n===first?-1:1));items.splice(start,2,...group);return;
       }
+      const focusCallback=gen3Dex?.moves.get('focuspunch').beforeTurnCallback;
+      if(singles(battle)&&hasEntryTies(c)&&!c.resuming&&list===battle.queue.list&&group.length===2
+        &&group.every(x=>x.choice==='beforeTurnMove'&&x.order===5&&x.move?.id==='focuspunch'
+          &&focusCallback&&x.move.beforeTurnCallback===focusCallback&&active(battle,x.pokemon)&&x.pokemon.hp>0
+          &&list.some(a=>a.choice==='move'&&a.pokemon===x.pokemon&&a.move?.id==='focuspunch'))
+        &&group[0].pokemon.side!==group[1].pokemon.side&&Number.isFinite(group[0].speed)&&group[0].speed===group[1].speed){
+        // Both choices are moves, so the ordinary switch-order coordinate is free.
+        const first=take(c,'before_turn_move_tie',0,c.draws[0][11],'switch_tie:0');
+        group.sort((a,b)=>a.pokemon.side.n===first?-1:1);items.splice(start,2,...group);return;
+      }
       if(singles(battle)&&group.length===2&&['switch','instaswitch'].includes(group[0].choice)
         &&group.every(x=>x.choice===group[0].choice&&active(battle,x.pokemon))
         &&group[0].pokemon.side!==group[1].pokemon.side){
@@ -442,6 +453,12 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
       }
       if(singles(battle)&&fieldEventId==='Residual'&&group.length===2
         &&group.every(h=>active(battle,h.effectHolder))&&group[0].effectHolder.side!==group[1].effectHolder.side){
+        if(group.every(h=>h.effect===gen3Dex?.conditions.get('focuspunch')&&!h.callback&&!h.effect.onEnd
+          &&h.state?.duration===1&&!h.state.linkedPokemon&&h.effectHolder.volatiles.focuspunch===h.state
+          &&!h.effectHolder.fainted&&h.end===h.effectHolder.removeVolatile)){
+          // Each callback-free expiry removes only its own Focus Punch flag.
+          audit({kind:'INERT_RESIDUAL_TIE',nonce:c.nonce,effects:['focuspunch','focuspunch']});return;
+        }
         if(group.every(h=>h.effect?.id==='truant'&&h.order===27&&originalCallback(h,'Residual'))){
           audit({kind:'INERT_TRUANT_TIE',nonce:c.nonce});return;
         }
@@ -453,6 +470,22 @@ function install(Battle,PRNG,load,audit,initializing=()=>null,pokemonPath='',opt
         if(row&&group.every(h=>category(h)?.[0]===row[0]&&h.order===10&&h.subOrder===row[3]&&originalCallback(h,'Residual'))){
           const [role,side,column]=row,first=take(c,role,side,c.draws[side][column]);
           group.sort((a,b)=>a.effectHolder.side.n===first?-1:1);items.splice(start,2,...group);return;
+        }
+      }
+      // The panel replays both orders from the same request and checks the
+      // next boundary. Only the witnessed expiry group is eligible.
+      if(c.protect_stall_order!==undefined&&singles(battle)&&fieldEventId==='Residual'
+        &&group.length===3&&group.map(h=>h.effect?.id).sort().join(',')==='focuspunch,protect,stall'){
+        const protect=group.find(h=>h.effect.id==='protect'),stall=group.find(h=>h.effect.id==='stall');
+        const focus=group.find(h=>h.effect.id==='focuspunch');
+        if(protect.effectHolder===stall.effectHolder&&focus.effectHolder!==protect.effectHolder
+          &&group.every(h=>active(battle,h.effectHolder)&&!h.effectHolder.fainted&&!h.callback
+            &&h.end===h.effectHolder.removeVolatile&&h.effect===gen3Dex?.conditions.get(h.effect.id)
+            &&!h.effect.onEnd&&h.state===h.effectHolder.volatiles[h.effect.id]
+            &&Number.isInteger(h.state.duration)&&h.state.duration>0)){
+          if(c.protect_stall_order===1){group.reverse();items.splice(start,end-start,...group);}
+          audit({kind:'PROTECT_STALL_ORDER',nonce:c.nonce,order:c.protect_stall_order,
+            effects:group.map(h=>h.effect.id)});return;
         }
       }
       // Same-holder residual countdowns (no callback, no onEnd: stall+protect, ...) commute;
