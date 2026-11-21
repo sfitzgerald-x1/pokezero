@@ -461,25 +461,24 @@ class TheCitationsAreResolvedOnEveryRunTests(unittest.TestCase):
                 self.assertEqual(
                     rebuilt[name], document["verdicts"][name],
                     f"{name} no longer re-derives from source. Either a citation has "
-                    "moved -- re-run scripts/c154_unreachable_readjudication.py --write "
-                    "and READ THE DIFF, because a line that moved may have moved into "
-                    "different code -- or the artifact was hand-edited.",
+                    "changed -- re-run scripts/refresh_citation_artifacts.py --write "
+                    "and review the cited code -- or the artifact was hand-edited.",
                 )
 
     def test_a_perturbed_citation_is_caught(self) -> None:
-        """The control for the pin above: prove it can see a wrong line number."""
+        """The control for the pin above: prove it can see a wrong digest."""
 
         document = _document()
         rebuilt = c154.build_verdicts(document["pool"])
         tampered = dict(document["verdicts"])
         record = dict(tampered["R9"])
         record["demonstration"] = re.sub(
-            r":(\d+)", lambda m: f":{int(m.group(1)) + 1}", record["demonstration"], count=1
+            r"@([0-9a-f]{12})", lambda m: f"@{(int(m[1], 16) ^ 1):012x}", record["demonstration"], count=1
         )
         tampered["R9"] = record
         self.assertNotEqual(
             rebuilt["R9"], tampered["R9"],
-            "a demonstration with a bumped line number compared EQUAL to the re-derived "
+            "a demonstration with an altered digest compared EQUAL to the re-derived "
             "one, so the citation pin above is asserting nothing",
         )
 
@@ -940,7 +939,7 @@ class TheDerivedClaimsAreDerivedTests(unittest.TestCase):
                 f"{needle!r} is no longer a unique call site in {c154.EV}; an ambiguous "
                 "anchor is a wrong citation waiting to happen",
             )
-            expected_edges.append(hits[0])
+            expected_edges.append(c154._citation(c154.EV, hits[0]))
         self.assertEqual(
             rederived["edges_out_of_the_chokepoint"], sorted(expected_edges),
             "the identity of the ways into the subgraph from `render_move_phase` changed, "

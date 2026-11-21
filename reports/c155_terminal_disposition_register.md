@@ -997,6 +997,7 @@ comparison, not a count, which is why it is the one worth keeping.
 ---
 
 ## Appendix A — the pinned facts
+<!-- Citation generation commit: 2df6dcafad5f1e90b71ee268a881daad274a2c13 -->
 
 Every row is re-derived on each run of the pin, and the key set is exact in both directions: a key
 added to the derivation and not to this table is red, and so is the reverse.
@@ -1037,9 +1038,9 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
-| `t2.hp_ceiling_site_lines` | 370, 510 |
+| `t2.hp_ceiling_site_citations` | third_party/poke-engine-gen3-status-aware-residual-threshold.patch::pending_hp_reading_move["+ if let Some(residual_bands) = residual_disjoint_bands(\n+ ko_max_crit,\n+ ko_min_crit,\n+ residual_thresholds.as_slice(),\n+ defender_active.hp,\n+ num_crit_kill_rolls,\n+ )"]@ea20864020df, third_party/poke-engine-gen3-status-aware-residual-threshold.patch::pending_hp_reading_move["+ let residual_bands = residual_disjoint_bands(\n+ residual_max,\n+ residual_min,\n+ residual_thresholds.as_slice(),\n+ defender_active.hp,\n+ num_kill_rolls,\n+ );"]@23019beb7ac9 |
 | `t2.hp_ceiling_sites` | 2 |
-| `t2.i16max_ceiling_site_lines` | 435, 563 |
+| `t2.i16max_ceiling_site_citations` | third_party/poke-engine-gen3-status-aware-residual-threshold.patch::pending_hp_reading_move["+ if let Some(residual_bands) = residual_disjoint_bands(\n+ max_crit_damage,\n+ min_crit_roll,\n+ residual_thresholds.as_slice(),\n+ i16::MAX,\n+ 0,\n+ ) {"]@6a9c9dbdcdeb, third_party/poke-engine-gen3-status-aware-residual-threshold.patch::pending_hp_reading_move["+ if let Some(residual_bands) = residual_disjoint_bands(\n+ max_damage_dealt,\n+ min_damage_dealt,\n+ residual_thresholds.as_slice(),\n+ i16::MAX,\n+ 0,\n+ )"]@f67cc9c0bcfb |
 | `t2.i16max_ceiling_sites` | 2 |
 | `t2.residual_disjoint_bands_call_sites` | 4 |
 | `t2.split_hunks` | 2 |
@@ -1051,12 +1052,12 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t3.speed_ties_order_le_10` | 20 |
 | `t3.speed_ties_perish` | 4 |
 | `t3.speed_ties_with_a_leftovers_winner` | 24 |
-| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:6674 |
+| `t3.tie_refusal_citation` | rust/pokezero-search/src/events.rs::leftovers_slot_truncated["_ => NO_TRUNCATION,"]@85763f8e9bd2 |
 | `t4.boundary` | 1000513/121 |
 | `t4.branch_miss_pct` | 100.00 |
 | `t4.engine_component` | itemleftovers |
 | `t4.heal_mismatch_rows_in_the_wide_census` | 2 |
-| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6746 |
+| `t4.leftovers_truncated_consumer_citation` | rust/pokezero-search/src/events.rs::ResidualPlan.build["if active.item == Items::LEFTOVERS && !leftovers_truncated[i] {"]@4f9643b3e98e |
 | `t4.leftovers_truncated_consumers` | 1 |
 | `t4.leftovers_truncated_references` | 2 |
 | `t4.observed_component` | heal |
@@ -1074,7 +1075,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t6.reasons_incomplete` | 9 |
 | `t6.reasons_sound` | 13 |
 | `t6.rows_foreclosed_over_section_4_population_only` | R1, R23, R24 |
-| `t6.section_4_population_anchor` | reports/c138_known_gaps_ledger.md:609 |
+| `t6.section_4_population_anchor` | reports/c138_known_gaps_ledger.md::module["and gen3 Showdown, or a real inexpressibility, that **cannot be reached in gen3 randbats**."]@f94098233f85 |
 | `t6.verdicts_unreachable` | 26 |
 | `t6.verdicts_withdrawn` | 1 |
 | `t6.workflow_steps_checking_out_showdown` | 1 |

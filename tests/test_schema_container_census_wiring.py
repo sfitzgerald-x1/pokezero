@@ -1540,7 +1540,7 @@ class TheCensusStillAbortsOnWhatItClaimsToCatchTests(unittest.TestCase):
 
         root = self._tree(
             {"one.py": 'def f(x):\n    return x in {"v3", "v4"} or x in {"v3", "v4"}\n'},
-            "PARTIAL   src/one.py  v3,v4  <inline:2>\n",
+            "PARTIAL   src/one.py  v3,v4  <inline:f>\n",
             {"src/one.py": {"PARTIAL": 1}},
         )
         result = self._run(root)
@@ -1548,12 +1548,12 @@ class TheCensusStillAbortsOnWhatItClaimsToCatchTests(unittest.TestCase):
         self.assertIn("collapsed", result.stdout)
 
     def test_the_same_containers_on_separate_lines_are_green(self) -> None:
-        """Isolates the collapse abort: it must key on ONE LINE, not on repeated members."""
+        """Distinct assignment owners remain distinct when their containers have the same members."""
 
         root = self._tree(
             {"one.py": 'def f(x):\n    a = x in {"v3", "v4"}\n    b = x in {"v3", "v4"}\n'
                        '    return a or b\n'},
-            "PARTIAL   src/one.py  v3,v4  <inline:2>\nPARTIAL   src/one.py  v3,v4  <inline:3>\n",
+            "PARTIAL   src/one.py  v3,v4  <inline:f/a>\nPARTIAL   src/one.py  v3,v4  <inline:f/b>\n",
             {"src/one.py": {"PARTIAL": 2}},
         )
         result = self._run(root)

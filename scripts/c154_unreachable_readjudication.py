@@ -174,6 +174,8 @@ from pokezero.local_showdown import default_showdown_root  # noqa: E402
 from c153_wide_negative_census import (  # noqa: E402
     _DENOMINATOR_BY_FUNCTION,
     _anchor,
+    _citation,
+    _next_statement,
     _anchor_after,
     _raise_line,
     emission_sites,
@@ -217,7 +219,7 @@ def counter_emission(pattern: str) -> dict[str, Any]:
         "sites": [
             {
                 "function": s["function"],
-                "line": s["line"],
+                "citation": _citation(ETD, s["line"]),
                 "per_game": s["ends_the_game"],
                 "loop_depth": len(s["loops"]),
             }
@@ -609,8 +611,8 @@ def rust_call_graph(relative: str, target: str, root: str) -> dict[str, Any]:
             if re.match(r"\s*(?:pub )?fn " + re.escape(name) + r"\s*\(", line):
                 continue
             if pattern.search(line):
-                out.append({"line": n, "in": enclosing(n)})
-        return out
+                out.append({"citation": _citation(relative, n), "in": enclosing(n)})
+        return sorted(out, key=lambda row: row["citation"])
 
     edges: dict[str, list[dict[str, Any]]] = {}
     frontier, seen = [target], {target}
@@ -636,7 +638,7 @@ def rust_call_graph(relative: str, target: str, root: str) -> dict[str, Any]:
     # `render_move_phase`'s own tail recursion at :2058, which is not a way in -- a first
     # version reported three edges and the sentence said two.
     through_root = sorted(
-        site["line"]
+        site["citation"]
         for callee, found in edges.items()
         for site in found
         if site["in"] == root and callee != root
@@ -830,9 +832,9 @@ def _patch_match_arm(name: str, needle: str) -> tuple[str, ...]:
 
 
 def _patch(name: str, needle: str) -> str:
-    """`<patch>:<line>` for `needle` in a committed poke-engine patch."""
+    """Stable identity and digest for a needle in a committed patch."""
 
-    return f"{PATCHES}/{name}:{_anchor(f'{PATCHES}/{name}', needle)}"
+    return _citation(f'{PATCHES}/{name}', _anchor(f'{PATCHES}/{name}', needle))
 
 
 def _weather_id_keys() -> list[str]:
@@ -956,7 +958,10 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
     item_vocab = _anchor(rv, "GEN3_RANDBAT_ITEMS = (")
     sleeptalk_emit = _anchor(EV, "&ambiguous_unrenderable_slug_with_protect(")
     sleeptalk_guard = _anchor(EV, "if !sleeptalk_refusal_is_unsafe_with_protect(")
-    ooze_plan_guard = _anchor(EV, "drains_opponent[i] = opponent")
+    ooze_plan_guard = _anchor_after(
+        EV, "&& opponent.get_active_immutable().ability != Abilities::LIQUIDOOZE",
+        _anchor(EV, "drains_opponent[i] = opponent"),
+    )
     ooze_pin = _anchor(EV, "fn liquid_ooze_on_the_seeder_means_a_heal_here_is_not_the_drain() {")
     move_phase_ooze = _anchor(EV, "[from] ability: Liquid Ooze|[of] {defender_ident}")
     weather_none_return = _anchor(EW, 'return "none", -1')
@@ -1021,14 +1026,14 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
         "Future Sight / Doom Desire -- residual order 11 and the `future_sight_pending` refusal",
         "UNREACHABLE_TRACED",
         "INCOMPLETE",
-        f"`_reject_unsupported_globals` raises at `{EW}:{reject_globals}` when "
+        f"`_reject_unsupported_globals` raises at `{_citation(EW, reject_globals)}` when "
         "`payload['futureSight']` has any nonzero value. THE PAYLOAD IS NOT THE "
         "DIFFERENTIAL'S: `world_battle_spec` builds its own at "
-        f"`{EW}:{world_payload}` and reaches the guard at `:{reject_call}`, and "
+        f"`{_citation(EW, world_payload)}` and reaches the guard at `{_citation(EW, reject_call)}`, and "
         f"`_public_materialization_payload` fills the key from `replay.future_sight` at "
-        f"`{LS}:{fs_payload}`. That mapping has exactly one writer, "
-        f"`_update_future_sight` at `src/pokezero/showdown.py:{fs_write}`, gated at "
-        f"`:{fs_gate}` on the protocol effect id being in `_FUTURE_MOVES` = "
+        f"`{_citation(LS, fs_payload)}`. That mapping has exactly one writer, "
+        f"`_update_future_sight` at `{_citation('src/pokezero/showdown.py', fs_write)}`, gated at "
+        f"`{_citation('src/pokezero/showdown.py', fs_gate)}` on the protocol effect id being in `_FUTURE_MOVES` = "
         "`{futuresight, doomdesire}`. Both are 0 of "
         f"{pool['species']} species, so the mapping is EMPTY for every gen3 randbats "
         "battle and an empty dict makes `any(...)` false -- the guard cannot fire FOR ANY "
@@ -1039,16 +1044,16 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
         correction=(
             "⚠ Two things the row does not say, and the second is the one that decides "
             "the verdict. (1) The payload ALWAYS CARRIES the key -- "
-            f"`{LS}:{fs_payload}` is unconditional -- so the closure is 'the mapping is "
+            f"`{_citation(LS, fs_payload)}` is unconditional -- so the closure is 'the mapping is "
             "always EMPTY', never 'the key is absent'. That is the exact distinction "
             "C153 drew for `deferred_opponent_action` and did not carry over to this "
             "row. (2) **The repo ships a Custom Game scenario that casts Future Sight** "
-            f"(`{gc}:{fs_scenario}`, an Alakazam with the move and a scripted preference "
+            f"(`{_citation(gc, fs_scenario)}`, an Alakazam with the move and a scripted preference "
             "for it), so the raise is constructible from committed code. What keeps it "
             f"unreached is that the spec sits in `interaction_registry_specs()` "
-            f"(`:{registry_fn}`) and not `scenario_specs()` (`:{corpus_fn}`), and every "
+            f"(`{_citation(gc, registry_fn)}`) and not `scenario_specs()` (`{_citation(gc, corpus_fn)}`), and every "
             f"world-building harness -- including `run_scenario_fallback_sweep` "
-            f"(`:{fallback_fn}`) -- defaults to the latter. That is a ONE-KEYWORD-ARGUMENT "
+            f"(`{_citation(gc, fallback_fn)}`) -- defaults to the latter. That is a ONE-KEYWORD-ARGUMENT "
             "closure: passing `specs=interaction_registry_specs()` fires the raise "
             "immediately. 'Dead code in this format' is right; 'retired' would not be."
         ),
@@ -1071,7 +1076,7 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
         f"{pool['dex_abilities']['snowwarning']['isNonstandard']!r}` -- it does not exist "
         "in gen3 at all. NO gen3 item sets weather. Two independent routes, both closed, "
         "and the downstream counter is closed with them: "
-        f"`world_prestate_mismatch:` is emitted at `{ETD}:{prestate['sites'][-1]['line']}` "
+        f"`world_prestate_mismatch:` is emitted at `{prestate['sites'][-1]['citation']}` "
         "with the suffix taken from the mismatch text, so a `weather_HAIL` suffix requires "
         "a HAIL prestate that no route can produce.",
         ("pool_move", "dex", "source_trace"),
@@ -1147,7 +1152,7 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             "different mechanism the row does not cite. ⚠ Stated precisely, because a first "
             f"revision of this correction wrote \"`_weather_fields` returns `-1` ONLY under "
             "`weatherFromAbility`\" and that is false -- it also returns `(\"none\", -1)` at "
-            f"`{EW}:{weather_none_return}` for absent or `none` weather, which is the "
+            f"`{_citation(EW, weather_none_return)}` for absent or `none` weather, which is the "
             "commonest case in the corpus. The accurate statement is narrower: `-1` for a "
             "NAMED weather requires `weatherFromAbility`, and a prefix that saw only "
             "`[upkeep]` lines fails closed at `weather_turns_unknown` rather than "
@@ -1216,12 +1221,12 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
         "`nature_not_neutral`",
         "UNREACHABLE_TRACED",
         "INCOMPLETE",
-        f"`_build_pokemon_spec` raises at `{EW}:{nature_raise}` when "
-        f"`normalize_id(mon.nature)` (read at `:{nature_read}`) is outside "
-        f"`_NEUTRAL_NATURES` (`:{neutral_set}`). `mon` is a `FixturePokemon` and the "
+        f"`_build_pokemon_spec` raises at `{_citation(EW, nature_raise)}` when "
+        f"`normalize_id(mon.nature)` (read at `{_citation(EW, nature_read)}`) is outside "
+        f"`_NEUTRAL_NATURES` (`{_citation(EW, neutral_set)}`). `mon` is a `FixturePokemon` and the "
         "production path builds it in `unpack_pokemon` from field 6 of the PACKED TEAM "
-        f"STRING at `{EW}:{unpack}` -- the differential's own "
-        f"`{ETD}:{packed_source}` hands it `true_teams[slot]['packed']` from the bridge "
+        f"STRING at `{_citation(EW, unpack)}` -- the differential's own "
+        f"`{_citation(ETD, packed_source)}` hands it `true_teams[slot]['packed']` from the bridge "
         f"snapshot. Natures are unset on {gen['nature_unset']:,} of {gen['pokemon']:,} "
         "generated Pokemon, so field 6 is empty and `nature` is `\"\"`.",
         ("generation", "source_trace"),
@@ -1232,13 +1237,13 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             "field at all\" is true and measured, but on its own it does not close the "
             "refusal -- it would OPEN it, because an absent field makes `mon.nature` falsy "
             "and `nature` the empty string. What closes it is that `\"\"` is a MEMBER of "
-            f"`_NEUTRAL_NATURES` (`{EW}:{neutral_set}`). Without that membership the "
+            f"`_NEUTRAL_NATURES` (`{_citation(EW, neutral_set)}`). Without that membership the "
             "refusal would fire on every Pokemon in every battle. ⚠ Second, the row's "
             "instrument is the generator, and the generator is not the only producer that "
             f"reaches the guard. `_build_pokemon_spec` has a SECOND caller that never "
-            f"touches a packed team at all (`src/pokezero/engine_fidelity.py:{fidelity_caller}`), "
+            f"touches a packed team at all (`{_citation('src/pokezero/engine_fidelity.py', fidelity_caller)}`), "
             f"and `scenario_studio` parses `nature` out of scenario JSON with no "
-            f"vocabulary check and hands it to `FixturePokemon` at `{ss}:{scenario_nature}`. "
+            f"vocabulary check and hands it to `FixturePokemon` at `{_citation(ss, scenario_nature)}`. "
             "Neither can fire today -- the fidelity fixtures pass no `nature=`, and the "
             "scenario-studio service never builds an engine world -- but for reasons the "
             "row does not state, so the pool measurement alone does not carry it."
@@ -1252,12 +1257,12 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
         "`weather_unsupported`",
         "UNREACHABLE_TRACED",
         "INCOMPLETE",
-        f"`_weather_fields` raises at `{EW}:{weather_raise}` when "
-        f"`_WEATHER_IDS.get(weather_id)` (`:{weather_lookup}`) misses. `weather_id` is "
+        f"`_weather_fields` raises at `{_citation(EW, weather_raise)}` when "
+        f"`_WEATHER_IDS.get(weather_id)` (`{_citation(EW, weather_lookup)}`) misses. `weather_id` is "
         f"`normalize_id(str(payload['weather']))`; the payload key is filled from "
-        f"`replay.weather` at `{LS}:{weather_payload}`, whose only writer is "
-        f"`_update_weather` at `src/pokezero/showdown.py:{weather_parse}`, which returns "
-        f"`_normalize_identifier(parts[2])` (`:{weather_norm}`, "
+        f"`replay.weather` at `{_citation(LS, weather_payload)}`, whose only writer is "
+        f"`_update_weather` at `{_citation('src/pokezero/showdown.py', weather_parse)}`, which returns "
+        f"`_normalize_identifier(parts[2])` (`{_citation('src/pokezero/showdown.py', weather_norm)}`, "
         "`re.sub(r'[^a-z0-9]+', '', lower())`) of the second field of a `|-weather|` "
         "line. Showdown emits the CONDITION NAME there -- `RainDance`, `SunnyDay`, "
         "`Sandstorm`, `Hail`, or `none` -- so the four reachable ids are exactly "
@@ -1273,11 +1278,11 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             "⚠ **The stated reason names the wrong side of the mapping, and it survives "
             "only by coincidence.** \"All four gen3 weathers are in `_WEATHER_IDS` "
             "(`rain`, `sun`, `sand`, `hail`)\" reads as a claim about the dict\'s VALUES; "
-            f"the lookup at `{EW}:{weather_lookup}` uses its KEYS. The four strings named "
+            f"the lookup at `{_citation(EW, weather_lookup)}` uses its KEYS. The four strings named "
             "happen to be keys as well -- they are the engine-side ALIASES -- so the "
             "membership sentence is technically true. It is still not the demonstration, "
             "because **three of the four strings it names are never what the lookup "
-            f"receives.** The seven keys (`{EW}:{weather_map}`) are `raindance, rain, "
+            f"receives.** The seven keys (`{_citation(EW, weather_map)}`) are `raindance, rain, "
             "sunnyday, sun, sandstorm, sand, hail`, and the protocol only ever produces "
             "the condition-name forms, which normalise to `raindance`, `sunnyday`, "
             "`sandstorm`, `hail`. The closure rests on the three ALIAS keys the sentence "
@@ -1285,9 +1290,9 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             "rain, sun and sand battle. ⚠ Second, \"all four gen3 weathers\" is broader "
             "than the pool: hail is unreachable (R2), so only three can ever occur, and "
             f"the one lane with no Python-side vocabulary check -- the scenario seed at "
-            f"`{LS}:{_anchor(LS, 'parser.weather = weather')}` -- is closed by an "
-            f"allow-list, `SCENARIO_WEATHER_IDS` at `{ss}:{scenario_weather_ids}`, enforced "
-            f"at `:{scenario_weather_check}`, whose five members are `\"\"` plus the four "
+            f"`{_citation(LS, _anchor(LS, 'parser.weather = weather'))}` -- is closed by an "
+            f"allow-list, `SCENARIO_WEATHER_IDS` at `{_citation(ss, scenario_weather_ids)}`, enforced "
+            f"at `{_citation(ss, scenario_weather_check)}`, whose five members are `\"\"` plus the four "
             "protocol ids. ⚠ A first revision of this correction credited that constant to "
             "\"the bridge\", which is the wrong module -- it belongs to `scenario_studio`, "
             "which imports no `engine_world` at all. A cite-which-module slip inside the "
@@ -1303,11 +1308,11 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
         "Liquid Ooze mislabelled by the residual-heal renderer",
         "UNREACHABLE_TRACED",
         "FALSE",
-        f"`render_residual_instruction` (`{EV}:{render_fn}`) intercepts a negative "
-        f"`Instruction::Heal` at `:{ooze_intercept}` and renders it as "
+        f"`render_residual_instruction` (`{_citation(EV, render_fn)}`) intercepts a negative "
+        f"`Instruction::Heal` at `{_citation(EV, ooze_intercept)}` and renders it as "
         "`|-damage|…|[from] ability: Liquid Ooze` in the THEN arm; `plan.take(side, true)` "
-        f"and the `residual_heal_cause` fallback (`:{heal_fallback}`) are the ELSE arm, "
-        f"and `residual_heal_cause` (`:{cause_fn}`) has exactly ONE call site in the "
+        f"and the `residual_heal_cause` fallback (`{_citation(EV, heal_fallback)}`) are the ELSE arm, "
+        f"and `residual_heal_cause` (`{_citation(EV, cause_fn)}`) has exactly ONE call site in the "
         "crate. So the drain-reversal damage can never be labelled by the fallback, which "
         "is what the row's headline gap needed. Liquid Ooze itself IS reachable -- "
         f"{abilities['Liquid Ooze']} carry it, `leechseed` is {moves['leechseed']} of "
@@ -1324,16 +1329,16 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             "first.** \"The Liquid Ooze guard inside `residual_heal_cause` is therefore "
             "dead code\" does not follow from the negative-heal interception, because the "
             f"guard is not in a negative-heal branch. It is the conjunct "
-            f"`ability != Abilities::LIQUIDOOZE` at `{EV}:{ooze_guard}`, inside the "
+            f"`ability != Abilities::LIQUIDOOZE` at `{_citation(EV, ooze_guard)}`, inside the "
             "LEECHSEED arm, which only runs on a POSITIVE heal -- exactly the heals the "
             "interception lets through. `residual_heal_cause` takes no heal amount at all "
             "(`(state, side, next_ins)`), so the sign of the heal is not a fact it can "
             "see. It is not dead in the literal sense either: the crate PINS it, at "
-            f"`{EV}:{ooze_pin}`, with a positive heal of 6 and no Leftovers, and that "
+            f"`{_citation(EV, ooze_pin)}`, with a positive heal of 6 and no Leftovers, and that "
             "pin's own note records that it exists because deleting the guard once left "
             "the suite green. What actually forecloses the conjunct IN THIS FORMAT is the "
             f"two EARLIER returns plus the item universe: a resolving Wish returns at "
-            f"`:{cause_wish}` and a Leftovers holder at `:{cause_leftovers}`, so the "
+            f"`{_citation(EV, cause_wish)}` and a Leftovers holder at `{_citation(EV, cause_leftovers)}`, so the "
             "conjunct is only consulted for a positive residual heal on a side holding "
             "NEITHER -- and the engine's residual heal producers are Leftovers, Sitrus "
             "(outside the 13-item universe, R6), Wish (already returned) and the Leech "
@@ -1341,10 +1346,10 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             "enumeration, not the interception, is the demonstration. ⚠ Two further scope "
             "errors in the same cell. The row says \"what makes this row UNREACHABLE is "
             "the renderer interception ALONE\": there are THREE ooze-aware sites, not "
-            f"one. The residual plan's own conjunct at `{EV}:{ooze_plan_guard}` is "
+            f"one. The residual plan's own conjunct at `{_citation(EV, ooze_plan_guard)}` is "
             "separately pinned in both directions and is live. And the MOVE-PHASE ooze "
             f"path is a different renderer with its own interception at "
-            f"`{EV}:{move_phase_ooze}`, which is genuinely REACHABLE -- `gigadrain` on "
+            f"`{_citation(EV, move_phase_ooze)}`, which is genuinely REACHABLE -- `gigadrain` on "
             f"{moves['gigadrain']} against Liquid Ooze on {abilities['Liquid Ooze']} -- so "
             "the mechanic half of this row survives only because that renderer handles it "
             "too, which the row does not say. `reports/c131` §5 carries the same false "
@@ -1358,8 +1363,8 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
         "Shell Bell, and the `heal_drain_or_shellbell` ambiguity",
         "UNREACHABLE_TRACED",
         "INCOMPLETE",
-        f"`heal_subcase` (`{EV}:{subcase_fn}`) routes a positive ATTACKER-side heal with "
-        f"foe damage in the same tail to `heal_drain_or_shellbell` at `:{subcase_bucket}`. "
+        f"`heal_subcase` (`{_citation(EV, subcase_fn)}`) routes a positive ATTACKER-side heal with "
+        f"foe damage in the same tail to `heal_drain_or_shellbell` at `{_citation(EV, subcase_bucket)}`. "
         "⚠ THE BUCKET HAS ONE PRODUCTION EMITTER AND THE ROW DOES NOT NAME IT. The "
         "caller graph is DERIVED, not asserted (see `heal_subcase_call_graph`): the crate "
         f"entry point `{pool['heal_subcase_call_graph']['live_entry_points']}` reaches "
@@ -1369,8 +1374,8 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
         f"`{HEAL_SUBCASE_ROOT}` has exactly "
         f"{len(pool['heal_subcase_call_graph']['edges_out_of_the_chokepoint'])} edges into "
         "the subgraph, both inside its Sleep Talk block -- the "
-        f"`sleeptalk_refusal_is_unsafe_with_protect` predicate at `{EV}:{sleeptalk_guard}` "
-        f"and the slug emit at `:{sleeptalk_emit}`. Only the second produces a KEY; the "
+        f"`sleeptalk_refusal_is_unsafe_with_protect` predicate at `{_citation(EV, sleeptalk_guard)}` "
+        f"and the slug emit at `{_citation(EV, sleeptalk_emit)}`. Only the second produces a KEY; the "
         "first is a boolean test whose result is discarded. So the tail is always a SLEEP "
         "TALK CALLEE'S tail, and the bucket needs `sleeptalk` and a drain move ON THE SAME "
         "SET. Measured per set, the instrument section 8 requires for a two-thing gap: "
@@ -1539,9 +1544,9 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
         "UNREACHABLE_TRACED",
         "SOUND",
         f"{absent('magiccoat', 'ingrain')}. Whole-pool absence, so side-independent. "
-        f"Both ARE in `TRACKED_VOLATILES` (`src/pokezero/showdown.py:{tracked_set}`) and "
-        f"neither is in `_SUPPORTED_VOLATILES` (`{EW}:{supported_set}`), so the refusal at "
-        f"`{EW}:{volatiles_raise}` genuinely IS keyed to them -- it simply has no "
+        f"Both ARE in `TRACKED_VOLATILES` (`{_citation('src/pokezero/showdown.py', tracked_set)}`) and "
+        f"neither is in `_SUPPORTED_VOLATILES` (`{_citation(EW, supported_set)}`), so the refusal at "
+        f"`{_citation(EW, volatiles_raise)}` genuinely IS keyed to them -- it simply has no "
         "producer. The `reflectable: true` flag Roar and Whirlwind carry upstream is inert "
         "for want of a Magic Coat user.",
         ("pool_move", "source_trace"),
@@ -1601,11 +1606,11 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
         f"{absent('reflect', 'lightscreen', 'safeguard', 'mist')}. No Pokemon in the pool "
         "can set a screen, and the construction capability the row flags is traced rather "
         f"than waved at: `_build_side_spec` maps side conditions through "
-        f"`_SIDE_CONDITION_IDS` (`{EW}:{side_cond_map}`), which DOES carry `reflect`, "
+        f"`_SIDE_CONDITION_IDS` (`{_citation(EW, side_cond_map)}`), which DOES carry `reflect`, "
         f"`lightscreen`, `safeguard` and `mist`, and refuses an unmapped one at "
-        f"`:{side_cond_raise}`. The values it maps come from "
+        f"`{_citation(EW, side_cond_raise)}`. The values it maps come from "
         f"`side_payload['sideConditions']`, filled from `replay.side_condition_counts` at "
-        f"`{LS}:{side_cond_payload}`, whose live writer is the `-sidestart` arm of the "
+        f"`{_citation(LS, side_cond_payload)}`, whose live writer is the `-sidestart` arm of the "
         f"protocol fold. A screen therefore needs a `|-sidestart|…|move: Reflect` line, "
         "which needs a pool Pokemon to use the move. `spikes` is the control: it is the "
         f"one mapped condition the pool CAN set ({moves['spikes']} species), so the map is "
@@ -1618,7 +1623,7 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             "assertion.** \"`engine_world` *can construct* screens as side conditions -- "
             "but no battle path reaches that state\" is the shape this pass exists to "
             "replace, and re-tracing it moves where the closure sits. It is NOT "
-            f"`side_condition_unsupported` (`{EW}:{side_cond_raise}`): that fires for a "
+            f"`side_condition_unsupported` (`{_citation(EW, side_cond_raise)}`): that fires for a "
             "condition OUTSIDE the map, and `reflect`, `lightscreen`, `safeguard` and "
             "`mist` are all INSIDE it, with turn counters derived rather than copied. If a "
             "screen ever appeared, engine_world would build it. The only thing that keeps "
@@ -1629,7 +1634,7 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             f"the user's own slots. `spikes` ({moves['spikes']} species) is the live "
             "control on the same map. ⚠ One capability the row does not mention and that "
             f"is not a battle path: the scenario harness injects arbitrary side conditions "
-            f"at `{LS}:{scenario_sidestart}`. No committed scenario under `scenarios/` "
+            f"at `{_citation(LS, scenario_sidestart)}`. No committed scenario under `scenarios/` "
             "sets one, so it is the same shape as the row's own parenthetical -- recorded "
             "rather than left to be found again."
         ),
@@ -1677,8 +1682,8 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
             "by adding `Choices::TACKLE` to the arm and watching the module stay green. "
             "The clause is withdrawn; the patch is not. (2) \"closes `_HIDDEN_INFORMATION_REQUEST_FLAGS`'s "
             "`maybeDisabled`/`maybeLocked`\" uses the wrong verb. That frozenset "
-            f"(`{EW}:{hidden_flags}`) is a TOLERATE-list: its members are filtered OUT of "
-            f"the refusal binding at `:{hidden_filter}`, so those two flags never caused a "
+            f"(`{_citation(EW, hidden_flags)}`) is a TOLERATE-list: its members are filtered OUT of "
+            f"the refusal binding at `{_citation(EW, hidden_filter)}`, so those two flags never caused a "
             "refusal to begin with. What unreachability protects is a SILENT one -- under "
             "Imprison the singles request reports the blocked moves as `disabled: false`, "
             "engine_world tolerates the flag, and search would plan a move Showdown "
@@ -1694,12 +1699,12 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
         "FALSE",
         f"{absent('focusenergy', 'mudsport', 'watersport', 'taunt', 'torment', 'disable', 'nightmare', 'foresight')}"
         f". The refusal IS keyed to them, traced: `_build_side_spec` reads the token list "
-        f"at `{EW}:{volatiles_read}`, subtracts `supported` at `:{volatiles_diff}` and "
-        f"raises at `:{volatiles_raise}`. The tokens that can appear are exactly "
-        f"`TRACKED_VOLATILES` (`src/pokezero/showdown.py:{tracked_set}`, enforced at "
-        f"`:{tracked_gate}`, carried into the payload at `{LS}:{volatiles_payload}`), all "
+        f"at `{_citation(EW, volatiles_read)}`, subtracts `supported` at `{_citation(EW, volatiles_diff)}` and "
+        f"raises at `{_citation(EW, volatiles_raise)}`. The tokens that can appear are exactly "
+        f"`TRACKED_VOLATILES` (`{_citation('src/pokezero/showdown.py', tracked_set)}`, enforced at "
+        f"`{_citation('src/pokezero/showdown.py', tracked_gate)}`, carried into the payload at `{_citation(LS, volatiles_payload)}`), all "
         "eight are members, and none is admitted by `_SUPPORTED_VOLATILES` "
-        f"(`{EW}:{supported_set}`) or by any contextual expansion -- so each WOULD raise "
+        f"(`{_citation(EW, supported_set)}`) or by any contextual expansion -- so each WOULD raise "
         "if it ever appeared.",
         ("pool_move", "dex", "generation", "source_trace"),
         {
@@ -1751,7 +1756,7 @@ def build_verdicts(pool: dict[str, Any]) -> dict[str, Any]:
          "producers": pool["volatile_producers_by_source"]["attract"]},
         correction=(
             "⚠ Two scope notes the row's phrasing invites a reader to get wrong. `attract` "
-            f"is a MEMBER of `_SUPPORTED_VOLATILES` (`{EW}:{supported_set}`), so the "
+            f"is a MEMBER of `_SUPPORTED_VOLATILES` (`{_citation(EW, supported_set)}`), so the "
             "volatile is expressed and searched, not refused -- unlike the eight in R23, "
             "which is the neighbouring row. And \"reachable only through Cute Charm\" is "
             "randbats-scoped: the scenario corpus produces it from the move itself "

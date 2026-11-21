@@ -104,38 +104,12 @@ EXPECTED_CLASS_COUNTS_BY_FILE = {
 
 
 def _assigned_names(tree: ast.AST) -> dict[int, str]:
-    """Map a container node's id() to the variable it is assigned to, where there is one.
+    """Direct assignment names; nested inline containers use their lexical owner.
 
-    The classification is keyed on the container's NAME as well as its members. Keying on members
-    alone let a NEW routing tuple whose member set duplicated an existing row be classified for free
-    and then checked by nothing -- which is drill defect #1 (an unregistered routing tuple) reopening
-    through the very file added to prevent it. A container with no assignment target (an inline set in
-    an `if x not in {...}`) gets "<inline:LINE>" -- see the caller at the `var =` line below, which
-    supplies the line number this function cannot see.
-
-    An earlier form of this docstring said such a container gets a bare "<inline>" and that "two
-    inline containers in the same file with the same members are genuinely the same classification
-    question". BOTH halves were false, and in the direction that invites a maintainer to delete the
-    line qualification: the bare key collided neural_cli.py's train tuple with its iterate tuple and
-    let a third container be classified for free, which is why the line was added. Two unnamed
-    containers with the same members in the same file are NOT the same question -- they are the
-    free-rider case this key exists to separate.
-
-    KNOWN GAP, since this docstring is the place a reader looks for the key's guarantees: distinctness
-    is still per (file, lineno, members, name), so two unnamed containers on the SAME physical line
-    with the SAME members KEY IDENTICALLY and one spec row covers both. That much is unchanged.
-
-    WHAT CHANGED is the consequence, and this paragraph used to overstate the damage in the reader's
-    favour: it said the collapse was "exit 0 while printing 20 containers / 20 rows on a tree holding
-    21". That was measured and true when written, and it is now FALSE -- `main()` compares the number
-    of matched AST nodes against the number of distinct entries and aborts 15 on the difference. The
-    census can no longer report a denominator it knows is short. It still cannot tell the two
-    containers APART, so the abort says "put them on separate lines" rather than classifying both.
-
-    A stable per-(file, members) ordinal -- `<inline#1>`, `<inline#2>` -- remains the candidate fix
-    for telling them apart, and it remains a PREDICTION, not a measured result: nobody has built it.
-    What IS measured is the negative that motivates it -- simply dropping the line qualification is
-    exit 0 for a newly added unregistered container, so line-insensitivity alone is not the answer.
+    Unnamed containers must never share a classification for free. The former
+    line keys distinguished them but drifted when unrelated code moved. Scoped
+    keys now include a containing assignment or call when one names the owner;
+    indistinguishable duplicates abort, even when placed on separate lines.
     """
     out: dict[int, str] = {}
     for node in ast.walk(tree):
@@ -158,17 +132,30 @@ def _assigned_names(tree: ast.AST) -> dict[int, str]:
     return out
 
 
-def containers() -> tuple[list[tuple[str, int, tuple[str, ...], str]], int]:
-    """(file, line, sorted members, variable name) for every literal container of schema names.
+def _inline_scope(node: ast.AST, parents: dict[int, ast.AST]) -> str:
+    """Stable lexical owner, with assignment/call identity when a function has several containers."""
+    scopes, owner = [], None
+    current = node
+    while id(current) in parents:
+        current = parents[id(current)]
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            scopes.append(current.name)
+        elif owner is None and isinstance(current, (ast.Assign, ast.AnnAssign)):
+            targets = current.targets if isinstance(current, ast.Assign) else [current.target]
+            owner = next((t.id for t in targets if isinstance(t, ast.Name)), None)
+        elif owner is None and isinstance(current, ast.Call):
+            owner = ast.unparse(current.func)
+            if current.args and isinstance(current.args[0], ast.Constant) and isinstance(current.args[0].value, str):
+                owner += '[' + current.args[0].value + ']'
+    scope = '.'.join(reversed(scopes)) or 'module'
+    return '<inline:' + scope + ('/' + owner if owner else '') + '>'
 
-    Returns the deduped entries AND the number of AST nodes that produced them. The two differ
-    only in the collapse case documented on `_assigned_names` -- two unnamed containers on the
-    SAME physical line with the SAME members key identically -- and the caller aborts on the
-    difference. Detecting the collapse is NOT the per-(file, members) ordinal that docstring
-    predicts; it does not tell the two apart, it refuses to report a denominator it knows is
-    short. That is the whole of the fix: the measured symptom was exit 0 while printing "20
-    containers / 20 rows" on a tree holding 21, and a count the tool cannot stand behind must
-    abort rather than be printed.
+
+def containers() -> tuple[list[tuple[str, int, tuple[str, ...], str]], int]:
+    """(file, current line, sorted members, stable name), plus matched AST node count.
+
+    Lines are presentation metadata. Duplicate classification identities abort
+    independently of line placement, preserving the anti-free-rider check.
     """
     found: set[tuple[str, int, tuple[str, ...], str]] = set()
     matched_nodes = 0
@@ -187,6 +174,7 @@ def containers() -> tuple[list[tuple[str, int, tuple[str, ...], str]], int]:
             except (SyntaxError, UnicodeDecodeError):
                 continue
             names = _assigned_names(tree)
+            parents = {id(child): parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
             for node in ast.walk(tree):
                 # Sets/lists/tuples by MEMBER, dicts by KEY. Scanning only the first three left the
                 # enumerator's own denominator incomplete, and it cost a full scored run to find out:
@@ -220,13 +208,7 @@ def containers() -> tuple[list[tuple[str, int, tuple[str, ...], str]], int]:
                 # >= 2 members, and EVERY member a schema name in ONE convention. A single name is an
                 # ordinary comparison, and a mixed container is not a schema table.
                 rel = str(path.relative_to(REPO))
-                # LINE-QUALIFIED when there is no assignment target. A bare "<inline>" collided two genuinely
-                # different argparse tuples in neural_cli.py (train at :467, iterate at :1952) into ONE
-                # classification row -- so a third was classified for free, and the injection, which runs
-                # once per row, inserted the synthetic schema TWICE into each. Also resolve through call
-                # wrappers: `frozenset({...})` / `tuple([...])` put the container inside a Call, so
-                # `_EXPORTABLE_TABLE_SCHEMAS` -- one of the nine historical misses -- was "<inline>" too.
-                var = names.get(id(node)) or f"<inline:{node.lineno}>"
+                var = names.get(id(node)) or _inline_scope(node, parents)
                 if len(vals) >= 2 and (vals <= SHORT or vals <= FULL):
                     found.add((rel, node.lineno, tuple(sorted(vals)), var))
                     matched_nodes += 1
@@ -237,15 +219,10 @@ def containers() -> tuple[list[tuple[str, int, tuple[str, ...], str]], int]:
 
 
 def classification() -> dict[tuple[str, tuple[str, ...], str], str]:
-    """Committed classification, keyed on (file, members, variable name).
+    """Committed classification keyed on (file, members, stable named/scoped owner).
 
-    The variable name is in the key on purpose; keying on (file, members) alone let a NEW routing
-    tuple whose member set duplicated an existing row be classified for free. For a container with
-    no assignment target that name is `<inline:LINE>`, so those rows -- and ONLY those -- are line
-    sensitive, which the spec file's header states as a deliberate trade: "a drifting line is a loud
-    reclassify, whereas a silent collision is a free pass." An earlier form of this docstring said
-    the key was "NOT on line, which drifts", which described neither the key nor the intent and
-    invited reading the resulting abort as a census bug rather than as the reclassify prompt it is.
+    A new owner requires a new row even if its members match an existing owner.
+    Unrelated source movement never changes that identity.
     """
     if not SPEC.is_file():
         raise SystemExit(f"census: no classification file at {SPEC}")
@@ -304,19 +281,11 @@ def main() -> int:
     print(f"classified in {SPEC.relative_to(REPO)}:                {len(spec)}")
     print()
 
-    # The denominator must be one the tool can stand behind. `matched_nodes` counts the AST nodes
-    # that matched; `found` is those nodes deduped by (file, line, members, name). A difference is
-    # the collapse case: two unnamed containers on the SAME physical line with the SAME members.
-    # Measured before this check existed: a file adding two such containers made the census print
-    # "20 containers / 20 rows" and exit 0 on a tree holding 21, one spec row covering both -- the
-    # free-rider shape the key was made finer to prevent, surviving at same-line granularity.
-    if matched_nodes != len(found):
-        print(f"ABORT: {matched_nodes} container node(s) collapsed into {len(found)} distinct "
-              "entr(ies). Two unnamed containers on the SAME line with the SAME members key "
-              "identically, so one spec row would cover both and the printed count is short. "
-              "Put them on separate lines so each gets its own <inline:LINE> key. An earlier form "
-              "of this message also offered 'or give at least one an assignment target', which is "
-              "not always possible -- a literal nested inside a list has nowhere to put one.")
+    # A scoped identity cannot silently classify two nodes, even on different lines.
+    keys = {(path, members, var) for path, _, members, var in found}
+    if matched_nodes != len(found) or len(keys) != len(found):
+        print(f"ABORT: {matched_nodes} container node(s) collapsed into {len(keys)} distinct identities. "
+              "Give each container a distinct lexical owner; moving lines cannot distinguish them.")
         return 15
 
     unclassified = []
