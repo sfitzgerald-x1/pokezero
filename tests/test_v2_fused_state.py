@@ -1,3 +1,5 @@
+from contextlib import redirect_stderr
+from io import StringIO
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -71,12 +73,20 @@ class FusedStateTests(unittest.TestCase):
                        '--lr-start', 'sqrt', '--lr-warmup-updates', '2', '--campaign-anneal',
                        '--cooldown-child', str(parent), '--cooldown-parent-sha256', 'b' * 64]
             identity = state._directory_identity
+            launchers = ((v2_fused.main, []), (v2_distributed.main, ['--ranks', '4', '--timeout-seconds', '60']))
             with patch.object(state, '_directory_identity', side_effect=lambda path: identity(parent if path == alias else path)):
-                for launch, launcher_options in (
-                    (v2_fused.main, []), (v2_distributed.main, ['--ranks', '4', '--timeout-seconds', '60']),
-                ):
+                for launch, launcher_options in launchers:
                     with self.assertRaisesRegex(ValueError, 'distinct, non-nested'):
                         launch([*launcher_options, *options])
+            mounts = {Path('/'): ('8:1', Path('/')), alias: ('8:1', parent / 'artifacts')}
+            with patch.object(state, '_mount_paths', return_value=mounts):
+                for launch, launcher_options in launchers:
+                    with self.assertRaisesRegex(ValueError, 'distinct, non-nested'):
+                        launch([*launcher_options, *options])
+            options[options.index('--cooldown-child')] = '--cooldown-ch'
+            options[options.index('--out') + 1] = str(parent)
+            with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                v2_distributed.main([*launchers[1][1], *options])
             self.assertFalse(out.exists())
             self.assertEqual(list(parent.iterdir()), [original])
             self.assertEqual(original.read_text(), 'untouched')

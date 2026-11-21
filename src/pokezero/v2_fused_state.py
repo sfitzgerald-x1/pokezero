@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 
 
 SCHEMA = 'pokezero.v2-fused-state.v1'
@@ -20,6 +21,31 @@ def _directory_identity(path):
     return info.st_dev, info.st_ino
 
 
+def _mount_paths():
+    """Map Linux mount points to superblock-relative roots, including bind mounts."""
+    try:
+        lines = Path('/proc/self/mountinfo').read_text().splitlines()
+    except FileNotFoundError:  # local development outside Linux
+        return {}
+
+    def decode(value):
+        return Path(re.sub(r'\\([0-7]{3})', lambda match: chr(int(match[1], 8)), value))
+
+    mounts = {}
+    for line in lines:
+        _, _, device, root, point, *_ = line.split()
+        mounts[decode(point)] = device, decode(root)
+    return mounts
+
+
+def _backing_path(path, mounts):
+    for candidate in (path, *path.parents):
+        if candidate in mounts:
+            device, root = mounts[candidate]
+            return device, root / path.relative_to(candidate)
+    return None
+
+
 def validate_output(out, parent):
     """Refuse a fork that writes to either physical tree of the parent."""
     if parent is None:
@@ -31,8 +57,13 @@ def validate_output(out, parent):
     if parent_id is None:
         raise ValueError('cooldown parent output does not exist')
     out_id = _directory_identity(out)
-    if (parent_id in (_directory_identity(path) for path in (out, *out.parents)) or out_id is not None
-            and out_id in (_directory_identity(path) for path in (parent, *parent.parents))):
+    same_tree = (parent_id in (_directory_identity(path) for path in (out, *out.parents)) or out_id is not None
+                 and out_id in (_directory_identity(path) for path in (parent, *parent.parents)))
+    mounts = _mount_paths()
+    backing_out, backing_parent = _backing_path(out, mounts), _backing_path(parent, mounts)
+    shared_backing_tree = bool(backing_out and backing_parent and backing_out[0] == backing_parent[0] and (
+        backing_out[1].is_relative_to(backing_parent[1]) or backing_parent[1].is_relative_to(backing_out[1])))
+    if same_tree or shared_backing_tree:
         raise ValueError('cooldown child and parent need distinct, non-nested output roots')
 
 

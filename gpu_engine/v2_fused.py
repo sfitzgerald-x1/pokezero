@@ -272,7 +272,7 @@ def _validate_lr_start_reports(runtime, reports, plan, policy, *, origin=(0, 0, 
 
 
 def argument_parser():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--config', help='20k diagnostic config (smoke schema)')
     parser.add_argument('--declaration');parser.add_argument('--declaration-sha256')
     parser.add_argument('--runtime');parser.add_argument('--runtime-sha256');parser.add_argument('--plan-arm')
