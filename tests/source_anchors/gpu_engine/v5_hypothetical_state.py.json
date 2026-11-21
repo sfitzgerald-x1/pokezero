@@ -1,0 +1,7 @@
+{
+ "path": "gpu_engine/v5_hypothetical_state.py",
+ "anchors": {
+  "destiny-bond": {"scope": "map_spec", "needle": "if held_volatiles and 'destinybond", "extent": "line", "digest": "9eaba7ffb463", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "perish-counter": {"scope": "map_spec", "needle": "if held_volatiles and name", "extent": "line", "digest": "c1779f9b711c", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

@@ -1,0 +1,7 @@
+{
+ "path": "gpu_engine/effects.py",
+ "anchors": {
+  "def-stall-success": {"scope": "stall_success", "needle": "def stall_success", "extent": "line", "digest": "f98c6bdefa78", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "destinybond": {"scope": "MoveEffects", "needle": "destinybond", "extent": "line", "digest": "c84e23aa6707", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

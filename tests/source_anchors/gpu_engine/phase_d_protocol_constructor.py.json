@@ -1,0 +1,6 @@
+{
+ "path": "gpu_engine/phase_d_protocol_constructor.py",
+ "anchors": {
+  "load-gen3-randbat-source-cached": {"scope": "load_inputs", "needle": "source=load_gen3_randbat_source_cached", "extent": "line", "digest": "2ceb78b2abaf", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

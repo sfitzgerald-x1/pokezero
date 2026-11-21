@@ -1,0 +1,6 @@
+{
+ "path": "gpu_engine/residual_order.py",
+ "anchors": {
+  "positions": {"scope": "", "needle": "POSITIONS =", "extent": "line", "digest": "6bd135a509dd", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

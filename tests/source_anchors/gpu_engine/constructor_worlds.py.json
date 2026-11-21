@@ -1,0 +1,7 @@
+{
+ "path": "gpu_engine/constructor_worlds.py",
+ "anchors": {
+  "def-fix-recharge": {"scope": "fix_recharge", "needle": "def fix_recharge", "extent": "line", "digest": "a0049f453c40", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "opponent-recharge-unrepresented": {"scope": "", "needle": "OPPONENT_RECHARGE=", "extent": "line", "digest": "28cab3af5d37", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

@@ -1,0 +1,10 @@
+{
+ "path": "gpu_engine/request_source_rules.cjs",
+ "anchors": {
+  "altersrequest": {"scope": "", "needle": "const move", "extent": {"through": {"scope": "", "needle": "const missingCondition=altersRequest&&id!=='encore';", "extent": "line"}}, "digest": "5af9731bdb54", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "encore": {"scope": "", "needle": "'encore'", "extent": "line", "digest": "0152b5f65861", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "recharge": {"scope": "", "needle": "recharge", "extent": "line", "digest": "da34d56f6ed6", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "transform": {"scope": "", "needle": "'transform'", "extent": {"through": {"scope": "", "needle": "'sleeptalk','metronome','assist','mirrormove','naturepower','copycat'].includes(id);", "extent": "line"}}, "digest": "3e1480da9224", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "trappokemon": {"scope": "", "needle": "const altersRequest", "extent": {"through": {"scope": "", "needle": "const missingCondition=altersRequest&&id!=='encore';", "extent": "line"}}, "digest": "b7638e52861f", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

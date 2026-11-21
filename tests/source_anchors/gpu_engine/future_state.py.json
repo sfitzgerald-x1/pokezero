@@ -1,0 +1,7 @@
+{
+ "path": "gpu_engine/future_state.py",
+ "anchors": {
+  "lockedmove": {"scope": "", "needle": "lockedmove", "extent": "line", "digest": "8ed40f34e285", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "recharge-unrepresented": {"scope": "_prepare", "needle": "RECHARGE_UNREPRESENTED", "extent": "line", "digest": "d87f76c1255c", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

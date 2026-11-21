@@ -1,0 +1,7 @@
+{
+ "path": "gpu_engine/solar_beam.py",
+ "anchors": {
+  "solar-beam": {"scope": "", "needle": "Solar Beam", "extent": "line", "digest": "e3b0c44298fc", "cited_by": ["scripts/depthn_carry_audit.py"]},
+  "solarbeam": {"scope": "from_metadata", "needle": "def from_metadata", "extent": "stmt", "digest": "230685767975", "cited_by": ["scripts/depthn_carry_audit.py"]}
+ }
+}

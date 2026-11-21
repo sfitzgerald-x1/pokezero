@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import numpy as np
 
+from gpu_engine import source_anchor as S
 from scripts import depthn_carry_audit as A
 from tests import _engine_since as since
 
@@ -30,130 +31,55 @@ def softmax(logits, actions):
 
 
 # Enumeration ----------------------------------------------------------------------------------------------------------------------------
-def citations(text):
-    """(path, first line) of every gpu_engine file:line citation in `text` (bare names resolve under gpu_engine/)."""
-    out = []
-    for name, line in re.findall(r'((?:gpu_engine/)?[\w-]+\.(?:py|cjs)):(\d+)', text):
-        out.append((ROOT / (name if '/' in name else 'gpu_engine/' + name), int(line)))
-    return out
+# scripts/depthn_carry_audit.py cites engine code by content, `gpu_engine/x.py#id`, never by line: each id's entry in
+# tests/source_anchors/gpu_engine/x.py.json names a scope, a needle on exactly one line of it, an extent, and a digest of
+# the span's code (gpu_engine/source_anchor.py). A move of the cited code changes nothing here; a change to it, a deleted or
+# duplicated needle, a citation without an entry or an entry nothing cites fails (the lead, 2026-11-13: a shift of the cited
+# code must not drift silently; 2026-11-15: and must not fail either).
+AUDIT = 'scripts/depthn_carry_audit.py'
 
 
-# Every gpu_engine file:line(-line) citation in scripts/depthn_carry_audit.py (the module text: rows, notes and docstring), including the
-# continuation ranges after it ("x.py:611-612, 825", "x.py:641-643 and 851-852"), keyed with its path under gpu_engine/, and a token its
-# cited lines must contain (an identifier, refusal code or function name there); a token starting with '^' must be on the range's first
-# line. A shift of the cited code then fails here instead of drifting silently (the lead, 2026-11-13); a new citation needs its anchor,
-# a removed one loses it.
-CITATION_ANCHORS = {
-    'gpu_engine/baton.py:16': 'batonpass',
-    'gpu_engine/constructor_worlds.py:489': 'OPPONENT_RECHARGE_UNREPRESENTED',
-    'gpu_engine/constructor_worlds.py:916': 'def fix_recharge',
-    'gpu_engine/effects.py:175': 'def stall_success',
-    'gpu_engine/effects.py:46': 'destinybond',
-    'gpu_engine/encore.py:14-20': '^def from_metadata',
-    'gpu_engine/encore.py:33-52': '^def apply',
-    'gpu_engine/engine_device_observation.py:346-368': "own['moves']",
-    'gpu_engine/engine_request_source.py:261-265': '^_unsafe_history',
-    'gpu_engine/engine_request_source.py:341': 'charge_move',
-    'gpu_engine/engine_request_source.py:341-342': '^encore',
-    'gpu_engine/engine_request_source.py:380': 'LOCK',
-    'gpu_engine/entry.py:52': 'spikes',
-    'gpu_engine/focus_punch.py:15-19': 'focuspunch',
-    'gpu_engine/future_state.py:166': 'lockedmove',
-    'gpu_engine/future_state.py:496': 'RECHARGE_UNREPRESENTED',
-    'gpu_engine/items.py:27-28': 'trick: jax.Array',
-    'gpu_engine/linked_traps.py:12-14': 'meanlook',
-    'gpu_engine/linked_traps.py:12-25': 'meanlook',
-    'gpu_engine/phase_d_live_worlds.py:308-311': 'transform.check_evidence',
-    'gpu_engine/phase_d_live_worlds.py:523-524': 'materialize_copy',
-    'gpu_engine/phase_d_live_worlds.py:379': "'partiallytrapped'",
-    'gpu_engine/phase_d_live_worlds.py:389-390': 'OWN_VOLATILE_OR_LATENT_CLOCK_UNAVAILABLE',
-    'gpu_engine/phase_d_live_worlds.py:398': 'DESTINY_BOND',
-    'gpu_engine/phase_d_protocol_constructor.py:222': 'load_gen3_randbat_source_cached',
-    'gpu_engine/phase_d_protocol_world.py:150-152': '^PUBLIC_ITEM_SWAP_NOT_SUPPORTED',
-    'gpu_engine/phase_d_protocol_world.py:221-239': '^_defer_yawn',
-    'gpu_engine/phase_d_protocol_world.py:242-257': '^_perish_counts',
-    'gpu_engine/phase_d_protocol_world.py:329-339': '^def _write_held_counts',
-    'gpu_engine/phase_d_protocol_world.py:345-353': '^def wrap_support',
-    'gpu_engine/phase_d_protocol_world.py:356-382': '^def _wrap_facts',
-    'gpu_engine/phase_d_protocol_world.py:385-404': '^def _defer_traps',
-    'gpu_engine/phase_d_protocol_world.py:445-464': '^def _write_wraps',
-    'gpu_engine/phase_d_protocol_world.py:733': 'map_spec',
-    'gpu_engine/public_active.py:218-234': '^PERISH_START',
-    'gpu_engine/public_active.py:47': 'perish',
-    'gpu_engine/public_refresh_stream.py:17': 'TRANSFORM',
-    'gpu_engine/request_source_rules.cjs:57-64': 'altersRequest',
-    'gpu_engine/request_source_rules.cjs:59-64': 'TrapPokemon',
-    'gpu_engine/request_source_rules.cjs:64': "'encore'",
-    'gpu_engine/request_source_rules.cjs:65-66': "^'transform'",
-    'gpu_engine/request_source_rules.cjs:67': 'recharge',
-    'gpu_engine/residual_order.py:99': 'POSITIONS',
-    'gpu_engine/sleep_talk.py:16-22': 'sleeptalk',
-    'gpu_engine/solar_beam.py:1': 'Solar Beam',
-    'gpu_engine/solar_beam.py:14-15': 'solarbeam',
-    'gpu_engine/state.py:14': 'LEECH_SEED',
-    'gpu_engine/state.py:161-163': '^def usable_moves',
-    'gpu_engine/state.py:16-17': '^FOCUS_PUNCH',
-    'gpu_engine/state.py:21': 'DESTINY_BOND',
-    'gpu_engine/state.py:25-93': '^class BattleState',
-    'gpu_engine/state.py:37-40': 'status_counter',
-    'gpu_engine/state.py:39': 'sleep_skipped',
-    'gpu_engine/state.py:44': 'choice_move',
-    'gpu_engine/state.py:48-49': 'encore_counter',
-    'gpu_engine/state.py:50-51': '^charge_move',
-    'gpu_engine/state.py:58': 'protect_counter',
-    'gpu_engine/state.py:59': 'substitute_hp',
-    'gpu_engine/state.py:64': 'trap_source',
-    'gpu_engine/state.py:76': 'spikes',
-    'gpu_engine/state.py:77-78': '^wish_counter',
-    'gpu_engine/state.py:79-80': 'weather_counter',
-    'gpu_engine/state.py:85': 'truant_loaf',
-    'gpu_engine/state.py:86': 'item_knocked',
-    'gpu_engine/state.py:88': 'recharge_counter',
-    'gpu_engine/state.py:90': 'perish_counter',
-    'gpu_engine/state.py:91': 'yawn_counter',
-    'gpu_engine/state.py:92-93': '^partial_trap_counter',
-    'gpu_engine/sustain.py:22-27': 'leechseed',
-    'gpu_engine/transition.py:1870-1879': '^_trick=',
-    'gpu_engine/transition.py:1880-1891': '_white_herb_pair',
-    'gpu_engine/transition.py:1938-1946': '^_perish_used',
-    'gpu_engine/transition.py:1951-1959': '^_yawn_try',
-    'gpu_engine/transition.py:2122-2131': '^seed_target',
-    'gpu_engine/transition.py:2159-2164': '^_wrap_set',
-    'gpu_engine/transition.py:2802-2822': "^POSITIONS['wrap']",
-    'gpu_engine/transition.py:2823-2851': "^POSITIONS['yawn']",
-    'gpu_engine/transition.py:2833-2837': '^_yawn_clause',
-    'gpu_engine/transition.py:2888-2902': '^_perish_continues',
-    'gpu_engine/transition.py:2982-2986': 'truant_loaf=work.truant_loaf',
-    'gpu_engine/transition.py:689-690': '^charge_moves',
-    'gpu_engine/transition.py:723-725': 'initial_loaf = (table.entry.truant',
-    'gpu_engine/transform.py:132': 'def revert',
-    'gpu_engine/transform.py:70': 'def apply',
-    'gpu_engine/v5_hypothetical_state.py:146': 'DESTINY_BOND',
-    'gpu_engine/v5_hypothetical_state.py:149': 'perish_counter',
-    'gpu_engine/transition.py:88-121': '^def tables_from_metadata',
-    'gpu_engine/transition.py:967': 'charge_locked',
-    'gpu_engine/transition.py:974-978': '~DESTINY_BOND&0xffffffff',
-    'gpu_engine/transition.py:982-987': '^_recharge_turn',
-    'gpu_engine/transition.py:993-994': 'loafing=table.entry.truant',
-    'gpu_engine/transition.py:994': 'loafing=table.entry.truant',
-}
-CITATION = re.compile(r'((?:gpu_engine/)?[\w-]+\.(?:py|cjs)):(\d+)(?:-(\d+))?')
-CITATION_TAIL = re.compile(r'(?:,\s*|\s+and\s+)(\d+)(?:-(\d+))?(?![\w.-])')
+def cited_span_text(cite, root=ROOT):
+    """The current text of the span `cite` ('gpu_engine/x.py#id') names, through its store entry."""
+    path, ident = cite.split('#')
+    anchor = S.Anchor.from_entry(path, S.load_store(S.store_file(root, path))['anchors'][ident])
+    return '\n'.join(text for _, text in S.span_lines(S.resolve(anchor, root), root))
 
 
-def cited_ranges(text):
-    """{key: (path, first, last)} of every citation in `text` and of its continuation ranges (key: path under gpu_engine/ plus
-    first[-last], as CITATION_ANCHORS)."""
-    out = {}
-    for match in CITATION.finditer(text):
-        name = match.group(1);path = name if '/' in name else 'gpu_engine/' + name
-        ranges = [(int(match.group(2)), int(match.group(3) or match.group(2)))];pos = match.end()
-        while (tail := CITATION_TAIL.match(text, pos)):ranges.append((int(tail.group(1)), int(tail.group(2) or tail.group(1))));pos = tail.end()
-        for a, b in ranges:out[f'{path}:{a}' + (f'-{b}' if b != a else '')] = (ROOT / path, a, b)
-    return out
+def scratch_tree(root):
+    """The audit, its stores, and every source they cite, copied under `root` (same relative paths)."""
+    import shutil
+    for rel in [AUDIT] + [str(f.relative_to(ROOT)) for f in (ROOT/S.STORE_DIR).rglob('*.json')] + S.store_paths(ROOT):
+        (root/rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT/rel, root/rel)
 
 
 class EnumerationTests(unittest.TestCase):
+    def test_expanded_documentation_keeps_the_reviewed_citation_coverage(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch);scratch_tree(root)
+            file = root/'gpu_engine/encore.py'
+            source = file.read_text()
+            entry = S.load_store(S.store_file(root, 'gpu_engine/encore.py'))['anchors']['def-from-metadata']
+            start = S.resolve(S.Anchor.from_entry('gpu_engine/encore.py', entry), root).first
+            rows = source.splitlines(keepends=True)
+            rows.insert(start, '    """Additional documentation.\n    More documentation.\n    """\n')
+            file.write_text(''.join(rows))
+            self.assertEqual(S.verify(root, consumer=AUDIT), [])
+            source = file.read_text()
+            # This citation ends at the following function's header, not at a
+            # physical line count inside apply. Its executable coverage stays fixed.
+            source = source.replace('def apply(', '# Expanded documentation\n# Another line\ndef apply(', 1)
+            body = source.index('\n', source.index('def apply('))+1
+            file.write_text(source[:body]+'    # An interior comment also moves the endpoint.\n'+source[body:])
+            self.assertEqual(S.verify(root, consumer=AUDIT), [])
+            file = root/'gpu_engine/state.py'
+            source = file.read_text()
+            self.assertIn('Canonical PP/disabled/Choice/Encore mask BEFORE synthetic Struggle.', source)
+            file.write_text(source.replace('Canonical PP/disabled/Choice/Encore mask BEFORE synthetic Struggle.',
+                                           'Reworded documentation.\n    Additional explanation.'))
+            self.assertEqual(S.verify(root, consumer=AUDIT), [])
+
     def test_audited_effects_are_unrepresented_pool_moves_with_evidence(self):
         self.assertEqual([e.id for e in A.EFFECTS], ['recharge', 'partial_trap', 'perish_count', 'drowsy', 'destiny_bond', 'transform', 'trick_lock'])
         for e in A.EFFECTS:
@@ -182,30 +108,49 @@ class EnumerationTests(unittest.TestCase):
         """The placeholder merge SHA is gone from the audit (its engine_since fields and its evidence text) once the merge exists."""
         self.assertNotIn(since.PLACEHOLDER, Path(A.__file__).read_text())
 
-    def test_every_citation_is_anchored_and_its_anchor_is_in_the_cited_lines(self):
-        cited = cited_ranges(Path(A.__file__).read_text())
-        self.assertEqual(sorted(set(cited) - set(CITATION_ANCHORS)), [], 'a citation without an anchor in CITATION_ANCHORS')
-        self.assertEqual(sorted(set(CITATION_ANCHORS) - set(cited)), [], 'an anchor whose citation is gone')
-        for key, (path, first, last) in sorted(cited.items()):
-            with self.subTest(citation=key):
-                lines = path.read_text().splitlines();self.assertLessEqual(last, len(lines))
-                token = CITATION_ANCHORS[key];where = lines[first - 1] if token.startswith('^') else '\n'.join(lines[first - 1:last])
-                self.assertIn(token.lstrip('^'), where, f'{key} no longer names {token!r}')
+    def test_every_citation_resolves_to_its_reviewed_code(self):
+        """Every `gpu_engine/x.py#id` in the audit (rows, notes and docstring) has an entry cited_by it, resolves to one
+        span, and that span's code is the reviewed one; no entry cited_by the audit is left uncited."""
+        self.assertEqual(S.verify(ROOT, consumer=AUDIT), [])
+        self.assertGreater(len(S.find_citations(Path(A.__file__).read_text())), 80)
+        self.assertEqual([c for c in re.findall(r'(?:gpu_engine/)?[\w-]+\.(?:py|cjs):\d+', Path(A.__file__).read_text())], [],
+                         'a line citation of engine code is back; cite it by content (refresh_source_anchors.py --show)')
 
-    def test_every_engine_citation_names_an_existing_line(self):
+    def test_a_moved_citation_passes_and_a_changed_one_fails_by_name(self):
+        """The paired controls on a scratch copy of the tree: code inserted above every cited span leaves the audit
+        current; one changed cited statement (a comparison in the charge-lock line) fails, naming that citation."""
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch);scratch_tree(root)
+            transition = root/'gpu_engine/transition.py';text = transition.read_text()
+            head = text.index('\nimport ') + 1   # above every def in the file: every transition.py span moves down
+            transition.write_text(text[:head] + 'def _shifted_by_the_control():\n    return 0\n\n\n' + text[head:])
+            self.assertEqual(S.verify(root, consumer=AUDIT), [])
+            cite = 'gpu_engine/transition.py#charge-locked'
+            self.assertNotEqual(A.source_anchors.render_citations(cite, root), A.source_anchors.render_citations(cite, ROOT))
+            self.assertNotEqual(S.resolve(S.Anchor.from_entry('gpu_engine/transition.py', S.load_store(S.store_file(root, 'gpu_engine/transition.py'))['anchors']['charge-locked']), root),
+                                S.resolve(S.Anchor.from_entry('gpu_engine/transition.py', S.load_store(S.store_file(ROOT, 'gpu_engine/transition.py'))['anchors']['charge-locked']), ROOT))
+            shifted = transition.read_text()
+            self.assertEqual(shifted.count('charge_locked=_active(work.charge_move,work,side)>0'), 1)
+            transition.write_text(shifted.replace('charge_locked=_active(work.charge_move,work,side)>0', 'charge_locked=_active(work.charge_move,work,side)>=0'))
+            problems = S.verify(root, consumer=AUDIT)
+            self.assertEqual(len(problems), 1, problems)
+            self.assertIn('gpu_engine/transition.py#charge-locked', problems[0]);self.assertTrue(problems[0].startswith('CHANGED'), problems[0])
+
+    def test_every_engine_citation_in_the_rows_is_anchored(self):
         rows = A.enumeration()['rows'];found = 0
         for r in rows:
-            for path, line in citations(' '.join(r['evidence']) + ' ' + r['lock_class'] + ' ' + r['note']):
-                with self.subTest(effect=r['effect'], path=path.name, line=line):
-                    self.assertTrue(path.exists());self.assertLessEqual(line, len(path.read_text().splitlines()))
+            for path, ident in S.find_citations(' '.join(r['evidence']) + ' ' + r['lock_class'] + ' ' + r['note']):
+                with self.subTest(effect=r['effect'], cite=f'{path}#{ident}'):
+                    self.assertTrue(path.startswith('gpu_engine/'));self.assertTrue(cited_span_text(f'{path}#{ident}'))
                 found += 1
         self.assertGreater(found, 30)
 
     def test_the_lock_rule_and_state_fields_cited_are_what_they_say(self):
-        rules = (ROOT / 'gpu_engine/request_source_rules.cjs').read_text().splitlines()
-        self.assertIn('move.flags.recharge', rules[66]);self.assertIn("'transform'", rules[64]);self.assertIn('TrapPokemon', rules[59])
-        source = (ROOT / 'gpu_engine/engine_request_source.py').read_text().splitlines()
-        self.assertIn('LOCK', source[379]);self.assertIn('charge_move', source[340])
+        self.assertIn('move.flags.recharge', cited_span_text('gpu_engine/request_source_rules.cjs#recharge'))
+        self.assertIn("'transform'", cited_span_text('gpu_engine/request_source_rules.cjs#transform'))
+        self.assertIn('TrapPokemon', cited_span_text('gpu_engine/request_source_rules.cjs#trappokemon'))
+        self.assertIn('LOCK', cited_span_text('gpu_engine/engine_request_source.py#lock'))
+        self.assertIn('charge_move', cited_span_text('gpu_engine/engine_request_source.py#charge-move'))
         state = (ROOT / 'gpu_engine/state.py').read_text().lower()
         # an effect the engine models in-tree (engine_since) names its state; the others still have none. Transform is in-tree from
         # its PR, before its merge exists to be the engine_since (set with the guard change that follows): pending until then.
@@ -214,7 +159,7 @@ class EnumerationTests(unittest.TestCase):
         for e in A.EFFECTS:
             if e.id in pending:self.assertEqual(e.engine_since, '', f'{e.id} has its engine_since: drop it from pending')
             if e.id in words:(self.assertIn if e.engine_since or e.id in pending else self.assertNotIn)(words[e.id], state, e.id)
-        traps = (ROOT / 'gpu_engine/linked_traps.py').read_text().splitlines()[12]
+        traps = cited_span_text('gpu_engine/linked_traps.py#meanlook')
         self.assertIn('meanlook', traps);self.assertNotIn('wrap', traps)
         transition = (ROOT / 'gpu_engine/transition.py').read_text()
         for e in A.EFFECTS:
@@ -573,6 +518,7 @@ class CaptureHookTests(unittest.TestCase):
         from gpu_engine.state import empty_state
         pricer = object.__new__(dn.DepthNPricer)
         pricer.programs, pricer.compiles, pricer.evaluator_suffix, pricer._world_suffix = {}, (), (), ()
+        pricer.program_cache = None
         state = empty_state(1);state = state._replace(moves=state.moves.at[0, 1, 0].set(jnp.asarray([5, 6, 0, 0])), pp=state.pp.at[0, 1, 0].set(5))
         stacked = jax.tree.map(lambda x: jnp.stack([x, x]), state)
         lane_cell = jnp.full((1, 81), 81, jnp.int32).at[0, :2].set(jnp.asarray([4, 5]))
@@ -674,6 +620,23 @@ def write_capture(path, decisions, *, owner='p1'):
 
 
 class ReportTests(unittest.TestCase):
+    def test_markdown_renders_current_lines_and_keeps_enumeration_identities(self):
+        summary = A.audit([], None)
+        summary['enumeration'] = A.enumeration()
+        identities = json.dumps(summary['enumeration'], sort_keys=True)
+        self.assertGreater(len(S.find_citations(identities)), 30)
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch);scratch_tree(root)
+            transition = root/'gpu_engine/transition.py'
+            transition.write_text('\n\n\n' + transition.read_text())
+            with patch.object(A, 'ROOT', root):
+                rendered = A.markdown(summary)
+            entry = S.load_store(S.store_file(root, 'gpu_engine/transition.py'))['anchors']['charge-locked']
+            anchor = S.Anchor.from_entry('gpu_engine/transition.py', entry)
+            self.assertIn(S.render(anchor, root), rendered)
+        self.assertEqual(S.find_citations(rendered), [])
+        self.assertEqual(json.dumps(summary['enumeration'], sort_keys=True), identities)
+
     def test_report_main(self):
         beam = request_line(['Hyper Beam', 'Earthquake', 'Rest', 'Protect'])
         plain = request_line(['Body Slam', 'Earthquake', 'Rest', 'Protect'], species='Snorlax')
