@@ -535,6 +535,11 @@ def load_checkpoint(path,*,enable_v5=False,expected_model_config=None,expected_l
     checked=checked_checkpoint(path,expected_checkpoint_sha256=expected_checkpoint_sha256)
     self_moves=resolve_self_moves(checked,expected_self_moves=expected_self_moves,off_provenance=off_provenance)
     torch=_torch();payload=checked.payload
+    section=payload.get('v2')
+    if isinstance(section,dict):
+        settings=section.get('config')
+        if 'lr_start_origin' in section or isinstance(settings,dict) and 'lr_start' in settings:
+            raise ValueError('LR-start checkpoints require V2 resume')
     metadata=payload.get('metadata',{})
     if (metadata.get('schema')!=CHECKPOINT_SCHEMA or payload.get('metadata_sha256')!=_sha(metadata)
             or metadata.get('training_schema')!=contract.TRAINING_CONTRACT_SCHEMA
