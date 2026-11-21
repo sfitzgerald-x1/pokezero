@@ -339,7 +339,7 @@ def error_text(error):
 class DepthNLiveSearch:
     def __init__(self,*,constructor,pricers,params,binding,recipe,tree_commit,min_price_seconds=1.,max_requests=None,session_cap=256,
             archive_sha256=None,device='cpu',clock=time.monotonic,refuse_classes=(),redact_private_reveals=False,peer_view_b=False,reply=None,
-            root_operator=ROOT_OPERATOR,ability_guard=False):
+            root_operator=ROOT_OPERATOR,ability_guard=False,child_opponent_actor=None):
         """`pricers`: make_pricers' {bucket: DepthNPricer}; `binding`: the pricer side's WorldBinding (constructor_worlds.binding of
         the executor's source, engine metadata and catalog); `recipe`: the lane-order Recipe; `clock` must be the server's
         arrival clock (time.monotonic); `redact_private_reveals`: constructor_worlds' private-reveal redaction in every
@@ -383,6 +383,9 @@ class DepthNLiveSearch:
         if not _real(min_price_seconds)or min_price_seconds<0:raise ValueError('finite min_price_seconds >= 0 required')
         if type(tree_commit)is not str or not tree_commit:raise ValueError('the tree commit required')
         if type(params)is not tuple or not params:raise ValueError('the champion bank (params,) required')
+        if child_opponent_actor is not None and(type(child_opponent_actor)is not int or not 0<=child_opponent_actor<len(params)):
+            raise ValueError('child_opponent_actor: an index into params required (the opponent\'s actor at every ply below the root)')
+        self.child_opponent_actor=child_opponent_actor   # --reply-below-root: the reply model's bank entry prices the plies below the root
         refuse_classes=tuple(refuse_classes)
         if any(c not in CLASSES for c in refuse_classes):raise ValueError(f'refuse_classes from {CLASSES} required, got {refuse_classes!r}')
         self.refuse_classes=tuple(sorted(set(refuse_classes),key=CLASSES.index));self.carry=None;self.warming=False
@@ -434,6 +437,7 @@ class DepthNLiveSearch:
             batch_size=n,bucket=None,
             root_classes=None,root_class=None,root_class_source=None,root_class_crosscheck=None,
             tree_commit=self.tree_commit,pricer=dict(self.pricer_identity),**({'peer_view_b':None}if self._view_b()else{}),
+            **({}if getattr(self,'child_opponent_actor',None)is None else dict(reply_below_root=True)),
             **({}if getattr(self,'reply',None)is None else dict(reply_prior=None)),**({'noise_gate':None}if self._gated()else{}))
 
     @staticmethod
@@ -563,7 +567,8 @@ class DepthNLiveSearch:
         guard's observer seam around it. dict(made, chosen, frame, children, seam_notes, labels, build_seconds, price_seconds,
         price_end: its perf_counter)."""
         clock=time.perf_counter()
-        made=cw.build(self.constructor,gated,self.pricers[self.buckets[0]],self.params,binding=self.binding,recipe=self.recipe,only_complete=True)
+        made=cw.build(self.constructor,gated,self.pricers[self.buckets[0]],self.params,binding=self.binding,recipe=self.recipe,only_complete=True,
+            **({}if getattr(self,'child_opponent_actor',None)is None else dict(child_opponent_actor=self.child_opponent_actor)))
         t_build=time.perf_counter();chosen=frame=children=seam_notes=labels=None
         if made.requests:
             chosen=bucket if bucket is not None else next((b for b in self.buckets if len(made.requests)<=b*self.K),None)

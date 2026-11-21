@@ -268,6 +268,38 @@ class DepthNPricerTests(unittest.TestCase):
             np.testing.assert_array_equal(A[name],B[name],err_msg=f'{name} {msg}')
 
     # (a) N=2 equivalence -------------------------------------------------------------------------------------------
+    def test_a_child_opponent_actor_prices_only_the_plies_below_the_root(self):
+        """child_opponent_actor routes the opponent's prior below the root to another bank entry: the root's peer prior stays the root
+        opponent actor's, everything from the turn-1 children down equals a pricing whose root opponent actor is that entry."""
+        specs=(((0,27),0,0,0),((27,21),1,0,0),((22,23),0,1,0))
+        with_child=lambda requests:tuple(replace(r,child_opponent_actor=1)for r in requests)
+        for depth,ks,lanes in((2,((2,),(3,)),24),(3,((2,2),(2,2)),16)):   # depth 2: 4 nodes of 6 lanes, the depth-2 pricer's child_block=4
+            ex=deep_executor();geometry=dict(depth=depth,k_own=ks[0],k_opp=ks[1],block_lanes=lanes,capacity=8)
+            root0,_,_,_=self.price(specs,ex=ex,**geometry)                                                   # opponent 0 everywhere
+            root1,_,_,_=self.price(tuple((m,o,l,1)for m,o,l,_ in specs),ex=ex,**geometry)                   # opponent 1 everywhere
+            requests=with_child(self.requests(specs,ex));self.assertTrue(d2.routes_children(requests))
+            engine=dn.DepthNPricer(ex,object(),actor_capacity=3,**geometry)
+            with patch.object(mapping,'materialize_host',side_effect=T.Depth2PricerTests.materialize(specs)),patch.object(batch.v5_model,'forward',side_effect=forward):
+                routed=engine.price(requests,self.tables,self.recipe,PARAMS)
+            R,A,B=dict(dn.arrays(routed)),dict(dn.arrays(root0)),dict(dn.arrays(root1))
+            self.assertEqual(set(R),set(A))
+            for name in R:
+                if name in('root_peer_logits',):np.testing.assert_array_equal(R[name],A[name],err_msg=f'{name} depth {depth}')   # the root: actor 0
+                else:np.testing.assert_array_equal(R[name],B[name],err_msg=f'{name} depth {depth}')   # below it: actor 1
+            self.assertFalse(np.array_equal(A['root_peer_logits'],B['root_peer_logits']))   # the test discriminates
+            self.assertFalse(np.array_equal(A['t1_peer_logits'],B['t1_peer_logits']))
+            self.assertEqual(backups.refusal_summary(routed)['refused_count'],backups.refusal_summary(root1)['refused_count'])   # the specs' own refusals
+            if depth==2:   # the depth-2 pricer takes the same requests and agrees bit for bit (its own key carries the child rows)
+                reference=self.depth2(specs,requests,ex,k_own=2,k_opp=3,child_block=4);mine=dn.as_depth2_frame(routed)
+                for name in d2.Depth2Frame.__dataclass_fields__:
+                    if name in('world_reports','timing')or getattr(reference,name)is None:continue
+                    np.testing.assert_array_equal(getattr(reference,name),getattr(mine,name),err_msg=name)
+        with self.assertRaisesRegex(ValueError,'child opponent actor'):   # out of the bank
+            engine=dn.DepthNPricer(deep_executor(),object(),actor_capacity=3,depth=2,k_own=(2,),k_opp=(3,),block_lanes=24,capacity=8)
+            bad=tuple(replace(r,child_opponent_actor=3)for r in self.requests(specs,deep_executor()))
+            with patch.object(mapping,'materialize_host',side_effect=T.Depth2PricerTests.materialize(specs)),patch.object(batch.v5_model,'forward',side_effect=forward):
+                engine.price(bad,self.tables,self.recipe,PARAMS)
+
     def test_n2_as_depth2_frame_is_bit_equal_to_depth2_pricer(self):
         specs=(((0,27),0,0,1),((27,21),1,1,0),((22,23),0,2,2),((24,25),1,0,2),((29,30),0,1,1),((20,6),1,2,0))
         for ex,widths,extra in((T.executor()[0],(9,9),dict()),(T.executor()[0],(2,3),dict()),(T.permuting_executor(),(3,2),dict()),(T.executor()[0],(9,9),dict(digest=True))):
