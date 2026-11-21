@@ -85,11 +85,17 @@ def canonical_layout(keys, batches, global_batch, world_size):
 
 @dataclass(frozen=True)
 class Exchange:
-    """Who exchanges rows (the whole world) and who learns (the first ``learners`` ranks)."""
+    """Who exchanges rows (the whole world) and who learns (the first ``learners`` ranks).
+
+    ``host_group`` (optional, e.g. gloo) carries the all-to-all on host copies of
+    each slab instead of the device group: the fallback when the device
+    transport cannot cross nodes. Rows and slots are unchanged.
+    """
     rank: int
     world_size: int
     process_group: object
     learners: int
+    host_group: object = None
 
 
 def gather(value, runtime):
@@ -186,12 +192,14 @@ def distribute_store(store, keys, batches, runtime, *, exchange=None, configs=No
                 i0, i1 = (0, len(positions)) if slab is None else np.searchsorted(positions, [lo, hi])
                 received_now.append(indices[i0:i1]); counts.append(int(i1 - i0))
             sent = original.index_select(0, torch.as_tensor(my_slab, device=store.device)).contiguous()
-            received = torch.empty((sum(counts), *original.shape[1:]), dtype=original.dtype, device=store.device)
+            wire = 'cpu' if exchange.host_group is not None else store.device
+            received = torch.empty((sum(counts), *original.shape[1:]), dtype=original.dtype, device=wire)
             if world > 1:
-                dist.all_to_all_single(received, sent, output_split_sizes=counts,
-                    input_split_sizes=send_counts, group=exchange.process_group)
+                dist.all_to_all_single(received, sent.to(wire), output_split_sizes=counts, input_split_sizes=send_counts,
+                    group=exchange.host_group if exchange.host_group is not None else exchange.process_group)
             else:
                 received.copy_(sent)
+            received = received.to(store.device)
             if learner and sum(counts):
                 target = torch.as_tensor(layout.slots[np.concatenate(received_now)], device=store.device)
                 value.index_copy_(0, target, received)

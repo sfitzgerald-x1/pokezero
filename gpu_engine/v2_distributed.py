@@ -44,7 +44,7 @@ class Distribution:
     actor reaches every node through the shared output directory. Only rows cross nodes."""
 
     def __init__(self, rank, world_size, process_group, *, nodes=1, ranks_per_node=None, store=None,
-                 topology='ddp', learner_group=None):
+                 topology='ddp', learner_group=None, host_group=None):
         if topology not in TOPOLOGIES:
             raise ValueError(f'topology must be one of {TOPOLOGIES}')
         self.rank = rank; self.world_size = world_size; self.process_group = process_group
@@ -57,11 +57,12 @@ class Distribution:
         if self.learner_world < world_size and learner_group is None and world_size > 1:
             raise ValueError('learner-node topology requires the learner process group')
         self.is_learner = rank < self.learner_world
+        self.host_group = host_group   # optional gloo group: row exchange on host copies (device transport cannot cross nodes)
         self.contract = None
 
     def exchange(self):
         from pokezero.v2_distributed import Exchange
-        return Exchange(self.rank, self.world_size, self.process_group, self.learner_world)
+        return Exchange(self.rank, self.world_size, self.process_group, self.learner_world, self.host_group)
 
     def gather(self, value):
         from pokezero.v2_distributed import gather
@@ -257,14 +258,16 @@ def _worker(args, fused_args):
         if torch.cuda.device_count() != 1:
             raise ValueError('each rank must see exactly its one assigned CUDA device')
         torch.cuda.set_device(0)
-    group = store = learners = None
+    group = store = learners = host = None
     if world_size > 1:
         store = rendezvous(args, rank, world_size)
         group = dist.group.WORLD
         if args.topology == 'learner-node' and args.ranks < world_size:
             learners = dist.new_group(ranks=list(range(args.ranks)), timeout=datetime.timedelta(seconds=args.collective_timeout))
+        if args.exchange_transport == 'gloo' and args.backend == 'nccl':
+            host = dist.new_group(backend='gloo', timeout=datetime.timedelta(seconds=args.collective_timeout))
     distribution = Distribution(rank, world_size, group, nodes=args.nodes, ranks_per_node=args.ranks, store=store,
-                                topology=args.topology, learner_group=learners)
+                                topology=args.topology, learner_group=learners, host_group=host)
     try:
         if args.probe:
             return _probe(args, fused_args, rank, world_size, distribution)
@@ -352,6 +355,8 @@ def main(argv=None):
     parser.add_argument('--topology', choices=TOPOLOGIES, default='ddp',
                         help='ddp: every rank learns (gradients cross nodes every step); learner-node: every rank collects, '
                              'only node 0 learns (only rows cross nodes, once per round)')
+    parser.add_argument('--exchange-transport', choices=('device', 'gloo'), default='device',
+                        help='row exchange over the device group (NCCL) or a gloo group on host copies (TCP fallback)')
     parser.add_argument('--backend', choices=('nccl', 'gloo'), default='nccl', help=argparse.SUPPRESS)
     parser.add_argument('--probe', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--rank', type=int, default=None, help=argparse.SUPPRESS)
@@ -384,6 +389,7 @@ def main(argv=None):
             command = [sys.executable, '-m', __name__ if __name__ != '__main__' else 'gpu_engine.v2_distributed',
                 '--ranks', str(args.ranks), '--nodes', str(args.nodes), '--node-index', str(args.node_index),
                 '--rank', str(local), '--master', master, '--backend', args.backend, '--topology', args.topology,
+                '--exchange-transport', args.exchange_transport,
                 *(['--probe'] if args.probe else []),
                 '--timeout-seconds', str(args.timeout_seconds), '--collective-timeout', str(args.collective_timeout),
                 '--rendezvous-timeout', str(args.rendezvous_timeout), *fused_args]
