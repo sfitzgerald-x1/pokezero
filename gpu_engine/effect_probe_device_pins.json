@@ -185,26 +185,6 @@
   {
    "scenario": "cutecharm_trace",
    "case": "base",
-   "step": 0,
-   "field": "1:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "cutecharm_trace",
-   "case": "base",
-   "step": 1,
-   "field": "1:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "cutecharm_trace",
-   "case": "base",
    "step": 2,
    "field": "1:0:borrowed_ability",
    "value": [
@@ -216,50 +196,10 @@
    "scenario": "cutecharm_trace",
    "case": "base",
    "step": 2,
-   "field": "1:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "cutecharm_trace",
-   "case": "base",
-   "step": 2,
    "field": "1:0:shown_ability",
    "value": [
     "cutecharm",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "cutecharm_trace",
-   "case": "base",
-   "step": 3,
-   "field": "1:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "cutecharm_trace",
-   "case": "base",
-   "step": 4,
-   "field": "1:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "cutecharm_trace",
-   "case": "base",
-   "step": "initial",
-   "field": "1:0:original_ability",
-   "value": [
-    "",
-    "trace"
+    ""
    ]
   },
   {
@@ -483,196 +423,6 @@
    }
   },
   {
-   "scenario": "plusminus_trace",
-   "case": "roll=0",
-   "step": 0,
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=0",
-   "step": 1,
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=0",
-   "step": 2,
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=0",
-   "step": "initial",
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=10",
-   "step": 0,
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=10",
-   "step": 1,
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=10",
-   "step": 2,
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=10",
-   "step": "initial",
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=15",
-   "step": 0,
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=15",
-   "step": 1,
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=15",
-   "step": 2,
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=15",
-   "step": "initial",
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=5",
-   "step": 0,
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=5",
-   "step": 1,
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=5",
-   "step": 2,
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "plusminus_trace",
-   "case": "roll=5",
-   "step": "initial",
-   "field": "0:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "wonderguard_trace",
-   "case": "base",
-   "step": 0,
-   "field": "1:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "wonderguard_trace",
-   "case": "base",
-   "step": 1,
-   "field": "1:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "wonderguard_trace",
-   "case": "base",
-   "step": 2,
-   "field": "1:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
    "scenario": "wonderguard_trace",
    "case": "base",
    "step": 3,
@@ -686,20 +436,10 @@
    "scenario": "wonderguard_trace",
    "case": "base",
    "step": 3,
-   "field": "1:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "wonderguard_trace",
-   "case": "base",
-   "step": 3,
    "field": "1:0:shown_ability",
    "value": [
     "wonderguard",
-    "trace"
+    ""
    ]
   },
   {
@@ -716,30 +456,10 @@
    "scenario": "wonderguard_trace",
    "case": "base",
    "step": 4,
-   "field": "1:0:original_ability",
-   "value": [
-    "",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "wonderguard_trace",
-   "case": "base",
-   "step": 4,
    "field": "1:0:shown_ability",
    "value": [
     "wonderguard",
-    "trace"
-   ]
-  },
-  {
-   "scenario": "wonderguard_trace",
-   "case": "base",
-   "step": "initial",
-   "field": "1:0:original_ability",
-   "value": [
-    "",
-    "trace"
+    ""
    ]
   },
   {
