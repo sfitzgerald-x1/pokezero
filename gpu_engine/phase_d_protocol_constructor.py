@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import time
 from dataclasses import dataclass,replace
+from pokezero.joint_budget import defer_joint_gc,new_joint_deadline
 
 from pokezero.live_protocol_actor import ActorContract,_packet
 from pokezero.recorded_encoder_runner import JaxRecordedAdapter,literal_history
@@ -39,11 +40,13 @@ class PreparedRoot:
     legal:tuple
     count:int
     seed:int
+    joint_plan:object=None
 
 
 class ProtocolConstructor:
     def __init__(self,*,catalog,source,metadata,owning_config,count,seed=20261103,
-                 rung='R1',saved_root_admission=True,functions=None,seen=None,sessions=None,incremental_roots=False,eager_peer_fold=False):
+                 rung='R1',saved_root_admission=True,functions=None,seen=None,sessions=None,incremental_roots=False,eager_peer_fold=False,
+                 team_producer='shared-battle',joint_generator=False):
         if count not in (2,8,16,32,64)or type(seed)is not int or type(saved_root_admission)is not bool:
             raise ValueError('original fixed world budget, seed and saved-root mode required')
         if type(incremental_roots)is not bool or(incremental_roots and saved_root_admission):
@@ -62,6 +65,14 @@ class ProtocolConstructor:
         # Eager peer fold (off by default): constructor_worlds.prepare_roots advances each battle's peer wire fold on every root
         # (advance_peer_fold), so a battle's first private reveal folds only its new lines. The same fold; only the cost moves.
         self.eager_peer_fold=eager_peer_fold
+        if team_producer not in ('shared-battle','independent-teams'):raise ValueError('explicit supported team producer required')
+        self.team_producer,self.joint_session=team_producer,None
+        if type(joint_generator)is not bool:raise ValueError('joint_generator must be bool')
+        self.joint_generator=joint_generator
+        from pokezero.live_protocol_actor import _mask_values
+        self.actor_contract=ActorContract.champion()
+        if getattr(getattr(catalog,'masks',None),'set_posterior_narrowing',False):
+            self.actor_contract=replace(self.actor_contract,feature_masks=_mask_values(catalog.masks))
 
     def prepare(self,request,index):
         """The original serial prepare, using one full world range."""
@@ -103,12 +114,35 @@ class ProtocolConstructor:
                 adapter.feed(tuple(x for x in lines[len(old):]if not x.startswith('|request|')))
                 if not self.saved_root_admission:self.sessions[key]=(adapter,lines)
                 facts=protocol.tail.facts(public,packet,lines)
+                joint_plan=None
+                if protocol.JOINT_POSTERIOR_DRAW and self.joint_generator:
+                    with defer_joint_gc():
+                        deadline=new_joint_deadline()
+                        from pokezero.joint_serving import JointSession
+                        if self.joint_session is None:
+                            self.joint_session=JointSession(self.source.original,producer=self.team_producer,deadline=deadline)
+                        joint_seed=int.from_bytes(hashlib.sha256(json.dumps(('joint-v1',self.seed,request['battle_id'],
+                            request['owner'],protocol.game_lines_sha256(lines)),separators=(',',':')).encode()).digest()[:8],'big')
+                        joint_plan=self.joint_session.prepare(public.context,lines,dex=self.catalog.dex,seed=joint_seed,count=self.count,
+                            binding=self.source.binding_sha256,features=getattr(self.catalog.masks,'set_posterior_narrowing',False),deadline=deadline)
+                        elapsed,remaining=deadline.elapsed_seconds,deadline.remaining_seconds
+                    joint_plan=JointSession.finish_handoff(joint_plan,deadline,elapsed_seconds=elapsed,remaining_seconds=remaining)
+                feature_kwargs={}
+                if getattr(getattr(self.catalog,'masks',None),'set_posterior_narrowing',False):
+                    if joint_plan is None:raise ValueError('joint feature producer required')
+                    feature_kwargs=dict(set_posterior_payload=joint_plan.feature_payload,game_sha256=joint_plan.game_sha256)
+                    adapter.bind_set_posterior(joint_plan.feature_payload,game_sha256=joint_plan.game_sha256)
                 detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True,protocol_facts=facts,lines=lines)
                 if detached.source_binding_sha256!=self.source.binding_sha256:
                     raise worlds.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
                 detached=protocol._carried_root(public,detached,lines,self.metadata)
-                return PreparedRoot(public,detached,lines,tuple(map(bool,adapter.encode(packet,owner_side=owner)['legal_action_mask'])),
-                    self.count,self.seed)
+                if feature_kwargs:
+                    from .set_posterior_features import compile_inputs,attach_root
+                    feature_inputs=compile_inputs(joint_plan.feature_payload,self.catalog,adapter.state,
+                        owner=owner,game_sha256=joint_plan.game_sha256)
+                    detached=attach_root(detached,feature_inputs,owner=owner)
+                return PreparedRoot(public,detached,lines,tuple(map(bool,adapter.encode(packet,owner_side=owner,**feature_kwargs)['legal_action_mask'])),
+                    self.count,self.seed,joint_plan)
 
     def sample_range(self,prepared,start,stop,*,complete=None):
         """Build [start, stop) of prepare_root's decision with global world seeds.
@@ -121,7 +155,7 @@ class ProtocolConstructor:
             raise ValueError('prepared root with the same world budget and seed required')
         part=protocol.world_range(prepared.public,prepared.root,start=start,stop=stop,lines=prepared.lines,
             catalog=self.catalog,source=self.source,metadata=self.metadata,config=self.owning_config,
-            battle_id=prepared.public.context.battle_id,seed=self.seed,count=self.count)
+            battle_id=prepared.public.context.battle_id,seed=self.seed,count=self.count,joint_plan=prepared.joint_plan)
         if complete is not None:
             part=replace(part,worlds=tuple(w if w.state is None else complete(w)for w in part.worlds))
         return part
@@ -130,7 +164,7 @@ class ProtocolConstructor:
     def _capture(self,key,address,request,lines,owner):
         """capture_root's PublicRoot for this request: from scratch, or with incremental_roots through the key's RootSession (a
         new one, folding from the start, when there is none or the request does not extend it; any error drops it)."""
-        kwargs=dict(contract=ActorContract.champion(),lines=lines,address=DecisionAddress(request['stream_id'],request['decision_index'],owner),
+        kwargs=dict(contract=self.actor_contract,lines=lines,address=DecisionAddress(request['stream_id'],request['decision_index'],owner),
             battle_id=request['battle_id'],seed=self.seed&0xffffffff)
         if not self.incremental_roots:return capture_root(config=self.owning_config,**kwargs)
         session=self.root_sessions.get(key)

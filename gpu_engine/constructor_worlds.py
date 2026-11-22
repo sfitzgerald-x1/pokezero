@@ -311,9 +311,9 @@ def metadata_sha256(metadata):
 
 def encoder_identity(catalog):
     """The encoder catalog's identity: checkpoint sha256, category vocabulary sha256 and size, feature masks, source hash."""
-    from pokezero.live_protocol_actor import MASK_NAMES,_vocab_sha
+    from pokezero.live_protocol_actor import _mask_values,_vocab_sha
     identity=(('checkpoint_sha256',catalog.checkpoint_sha256),('category_vocab_sha256',_vocab_sha(catalog.vocabulary)),
-        ('category_vocab_size',int(catalog.vocabulary.size)),('feature_masks',tuple((k,getattr(catalog.masks,k))for k in MASK_NAMES)),
+        ('category_vocab_size',int(catalog.vocabulary.size)),('feature_masks',_mask_values(catalog.masks)),
         ('source_hash',catalog.source.source_hash))
     # V2 self_moves joins the identity only when on: off bindings are unchanged; on, a pricer and constructor disagreeing fail closed.
     return identity+((('self_moves',True),)if getattr(catalog.masks,'self_moves',False)else())

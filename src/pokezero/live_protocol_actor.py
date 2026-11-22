@@ -168,10 +168,13 @@ class ActorContract:
         _require(type(self.categorical_vocab_size) is int and self.categorical_vocab_size > 0
             and type(self.token_type_vocab_size) is int and self.token_type_vocab_size > 0,
             'positive exact vocabulary sizes required')
-        _require(type(self.feature_masks) is tuple and tuple(k for k, _ in self.feature_masks) == MASK_NAMES,
+        _require(type(self.feature_masks) is tuple and tuple(k for k, _ in self.feature_masks) in
+                 (MASK_NAMES,MASK_NAMES+('set_posterior_narrowing',)),
                  'ordered complete immutable mask contract required')
         for key, value in self.feature_masks:
             _require(type(value) is (int if key == 'transition_token_budget' else bool), 'mask type')
+        if len(self.feature_masks)>len(MASK_NAMES):
+            _require(dict(self.feature_masks)['set_posterior_narrowing'] is True,'optional mask emitted only when true')
         masks = dict(self.feature_masks)
         _require(masks['transition_token_budget'] == 0 and not masks['investment_belief_narrowing'],
                  'installed one-frame V4 masks required')
@@ -209,8 +212,10 @@ def _vocab_sha(vocab):
 
 
 def _mask_values(masks):
-    return tuple((k, getattr(masks, 'opponent_tendency_stats_block' if k == 'stats_block' else k))
-                 for k in MASK_NAMES)
+    def value(key):
+        return getattr(masks,'opponent_tendency_stats_block',getattr(masks,'stats_block',None)) if key=='stats_block' else getattr(masks,key)
+    return tuple((k,value(k))for k in MASK_NAMES)+(
+        (('set_posterior_narrowing',True),)if getattr(masks,'set_posterior_narrowing',False)else())
 
 
 class OwnedProvider:
@@ -296,7 +301,8 @@ class RawPolicy(OwnedProvider):
             item_belief_narrowing=config.item_belief_narrowing, stats_block=config.stats_block_enabled,
             tier2_investment=config.tier2_investment, tier2_residuals=config.tier2_residuals,
             transition_token_budget=config.transition_token_budget)
-        _require(tuple((k, mask_values[k]) for k in MASK_NAMES) == contract.feature_masks
+        if getattr(config,'set_posterior_narrowing',False):mask_values['set_posterior_narrowing']=True
+        _require(tuple(mask_values.items()) == contract.feature_masks
                  and bool(getattr(config, 'self_moves', False)) == contract.self_moves, 'raw feature masks differ')
         # V2 self_moves: a serving actor encodes what its checkpoint declares; OBS_SELF_MOVES is for measurement tools.
         from .observation import require_declared_self_moves
@@ -337,7 +343,7 @@ class RawPolicy(OwnedProvider):
                 and _sha(_canonical(config.category_vocab)) == contract.category_vocab_sha256,
                 'raw model/config/vocabulary binding drift')
             _require(tuple((k, getattr(config, {'exact_state':'exact_state_enabled',
-                'stats_block':'stats_block_enabled'}.get(k,k))) for k in MASK_NAMES) == contract.feature_masks
+                'stats_block':'stats_block_enabled'}.get(k,k))) for k,_ in contract.feature_masks) == contract.feature_masks
                 and bool(getattr(config, 'self_moves', False)) == contract.self_moves,
                 'raw feature mask binding drift')
             _require(tuple((type(getattr(policy,k)),getattr(policy,k)) for k in fields) == selection
@@ -424,7 +430,7 @@ class JaxBackend(OwnedProvider):
             and catalog.source.source_hash == contract.belief_set_source_hash
             and _vocab_sha(catalog.vocabulary) == contract.category_vocab_sha256
             and catalog.vocabulary.size == contract.categorical_vocab_size
-            and tuple((k,getattr(catalog.masks,k)) for k in MASK_NAMES) == contract.feature_masks
+            and _mask_values(catalog.masks) == contract.feature_masks
             and bool(getattr(catalog.masks,'self_moves',False)) == contract.self_moves,
             'JAX encoder contract differs')
         _require(owner in ('p1','p2'), 'absolute owning side required')
@@ -448,7 +454,7 @@ class JaxBackend(OwnedProvider):
         _require(self.catalog.checkpoint_sha256 == self.contract.checkpoint_sha256
             and self.catalog.source.source_hash == self.contract.belief_set_source_hash
             and _vocab_sha(self.catalog.vocabulary) == self.contract.category_vocab_sha256
-            and tuple((k,getattr(self.catalog.masks,k)) for k in MASK_NAMES) == self.contract.feature_masks
+            and _mask_values(self.catalog.masks) == self.contract.feature_masks
             and bool(getattr(self.catalog.masks,'self_moves',False)) == self.contract.self_moves
             and np.array_equal(np.asarray(self.catalog.binding),self._catalog_binding), 'JAX namespace drift')
         _require(not self.adapter.jax.config.jax_enable_x64

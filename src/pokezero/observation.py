@@ -405,6 +405,7 @@ class ObservationFeatureMasks:
     # construction from the OBS_SELF_MOVES measurement override, else False. An explicit bool is a
     # declaration and always wins. After construction the field is a plain bool.
     self_moves: bool | None = None
+    set_posterior_narrowing: bool = False
 
     def __post_init__(self) -> None:
         resolved = resolve_self_moves(self.self_moves)
