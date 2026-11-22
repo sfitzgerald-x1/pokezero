@@ -195,6 +195,30 @@ class ReconstructionControllerTests(unittest.TestCase):
   self.assertEqual(len(entries),64)
 
 class SelfMovesTests(unittest.TestCase):
+ def test_original_off_bank_accepts_frozen_encoder_contract(self):
+  from unittest.mock import Mock,patch
+  from pokezero import category_vocab,dex,live_protocol_actor,randbat
+  from gpu_engine import public_belief,source_provenance,v4_encoder,v5_device_backend
+  decl=dict(source_commit='a'*40,source_sha256='b'*64,pool_sha256='c'*64,category_vocabulary_sha256='d'*64)
+  runtime=dict(source_commit=decl['source_commit'],memory_policy={},showdown=dict(root='original'),
+               constructor_pool=dict(path='original-pool'))
+  vocabulary=dict(tokens=(),oov_buckets=0,aliases={})
+  worker=Mock()
+  worker._runtime_metadata.return_value=(None,vocabulary,'gender',None)
+  masks={'exact_state':True}
+  contract=SimpleNamespace(checkpoint_sha256='e'*64,feature_masks=tuple(masks.items()))
+  catalog=SimpleNamespace(masks=SimpleNamespace())
+  prepared=SimpleNamespace(source_sha256=decl['source_sha256'],pool_sha256=decl['pool_sha256'],
+      category_sha256=decl['category_vocabulary_sha256'],observation_tables=SimpleNamespace(belief=None))
+  with patch.object(producer,'read',return_value=runtime),patch.object(category_vocab,'CategoryVocabulary'), \
+       patch.object(dex,'load_showdown_dex_cached'),patch.object(randbat,'load_gen3_randbat_source_cached'), \
+       patch.object(live_protocol_actor.ActorContract,'champion',return_value=contract),patch.object(public_belief,'compile_source'), \
+       patch.object(v4_encoder,'compile_encoder',return_value=catalog) as compile_encoder, \
+       patch.object(source_provenance,'load_constructor_pool',return_value='pool'), \
+       patch.object(v5_device_backend,'prepare',return_value=prepared):
+   self.assertEqual(producer.prepare_original(worker,decl,{}),(prepared,'pool','gender'))
+   self.assertEqual(compile_encoder.call_args.kwargs['feature_masks'],masks)
+
  def test_truth_actor_encodes_off_and_grid_views_follow_the_bank(self):
   from types import SimpleNamespace as Namespace
   from unittest.mock import patch
@@ -226,6 +250,7 @@ class SelfMovesTests(unittest.TestCase):
    self.assertEqual([v.self_moves for v in executor.view(state,None)],[True,True])
 
  def test_both_head_kinds_must_match_the_bank_encoding(self):
+  import sys
   from types import SimpleNamespace as Namespace
   from unittest.mock import patch
   from gpu_engine import champion, device_rollout_truth_score as score, v5_model
@@ -234,7 +259,7 @@ class SelfMovesTests(unittest.TestCase):
   head=dict(archive=archive,checkpoint_sha256='c'*64,category_vocabulary_sha256='b'*64)
   config=Namespace(tokens=23,vocabulary=32)
   meta=dict(weights_archive_sha256=archive['sha256'],checkpoint_sha256=head['checkpoint_sha256'])
-  with patch.object(score,'label_vocabulary_sha256',return_value='d'*64):
+  with patch.dict(sys.modules,{'pokezero.checkpoint_self_moves':None}),patch.object(score,'label_vocabulary_sha256',return_value='d'*64):
    for kind,loader in (('champion23',champion),('public-v5',v5_model)):
     for on in (False,True):
      with self.subTest(kind=kind,self_moves=on):
@@ -245,6 +270,9 @@ class SelfMovesTests(unittest.TestCase):
        self.assertTrue(callable(score.load_predictor(dict(head,kind=kind),matching)))
        with self.assertRaisesRegex(ValueError,'scoring archive self_moves differs'):
         score.load_predictor(dict(head,kind=kind),mismatched)
+    with patch.object(loader,'load',return_value=({},config,dict(meta,self_moves=1))):
+     with self.assertRaisesRegex(ValueError,'explicit bool archive self_moves'):
+      score.load_predictor(dict(head,kind=kind),bank)
 
 
 class StoredPredictionTests(unittest.TestCase):
@@ -260,7 +288,8 @@ class StoredPredictionTests(unittest.TestCase):
   branches=[dict(action=0,status='OBSERVED',observation=dict(value=.1)),dict(action=1,status='COMPLETE'),dict(action=2,status='REFUSED')]
   group=dict(selector=SEL,reply=0,chance_id='chance',root_id='root',world_id='world',branches=branches)
   records=[dict(selector=SEL,action=i,reply=0,chance_id='chance',root_id='root',world_id='world',rollouts=full(1))for i in range(3)]
-  manifest=dict(declaration={},positions={},siblings={},declared_children=3,declared_slots=2,source_commit='source',
+  manifest=dict(declaration={},positions={},siblings={},root_index=dict(path='index.json',sha256='a'*64),
+                declared_children=3,declared_slots=2,source_commit='source',
                 prespec={},recipe=vars(t.Recipe(3,max_requests=2)),raw_actor={})
   calls=[]
   def predict(docs):
@@ -279,8 +308,13 @@ class StoredPredictionTests(unittest.TestCase):
     return dict(path=str(path),sha256=__import__('hashlib').sha256(path.read_bytes()).hexdigest())
    summary_ref=producer.publish(root/'summary.json',dict(manifest=manifest,truth=jsonl('truth.jsonl',[manifest,*records]),head_grids=jsonl('grids.jsonl',grids)))
    config=dict(declaration={},prespec={},raw_actor={},seed=3,max_requests=2)
-   with patch.object(producer,'bank_manifest',return_value=(None,None,None,None,positions,[group],None,manifest)),patch('pokezero.v5_device_evaluation_bank.read_artifact',return_value={}),patch.object(score,'load_predictor',return_value=predict):
+   with patch.object(producer,'bank_manifest',return_value=(None,None,None,None,positions,[group],None,manifest)) as bank_manifest, \
+        patch('pokezero.v5_device_evaluation_bank.read_artifact',return_value={}),patch.object(score,'load_predictor',return_value=predict):
     result=score.evaluate(config,summary_ref,dict(kind='inert'),root/'score.json')
+    mismatched=dict(manifest,root_index=dict(manifest['root_index'],sha256='b'*64))
+    bank_manifest.return_value=(*bank_manifest.return_value[:-1],mismatched)
+    with self.assertRaisesRegex(ValueError,'truth and head bank differ'):
+     score.evaluate(config,summary_ref,dict(kind='inert'),root/'different-index.json')
    saved=producer.read(result['predictions'])
    self.assertEqual(len(calls),3)
    self.assertEqual([len(c)for c in calls],[1,1,1])

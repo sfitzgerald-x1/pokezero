@@ -15,7 +15,6 @@ from .device_rollout_truth import read,publish,label_vocabulary_sha256
 def load_predictor(head,bank):
     import jax
     import jax.numpy as j
-    from pokezero.checkpoint_self_moves import archive_self_moves
     from . import champion,v5_model
     if head['kind']=='champion23':
         params,c,meta=champion.load(head['archive']['path'])
@@ -35,7 +34,12 @@ def load_predictor(head,bank):
             out=v5_model.forward(params,inputs,c,compute_dtype='bfloat16')
             return out.value,out.valid&j.isfinite(out.value)&j.all(j.isfinite(out.policy_logits),axis=-1)
     else:raise ValueError('explicit public-v5/champion23 head required; privileged fitting is a separate partitioned step')
-    if archive_self_moves(meta) is not bank.get('self_moves', False):
+    if type(meta) is not dict:
+        raise ValueError('actor archive metadata object required')
+    self_moves = meta.get('self_moves', False)
+    if type(self_moves) is not bool:
+        raise ValueError('explicit bool archive self_moves declaration required')
+    if self_moves is not bank.get('self_moves', False):
         raise ValueError('scoring archive self_moves differs from the device-bank declaration')
     # Batch shape does not select or reorder data; outputs are accepted only as
     # finite bounded predictions. This head never supplies rollout labels.
@@ -79,7 +83,7 @@ def evaluate(config,summary_reference,head,output):
     from .device_rollout_truth import bank_manifest
     _,_,_,_,positions,groups,_,manifest=bank_manifest(config,schema)
     summary=read(summary_reference)
-    if any(summary['manifest'][k]!=manifest[k]for k in ('declaration','positions','siblings','declared_children','source_commit')):
+    if any(summary['manifest'][k]!=manifest[k]for k in ('declaration','positions','siblings','root_index','declared_children','source_commit')):
         raise ValueError('truth and head bank differ')
     if summary['manifest'].get('self_moves', False) is not manifest.get('self_moves', False):
         raise ValueError('truth and head bank self_moves differ')
