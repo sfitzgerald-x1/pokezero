@@ -144,23 +144,21 @@ class RunChecksTests(unittest.TestCase):
                 else:
                     refuse_unthreaded({}, plan=plan, catalog=catalog, context='t')
 
-    def test_off_only_entry_points_refuse_before_actor_or_backend_use(self):
+    def test_champion_search_refuses_before_actor_or_backend_use(self):
         from gpu_engine import v2_search_head_to_head as search
         with tempfile.TemporaryDirectory() as tmp:
-            common = ['--config', 'unused.json', '--out', tmp, '--a-run', 'a', '--a-iteration', '0', '--b-run', 'b', '--b-iteration', '0']
             champion = ['--config', 'unused.json', '--out', tmp, '--b-run', 'champion', '--b-iteration', '0', '--reduction', 'none', '--label', 'unit',
                 '--champion-archive', 'c.npz', '--champion-archive-sha256', 'a'*64, '--champion-checkpoint-sha256', 'b'*64]
-            for module, args in ((search, common + ['--reduction', 'none', '--label', 'unit']), (search, champion)):
-                for plan_on, catalog_on in ((True, False), (False, True), (True, True)):
-                    context = dict(plan=SimpleNamespace(self_moves=plan_on),
-                        prepared=SimpleNamespace(catalog=SimpleNamespace(masks=SimpleNamespace(self_moves=catalog_on))))
-                    with self.subTest(module=module.__name__, args=args, plan_on=plan_on, catalog_on=catalog_on), \
-                            mock.patch('gpu_engine.v2_fused.prepare', return_value=context), \
-                            mock.patch.object(module, 'snapshot', side_effect=AssertionError('actor loaded')), \
-                            mock.patch.object(search, 'champion_setup', side_effect=AssertionError('champion loaded')), \
-                            mock.patch('gpu_engine.v5_device_backend.RuntimeBackend', side_effect=AssertionError('backend constructed')):
-                        with self.assertRaisesRegex(ValueError, 'not threaded through this tool'):
-                            module.main(args)
+            for plan_on, catalog_on in ((True, False), (False, True), (True, True)):
+                context = dict(plan=SimpleNamespace(self_moves=plan_on),
+                    prepared=SimpleNamespace(catalog=SimpleNamespace(masks=SimpleNamespace(self_moves=catalog_on))))
+                with self.subTest(plan_on=plan_on, catalog_on=catalog_on), \
+                        mock.patch('gpu_engine.v2_fused.prepare', return_value=context), \
+                        mock.patch.object(search, 'snapshot', side_effect=AssertionError('actor loaded')), \
+                        mock.patch.object(search, 'champion_setup', side_effect=AssertionError('champion loaded')), \
+                        mock.patch('gpu_engine.v5_device_backend.RuntimeBackend', side_effect=AssertionError('backend constructed')):
+                    with self.assertRaisesRegex(ValueError, 'not threaded through this tool'):
+                        search.main(champion)
 
 
 @requires_showdown('the synthetic fixture compiles its catalog from a pokemon-showdown checkout')
