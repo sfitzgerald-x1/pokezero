@@ -142,6 +142,9 @@ class ManifestTests(unittest.TestCase):
    config['root_index']=dict(path=str(p),sha256=hashlib.sha256(p.read_bytes()).hexdigest())
    manifest=producer.bank_manifest(config,fake)[-1]
    self.assertNotIn('self_moves',manifest)
+   header['self_moves']=True
+   with self.assertRaisesRegex(ValueError,'bank header self_moves differs'):
+    producer.bank_manifest(config,fake)
    decl['self_moves']=True
    with self.assertRaisesRegex(ValueError,'saved-root index self_moves differs'):
     producer.bank_manifest(config,fake)

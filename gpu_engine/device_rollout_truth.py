@@ -49,6 +49,8 @@ def bank_manifest(config,schema):
     self_moves = decl.get('self_moves', False)
     ph,positions=schema._records(config['positions'],schema.POSITIONS)
     sh,groups=schema._records(config['siblings'],schema.SIBLINGS)
+    if any(header.get('self_moves', False) is not self_moves for header in (ph, sh)):
+        raise ValueError('bank header self_moves differs from the device-bank declaration')
     protocol=dict(positions=config['positions'],siblings=config['siblings'],label_vocabulary_sha256=labels.sha256)
     schema.resolve_device_bank(protocol,None) # Original full1024/all-child guard.
     if ph['device_bank']!=config['declaration']or sh['device_bank']!=config['declaration']:

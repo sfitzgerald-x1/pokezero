@@ -24,7 +24,9 @@ def prepare(config,source,output,*,enable_prepare=False):
     worker,schema=helper._import_original(source)
     decl,batches,games,labels,positions,groups,index,bank_manifest=helper.bank_manifest(config,schema)
     summary=helper.read(config['truth_summary']);truth_manifest=summary['manifest']
-    if any(truth_manifest[k]!=bank_manifest[k]for k in ('declaration','positions','siblings','source_commit','declared_children')):raise ValueError('same original truth bank required')
+    if any(truth_manifest[k]!=bank_manifest[k]for k in ('declaration','positions','siblings','root_index','source_commit','declared_children')):raise ValueError('same original truth bank required')
+    if truth_manifest.get('self_moves', False) is not bank_manifest.get('self_moves', False):
+        raise ValueError('truth and privileged bank self_moves differ')
     if truth_manifest['critic_split_seed']!=2103700000:raise ValueError('same predeclared five-fold seed required')
     prepared,pool,gender=helper.prepare_original(worker,decl,config['runtime'])
     from gpu_engine import device_root_snapshot as snapshots,v5_device_evaluation_bank as bank

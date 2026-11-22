@@ -210,6 +210,11 @@ def crossfit(config,rows_reference,output,*,enable_fit=False):
     fit=FitConfig(**config['fit']);decl,event=production_binding(config)
     manifest,records,arrays=load_rows(rows_reference)
     if manifest['view']!='PRIVILEGED_OFFLINE_ONLY'or manifest['split_seed']!=fit.seed or manifest['truth_summary']!=config['truth_summary']:raise ValueError('predeclared private sidecar/folds required')
+    from .checkpoint_self_moves import run_checkpoint
+    _,declared,proof=run_checkpoint(Path(config['production_declaration']['path']).resolve().parent,
+        event['path'],event['sha256'],iteration=event['iteration'])
+    if declared is not manifest['bank'].get('self_moves', False):
+        raise ValueError('privileged checkpoint self_moves differs from the device-bank declaration')
     from . import v5_training as training
     from .v5_model import MODEL_INPUTS
     output=Path(output);output.mkdir(parents=True,exist_ok=False)
@@ -218,9 +223,6 @@ def crossfit(config,rows_reference,output,*,enable_fit=False):
     snapshot=output/'production-input.pt'
     with snapshot.open('xb')as f:f.write(artifact(config['checkpoint'],json_value=False))
     snapshot.chmod(0o444)
-    from .checkpoint_self_moves import run_checkpoint
-    _,declared,proof=run_checkpoint(Path(config['production_declaration']['path']).resolve().parent,
-        event['path'],event['sha256'],iteration=event['iteration'])
     runtime=training.load_checkpoint(snapshot,enable_v5=True,
         expected_checkpoint_sha256=event['sha256'],expected_self_moves=declared,off_provenance=proof,
         **({'expected_learning_rate_window':training.DeclaredGameWindow(**config['learning_rate_window'])}if config.get('learning_rate_window')is not None else{}))
