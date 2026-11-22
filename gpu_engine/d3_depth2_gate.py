@@ -1708,7 +1708,7 @@ def _probe(worker, runtime, jax):
         log('PROBE_DIFFERS', error=str(error));jax.config.update('jax_enable_x64', False);jax.config.update('jax_default_matmul_precision', 'highest')
 
 
-def saved_root_requests(args):
+def saved_root_requests(args, *, allow_self_moves=False):
     """The 40 saved D3 cost roots' Requests, as d3_saved_root_gate --batched-prep builds them (no serial pricing)."""
     root = Path(args.saved_roots)
     from pokezero import v5_worker as worker, v5_run as runs, v5_device_evaluation_bank as schema, v5_contract as contract
@@ -1717,14 +1717,18 @@ def saved_root_requests(args):
     worker._memory(runtime['memory_policy'], apply=True)   # must precede the first JAX import
     import jax
     _probe(worker, runtime, jax)
-    prepared, _, _, _ = worker.prepare_device_runtime(SimpleNamespace(runtime=runtime, vocabulary=vocabulary, plan=SimpleNamespace(pool_sha256=pool_sha)))
     from gpu_engine import device_d_cost as cost, v5_device_teacher as teacher, device_public_worlds as worlds
     from gpu_engine.device_public_teacher_batch import FramePricer, Request
     index = worker._record(dict(path=str(root / 'bank/cost-root-index.json'), sha256=args.index_sha256))
     declaration, batches, _, labels = schema.declaration(index['declaration'])
     prespec = json.loads((root / 'prespec.json').read_text())
     plan = cost.plan_from_bank(profile=profile, labels=labels, category=category, batches=batches, pool_sha256=pool_sha,
-        selection_seed=declaration['cost_recipe_seed'], run_id=prespec['cost_run_id'], max_requests=declaration['max_requests'])
+        selection_seed=declaration['cost_recipe_seed'], run_id=prespec['cost_run_id'], max_requests=declaration['max_requests'],
+        self_moves=declaration.get('self_moves', False))
+    if not allow_self_moves:
+        from gpu_engine.private_self_moves import refuse_unthreaded
+        refuse_unthreaded(plan=plan, context='D3 saved roots')
+    prepared, _, _, _ = worker.prepare_device_runtime(SimpleNamespace(runtime=runtime, vocabulary=vocabulary, plan=plan))
     snapshot = runs.Snapshot(**json.loads((root / 'cost-snapshot.json').read_text()))
     provider = teacher.Provider(prepared, plan, batch_joint=True);captured = {};actors = []
     def capture(roots, frames, bank, params):
@@ -1932,7 +1936,8 @@ def main(argv=None):
         checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference,
         resolved='EVALUATOR_RESOLVED follows once the bank is loaded' + ('' if args.head_archive else ' (the bank snapshot\'s actor)'))
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
-    loaded = saved_root_requests(args) if args.saved_roots else bank_chunk_requests(args, allow_self_moves=True)
+    loader = saved_root_requests if args.saved_roots else bank_chunk_requests
+    loaded = loader(args, allow_self_moves=True)
     provider, plan, params, frame_pricer, source = loaded.provider, loaded.plan, loaded.params, loaded.frame_pricer, loaded.source
     head = load_head(args, plan=plan, labels=loaded.labels, category_sha256=loaded.category_sha256) if args.head_archive else None
     if head is not None:params = (head[0],)
