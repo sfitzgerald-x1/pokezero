@@ -35,11 +35,13 @@ def _root_binding(context, lines, source_binding, address):
     return context.battle_id, context.player_id, prefix, source_binding, address
 
 
-def validate_plan(plan, public_root, lines, *, address, source_hash, source_binding):
+def validate_plan(plan, public_root, detached, lines, *, source_hash):
     """Match the joint draw to the original owning decision and exact wire prefix."""
-    expected = _root_binding(public_root.context, lines, source_binding, address)
+    address = detached.address
+    expected = _root_binding(public_root.context, lines, detached.source_binding_sha256, address)
     if (type(plan) is not JointPlan or plan.source_hash != source_hash
             or plan.root_binding != expected or public_root.owner_lines_sha256 != expected[2]
+            or detached.owning_wire != (expected[0], expected[2])
             or public_root.address != address or expected[1] != f'p{address.owner + 1}'):
         raise ValueError('joint plan requires the same owning root, prefix and source binding')
 

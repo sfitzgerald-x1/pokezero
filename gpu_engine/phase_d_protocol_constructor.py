@@ -133,7 +133,8 @@ class ProtocolConstructor:
                     if joint_plan is None:raise ValueError('joint feature producer required')
                     feature_kwargs=dict(set_posterior_payload=joint_plan.feature_payload,game_sha256=joint_plan.game_sha256)
                     adapter.bind_set_posterior(joint_plan.feature_payload,game_sha256=joint_plan.game_sha256)
-                detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,defer_sleep=True,protocol_facts=facts,lines=lines)
+                detached=worlds.from_b2(adapter,packet,self.source,self.metadata,address=public.address,
+                    defer_sleep=True,protocol_facts=facts,lines=lines,bind_joint_root=joint_plan is not None)
                 if detached.source_binding_sha256!=self.source.binding_sha256:
                     raise worlds.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
                 detached=protocol._carried_root(public,detached,lines,self.metadata)

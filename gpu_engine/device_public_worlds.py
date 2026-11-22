@@ -117,6 +117,7 @@ class Root:
     public: object                 # Owner-safe REDACTED carry; rebase foe cursor.
     source_binding_sha256: str
     reply_private_history_available: bool = False
+    owning_wire: tuple[str, str] | None = None  # Battle ID and literal prefix digest from a joint-enabled B2 capture.
 
 
 def _redact_peer_private(cloned, owner):
@@ -440,8 +441,7 @@ def plan_starts(root, source, recipe, *, joint_plan=None, public_root=None,
             joint_plan=joint_session.prepare(public_root.context,lines,dex=dex,
                 seed=recipe.world_seed(root.address,0),count=2,binding=source.binding_sha256,address=root.address)
         from pokezero.joint_serving import validate_plan
-        validate_plan(joint_plan,public_root,lines,address=root.address,source_hash=source.source_hash,
-            source_binding=source.binding_sha256)
+        validate_plan(joint_plan, public_root, root, lines, source_hash=source.source_hash)
     diagnostic = dict(joint_plan.diagnostic) if joint_plan is not None else None
     try:
         revealed = _revealed(root, source)

@@ -22,16 +22,17 @@ class JointEvidenceArithmetic(unittest.TestCase):
         lines = ('|turn|2',)
         prefix = hashlib.sha256(b'|turn|2\n').hexdigest()
         root = NS(address=address, context=context, owner_lines_sha256=prefix)
+        detached = NS(address=address, owning_wire=('battle', prefix), source_binding_sha256='binding')
         plan = JointPlan(None, {}, None, {}, 'source', 'game',
                          root_binding=('battle', 'p1', prefix, 'binding', address))
-        def check(root, lines, address):
-            validate_plan(plan, root, lines, address=address, source_hash='source', source_binding='binding')
-        check(root, lines, address)
+        def check(root, lines, detached):
+            validate_plan(plan, root, detached, lines, source_hash='source')
+        check(root, lines, detached)
         later = DecisionAddress(1, 3, 0)
         with self.assertRaisesRegex(ValueError, 'same owning root'):
-            check(NS(**{**vars(root), 'address': later}), lines, later)
+            check(NS(**{**vars(root), 'address': later}), lines, NS(**{**vars(detached), 'address': later}))
         with self.assertRaisesRegex(ValueError, 'same owning root'):
-            check(root, (*lines, '|-damage|p2a: Foe|50/100'), address)
+            check(root, (*lines, '|-damage|p2a: Foe|50/100'), detached)
 
     def test_fallback_features_use_the_actual_restricted_stage1_law(self):
         session=JointSession.__new__(JointSession)

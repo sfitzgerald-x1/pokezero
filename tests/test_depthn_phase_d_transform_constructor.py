@@ -139,6 +139,21 @@ class TransformConstructorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'OWN_STATIC_IV_FACTS_UNAVAILABLE_OR_AMBIGUOUS'):
             live.from_b2(adapter,after,self.source,self.metadata,address=DecisionAddress(1,1,0))
 
+    def test_joint_root_keeps_the_adapter_battle_and_literal_prefix(self):
+        import hashlib
+        from pokezero.recorded_encoder_runner import literal_history
+
+        _, packet, lines, adapter = self.transformed('ditto', 0)
+        address = DecisionAddress(1, 1, 0)
+        with literal_history(adapter, lines):
+            root = live.from_b2(adapter, packet, self.source, self.metadata,
+                                address=address, lines=lines, bind_joint_root=True)
+            with self.assertRaisesRegex(ValueError, 'ORIGINAL_OWNING_WIRE'):
+                live.from_b2(adapter, packet, self.source, self.metadata,
+                             address=address, lines=lines[:-1], bind_joint_root=True)
+        digest = hashlib.sha256(''.join(line + '\n' for line in lines).encode()).hexdigest()
+        self.assertEqual(root.owning_wire, (adapter.battle_id, digest))
+
     def test_opposing_ditto_and_mew_copy_our_donor_and_charge_copied_pp(self):
         from gpu_engine import engine_device_public_hooks as hooks,future_state
         for name in ('ditto','mew'):
