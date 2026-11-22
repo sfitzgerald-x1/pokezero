@@ -4522,9 +4522,10 @@ def per_ply(text, depth, name):
 def load_roots(args):
     """Requests (saved roots or a bank chunk), the evaluator (head override, champion 9375 or the bank snapshot's actor) and
     --max-roots. `forward` is the champion evaluator (None for V2: the pricers' default forward)."""
-    loaded = (g2.saved_root_requests if args.saved_roots else g2.bank_chunk_requests)(args)
+    champion_archive = getattr(args, 'champion_archive', None)
+    loaded = g2.saved_root_requests(args) if args.saved_roots else g2.bank_chunk_requests(args, allow_self_moves=not champion_archive)
     head = g2.load_head(args, plan=loaded.plan, labels=loaded.labels, category_sha256=loaded.category_sha256) if args.head_archive else None
-    champion = g2.load_champion(args, loaded) if getattr(args, 'champion_archive', None) else None
+    champion = g2.load_champion(args, loaded) if champion_archive else None
     params = (head[0],) if head is not None else (champion.params,) if champion is not None else loaded.params
     groups, root_values, dropped, arm_checked = g2.bind_roots(loaded.groups, params, loaded.plan, head_config=None if head is None else head[1],
         evaluator=champion)
@@ -4560,6 +4561,8 @@ def parse(argv=None):
     parser.add_argument('--index-sha256', help='sha256 of bank/cost-root-index.json (with --saved-roots)')
     parser.add_argument('--d3-root', help='the D3 bank run root (prespec.json, runtime.json, run/)')
     parser.add_argument('--chunk', type=int, help='bank chunk index (with --d3-root); chunks 0..N are collected')
+    parser.add_argument('--initializer-run', type=Path,
+        help='original OFF run directory with the matching iteration -1 snapshot for an OFF initializer in an ON bank chunk')
     parser.add_argument('--memory-policy', action='store_true', help="with --d3-root: apply the bank runtime's JAX memory policy")
     parser.add_argument('--out', help='new output directory (every mode but --reverdict)')
     parser.add_argument('--reverdict', metavar='REPORT_JSON', help='offline: re-apply the current verdict rules to a saved gate.json (writes '

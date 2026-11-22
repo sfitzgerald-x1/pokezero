@@ -7,6 +7,7 @@ that original namespace. All data and model files stay on the caller's remote
 storage. This is not a training collector or replay of original outcomes.
 """
 import argparse
+from dataclasses import replace
 import hashlib
 import importlib.util
 import json
@@ -45,10 +46,11 @@ def publish(path,value):
 def bank_manifest(config,schema):
     """Validate original complete bank, before original runtime/model work."""
     decl,batches,games,labels=schema.declaration(config['declaration'])
-    if decl.get('self_moves', False):
-        raise ValueError('rollout truth does not support a self_moves ON bank')
+    self_moves = decl.get('self_moves', False)
     ph,positions=schema._records(config['positions'],schema.POSITIONS)
     sh,groups=schema._records(config['siblings'],schema.SIBLINGS)
+    if any(header.get('self_moves', False) is not self_moves for header in (ph, sh)):
+        raise ValueError('bank header self_moves differs from the device-bank declaration')
     protocol=dict(positions=config['positions'],siblings=config['siblings'],label_vocabulary_sha256=labels.sha256)
     schema.resolve_device_bank(protocol,None) # Original full1024/all-child guard.
     if ph['device_bank']!=config['declaration']or sh['device_bank']!=config['declaration']:
@@ -56,6 +58,8 @@ def bank_manifest(config,schema):
     index=read(config['root_index'])
     if index['declaration']!=config['declaration']or index['namespace']['source_commit']!=decl['source_commit']:
         raise ValueError('original saved-root index differs')
+    if index['namespace'].get('self_moves', False) is not self_moves:
+        raise ValueError('saved-root index self_moves differs from the device-bank declaration')
     observed=sum(p['status']=='OBSERVED'for p in positions);children=sum(len(g['branches'])for g in groups)
     if len(positions)!=1024 or len(games)!=256:
         raise ValueError('original declared bank denominator differs; no survivor replacement')
@@ -74,6 +78,8 @@ def bank_manifest(config,schema):
         original_outcome_scope='Original collector actors/outcomes, not outcomes of the evaluated head or raw9375 continuations; terminal only on root calibration; NEVER copied to alternate children',
         missing_root_policy='Quarantined exact prefix reconstruction or MISSING; no old terminal rerun, no refill',
         truth_policy_checkpoint_sha256=rules().CHAMPION)
+    if self_moves:
+        manifest['self_moves'] = True
     return decl,batches,games,labels,positions,groups,index,manifest
 
 
@@ -97,12 +103,20 @@ def prepare_original(worker,decl,runtime_ref):
     from pokezero.live_protocol_actor import ActorContract
     from gpu_engine import source_provenance,public_belief,v4_encoder,v5_device_backend
     source=load_gen3_randbat_source_cached(runtime['showdown']['root']);dex=load_showdown_dex_cached(runtime['showdown']['root'])
+    self_moves = decl.get('self_moves', False)
     contract=ActorContract.champion();vocabulary=CategoryVocabulary(tuple(v['tokens']),v['oov_buckets'],v['aliases'])
-    catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),dex,vocabulary,checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
+    if self_moves:
+        contract = replace(contract, self_moves=True)
+    encoder_masks = getattr(contract, 'encoder_masks', None)
+    feature_masks = dict(contract.feature_masks) if encoder_masks is None else encoder_masks()
+    catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),dex,vocabulary,checkpoint_sha256=contract.checkpoint_sha256,feature_masks=feature_masks)
     pool=source_provenance.load_constructor_pool(runtime['constructor_pool']['path'])
     prepared=v5_device_backend.prepare(catalog,source,pool,source_commit=runtime['source_commit'])
     if prepared.source_sha256!=decl['source_sha256']or prepared.pool_sha256!=decl['pool_sha256']or prepared.category_sha256!=decl['category_vocabulary_sha256']:
         raise ValueError('original compiled source/pool/category differs')
+    table_encoding = getattr(prepared.observation_tables.belief, 'self_moves', None) is not None
+    if getattr(catalog.masks, 'self_moves', False) is not self_moves or table_encoding != self_moves:
+        raise ValueError('original compiled self_moves differs from the device-bank declaration')
     return prepared,pool,gender
 
 
@@ -126,9 +140,11 @@ def reconstruct(prepared,pool,gender,decl,batches,positions,index,directory,bank
     from gpu_engine.engine_request_source import _gender
     from gpu_engine.v5_device_rollout import RootContext
     params=[];config=None
+    self_moves = decl.get('self_moves', False)
     for actor in decl['actors']:
         p,c,meta=v5_model.load(actor['archive']['path'],expected_archive_sha256=actor['archive']['sha256'],expected_checkpoint_sha256=actor['checkpoint_sha256'],expected_category_vocabulary_sha256=decl['category_vocabulary_sha256'],expected_label_vocabulary_sha256=label_vocabulary_sha256(decl['label_vocabulary']),enable_v5=True)
-        from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta,context='device rollout truth')   # V2 self_moves
+        if meta.get('self_moves', False) is not self_moves:
+            raise ValueError('original actor archive self_moves differs from the device-bank declaration')
         if config is not None and config!=c:raise ValueError('original actor geometry differs')
         config=c;params.append(p)
     executor=bank.make_executor(prepared,config)
@@ -176,11 +192,19 @@ class RawExecutor:
         params,config,meta=champion.load(archive['path'])
         if meta['weights_archive_sha256']!=archive['sha256']or meta['checkpoint_sha256']!=rules().CHAMPION or config.tokens!=23 or config.vocabulary!=prepared.category_size:
             raise ValueError('immutable original9375 champion23 archive required')
+        if meta.get('self_moves', False) is not False:
+            raise ValueError('the frozen 9375 truth actor requires self_moves OFF')
         self.prepared=prepared;self.meta=meta
-        def query(s,p,keys):
+        # The frozen truth/referee policy still uses OFF observations. The heads
+        # score the bank's encoding, including on newly materialized grid leaves.
+        encoding = {'self_moves': False} if getattr(prepared.catalog.masks, 'self_moves', False) else {}
+        def observe(s,p,**kwargs):
             requested=sample.request_seats(s)
             mask=transition.action_mask(s,prepared.engine_tables)&requested[...,None]
-            views=tuple(obs.encode(s,public.readout(p,j.full(len(s.done),side,j.int32)),prepared.observation_tables,observer_sides=j.full(len(s.done),side,j.int32),legal_action_mask=mask[:,side])for side in (0,1))
+            views=tuple(obs.encode(s,public.readout(p,j.full(len(s.done),side,j.int32)),prepared.observation_tables,observer_sides=j.full(len(s.done),side,j.int32),legal_action_mask=mask[:,side],**kwargs)for side in (0,1))
+            return views,requested
+        def query(s,p,keys):
+            views,requested=observe(s,p,**encoding)
             pred=sample.run_actor(params,config,views,actor_kind='champion23')
             legal=j.stack([v.legal_action_mask for v in views],axis=1)
             finite=pred.finite&(j.stack([v.error for v in views],axis=1)==0)&j.any(legal,axis=-1)
@@ -194,7 +218,7 @@ class RawExecutor:
         self.chance=jax.jit(transition.sample_chance_inputs)
         self.policy_keys=jax.jit(lambda policy,step:jax.vmap(lambda k:jax.vmap(lambda side:jax.random.fold_in(jax.random.fold_in(k,step),side))(j.arange(2)))(policy))
         self.advance=jax.jit(lambda s,p,a,c:transition.step_with_public(s,a,prepared.engine_tables,p,belief_tables=prepared.observation_tables.belief,chance_inputs=c))
-        self.view=jax.jit(lambda s,p:query(s,p,j.zeros((len(s.done),2,2),j.uint32))[0])
+        self.view=jax.jit(lambda s,p:observe(s,p)[0])
 
     def continuation_batch(self,children,recipe):
         """Fixed32×64 program, preserving unavailable/tail child lane positions.

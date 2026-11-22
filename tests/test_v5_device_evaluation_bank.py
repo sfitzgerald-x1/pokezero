@@ -107,20 +107,22 @@ class DeviceHeldoutBankTests(unittest.TestCase):
                 self.assertIs(header['self_moves'], True)
         protocol = dict(artifacts, label_vocabulary_sha256=labels.sha256)
         self.assertIs(schema.resolve_device_bank(protocol, None).self_moves, enabled)
-        index = json.loads((directory / 'cost-root-index.json').read_text())
+        index_path = directory / 'cost-root-index.json'
+        index = json.loads(index_path.read_text())
         journal = json.loads((directory / 'journal.json').read_text())
         self.assertEqual(index['namespace'], journal['namespace'])
         self.assertEqual('self_moves' in index['namespace'], enabled)
-        return protocol, reference
+        return protocol, reference, dict(path=str(index_path), sha256=run._file_sha(index_path))
 
     def test_capture_binds_encoding_in_both_headers_and_the_saved_root_namespace(self):
+        from gpu_engine.device_rollout_truth import bank_manifest
         for enabled in (False, True):
             with self.subTest(self_moves=enabled), tempfile.TemporaryDirectory() as tmp:
-                protocol, reference = self.capture(Path(tmp), enabled)
+                protocol, reference, index = self.capture(Path(tmp), enabled)
+                config = dict(declaration=reference, positions=protocol['positions'], siblings=protocol['siblings'], root_index=index)
+                manifest = bank_manifest(config, schema)[-1]
+                self.assertIs(manifest.get('self_moves', False), enabled)
                 if enabled:
-                    from gpu_engine.device_rollout_truth import bank_manifest
-                    with self.assertRaisesRegex(ValueError, 'does not support a self_moves ON bank'):
-                        bank_manifest(dict(declaration=reference), schema)
                     for name in ('positions', 'siblings'):
                         path = Path(protocol[name]['path'])
                         lines = path.read_text().splitlines()
