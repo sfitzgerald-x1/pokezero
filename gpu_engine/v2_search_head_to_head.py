@@ -22,6 +22,7 @@ Search (A's head prices both seats; B's model is never used by search):
   greedy argmax of A's legal logits (`fallback=argmax`). `b_policy=argmax` makes B play its greedy argmax.
 - Champion mode (`--champion-archive` and its shas): both seats and the search evaluator are champion 9375 through
   `champion_evaluator` (load, check_binding on the runtime catalog, a first-request op-by-op check); cells name b_run 'champion'.
+- Run-based mode uses the evaluation plan's self_moves encoding for both actors and search. Each archive must agree.
 - `--never-borrow`: at every searched decision, re-run detach, plans, worlds, prices and choice from a context
   whose true-state cells other than A's own are another game's; any byte difference is counted (gate c).
 
@@ -40,7 +41,7 @@ from unittest.mock import patch
 import numpy as np
 
 from gpu_engine.v2_bench_collector import log
-from gpu_engine.v2_head_to_head import SWAP_OFFSET, snapshot
+from gpu_engine.v2_head_to_head import SWAP_OFFSET, load_actor, snapshot
 
 BLOCK_DOMAIN = 'v2s.world-block.v1'
 REDUCTIONS = ('none', 'argmax', 'raw', 'average', 'hedge', 'hedgedet', 'blend', 'prior')
@@ -458,32 +459,36 @@ def main(argv=None):
         raise SystemExit('the never-borrow probe swaps in another game: two or more games required')
     import jax
     import jax.numpy as j
-    from pokezero import v5_gumbel as original
-    from gpu_engine import v5_device_rollout as rollout, v5_model
+    from gpu_engine import v5_device_rollout as rollout
     from gpu_engine.v5_device_backend import RuntimeBackend
     from gpu_engine.v2_fused import prepare
     begin = time.perf_counter();out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
-    context = prepare(argparse.Namespace(config=args.config, arm='B', iterations=2 if args.iteration else 1));plan = context['plan']
-    from gpu_engine.private_self_moves import refuse_unthreaded
-    refuse_unthreaded(plan=plan, catalog=context['prepared'].catalog, context='v2 search head to head')
+    context = prepare(argparse.Namespace(config=args.config, arm='B', iterations=2 if args.iteration else 1))
+    plan, prepared = context['plan'], context['prepared']
+    if champion:
+        from gpu_engine.private_self_moves import refuse_unthreaded
+        refuse_unthreaded(plan=plan, catalog=prepared.catalog, context='v2 search head to head champion')
+    else:
+        catalog_self_moves = prepared.catalog.masks.self_moves
+        if type(catalog_self_moves) is not bool or catalog_self_moves != plan.self_moves:
+            raise ValueError('prepared catalog self_moves differs from the evaluation plan')
+        table_self_moves = getattr(prepared.observation_tables.belief, 'self_moves', None) is not None
+        if table_self_moves != plan.self_moves:
+            raise ValueError('prepared observation tables self_moves differs from the evaluation plan')
     loaded = {};evaluator = None
     if champion:
         # The engine session's binding (d3_depth2_gate.load_champion): archive and checkpoint shas, then the runtime catalog.
-        evaluator, record, champion_params = champion_setup(args, context['prepared'].catalog)
+        evaluator, record, champion_params = champion_setup(args, prepared.catalog)
         loaded[('champion', None)] = (record, champion_params)
     def actor(run, iteration):
         if champion:return loaded[('champion', None)]   # one parameter tree for both seats: (champion,), actors 0/0
         if (run, iteration) not in loaded:
             snap = snapshot(run, iteration)
-            params, config, meta = v5_model.load(Path(run, snap.archive), expected_archive_sha256=snap.archive_sha256,
-                expected_checkpoint_sha256=snap.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
-                expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
-            from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta, context='v2 search head to head')   # V2 self_moves
-            if replace(config, replicate=plan.model.replicate) != plan.model:raise ValueError('actor architecture differs from evaluation model')
-            loaded[(run, iteration)] = (snap, params)
+            loaded[(run, iteration)] = (snap, load_actor(plan, snap, run))
         return loaded[(run, iteration)]
     a, a_params = actor(args.a_run, args.a_iteration) if not champion else actor('champion', None)
-    backend = RuntimeBackend(context['prepared'], context['pool'], gender_policy=context['gender']);backend.check_plan(plan)
+    opponents = [actor(cell['b_run'], cell['b_iteration']) for cell in cells]
+    backend = RuntimeBackend(prepared, context['pool'], gender_policy=context['gender']);backend.check_plan(plan)
     batch = plan.iterations[args.iteration][args.block]
     if args.games:   # a prefix is a valid smaller batch; its initial states need not equal the full block's
         batch = replace(batch, games=batch.games[:args.games], gender_root_ids=batch.gender_root_ids[:args.games])
@@ -493,13 +498,12 @@ def main(argv=None):
         return jax.tree.map(lambda x, y: j.concatenate([x, y]), *carries)
     n = len(batch.games);a_side_host = np.repeat(np.asarray([0, 1], np.int32), n);a_side = j.asarray(a_side_host)
     pairs = [(g.stream_id, g.stream_id - SWAP_OFFSET) for g in batch.games]
-    prepared = context['prepared']
     decide, apply = make_step(prepared.engine_tables, prepared.observation_tables, plan.model, sampling_seed=batch.sampling_seed,
         max_requests=plan.max_requests, forwards=(evaluator, evaluator) if champion else None)
     collector_check = None
     if args.collector_check:
         # The raw path of this split step against the collector's own advance, from the same carry.
-        b, b_params = actor(cells[0]['b_run'], cells[0]['b_iteration'])
+        b, b_params = opponents[0]
         if a.archive_sha256 == b.archive_sha256:raise ValueError('the collector check needs two distinct archives')
         carry = fresh();params = (a_params, b_params)
         bindings = rollout.Bindings(plan.model.category_vocabulary_sha256, plan.model.label_vocabulary, prepared.source_sha256,
@@ -519,8 +523,7 @@ def main(argv=None):
     search = None
     setup = dict(args=args, plan=plan, batch=batch, n=n, pairs=pairs, a=a, a_side_host=a_side_host, a_side=a_side,
         decide=decide, apply=apply, collector_check=collector_check)
-    for cell in cells:
-        b, b_params = actor(cell['b_run'], cell['b_iteration'])
+    for cell, (b, b_params) in zip(cells, opponents):
         cell = dict(dict(blend=args.blend, world_blocks=args.world_blocks, never_borrow=False, b_policy='sample', fallback='sample'), **cell)
         if cell['reduction'] not in NO_SEARCH:
             if search is None:
@@ -666,6 +669,8 @@ def play_cell(setup, cell, carry, params, b, search, out, *, setup_seconds):
             search_events=dict(search.events) if search else {},
             search_ms_per_decision=1000 * timing['search_seconds'] / max(total['decisions'], 1) if search else None),
         scope='Paired engine head-to-head, same teams with seats swapped, search in seat A; not a Foul Play result.')
+    if setup['plan'].self_moves:
+        report['self_moves'] = True
     (out / f'{label}.json').write_text(json.dumps(report, indent=1, default=str) + '\n')
     with (out / f'{label}-pairs.jsonl').open('w') as stream:
         for (first, second), value in zip(pairs, pair_scores):stream.write(json.dumps(dict(stream=first, swapped=second, score=value)) + '\n')
