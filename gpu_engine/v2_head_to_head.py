@@ -41,6 +41,25 @@ def snapshot(run, iteration):
     return runs.Snapshot(**found[-1])
 
 
+def load_actor(plan, snapshot, root):
+    """Load a run actor for the paired tools' shared encoder and forward."""
+    from pokezero import v5_run as runs
+    from pokezero.checkpoint_self_moves import archive_self_moves
+    from gpu_engine import v5_model
+
+    params, config, meta = v5_model.load(Path(root, snapshot.archive), expected_archive_sha256=snapshot.archive_sha256,
+        expected_checkpoint_sha256=snapshot.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
+        expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
+    if archive_self_moves(meta) != plan.self_moves:
+        raise ValueError('actor archive self_moves differs from the evaluation plan')
+    if snapshot.model_sha256 != runs._sha(config.metadata()):
+        raise ValueError('actor snapshot model digest differs from the loaded model')
+    # The replicate label may differ between the training runs.
+    if replace(config, replicate=plan.model.replicate) != plan.model:
+        raise ValueError('actor architecture differs from evaluation model')
+    return params
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True);parser.add_argument('--iteration', type=int, default=1)
@@ -51,8 +70,6 @@ def main(argv=None):
     parser.add_argument('--label', default='head-to-head')
     args = parser.parse_args(argv)
     import jax
-    from pokezero import v5_run as runs
-    from pokezero.checkpoint_self_moves import archive_self_moves
     from gpu_engine import v5_device_rollout as rollout, v2_collector as v2
     from gpu_engine.v5_device_backend import RuntimeBackend
     from gpu_engine.v2_fused import prepare
@@ -64,19 +81,7 @@ def main(argv=None):
         raise ValueError('prepared catalog self_moves differs from the evaluation plan')
     a = snapshot(args.a_run, args.a_iteration);b = snapshot(args.b_run, args.b_iteration)
     if a.archive_sha256 == b.archive_sha256:raise ValueError('two distinct actors required')
-    def load(snapshot, root):
-        # Same architecture as the evaluation forward; `replicate` (seed label) may differ.
-        from gpu_engine import v5_model
-        params, config, meta = v5_model.load(Path(root, snapshot.archive), expected_archive_sha256=snapshot.archive_sha256,
-            expected_checkpoint_sha256=snapshot.checkpoint_sha256, expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
-            expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
-        if archive_self_moves(meta) != plan.self_moves:
-            raise ValueError('actor archive self_moves differs from the evaluation plan')
-        if snapshot.model_sha256 != runs._sha(config.metadata()):
-            raise ValueError('actor snapshot model digest differs from the loaded model')
-        if replace(config, replicate=plan.model.replicate) != plan.model:raise ValueError('actor architecture differs from evaluation model')
-        return params
-    params = (load(a, args.a_run), load(b, args.b_run))
+    params = (load_actor(plan, a, args.a_run), load_actor(plan, b, args.b_run))
     backend = RuntimeBackend(context['prepared'], context['pool'], gender_policy=context['gender']);backend.check_plan(plan)
     bindings = rollout.Bindings(plan.model.category_vocabulary_sha256, plan.model.label_vocabulary, context['prepared'].source_sha256,
         (a.archive_sha256,) * 2, (True, True), backend.declaration_sha256)
