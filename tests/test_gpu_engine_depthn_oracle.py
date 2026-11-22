@@ -1542,7 +1542,7 @@ def reference_runs(test, root):
         loaded = SimpleNamespace(provider=provider, plan=SimpleNamespace(model=model, historical_window=2), params=PARAMS, groups=[list(test.requests[-20:])],
             frame_pricer=FixtureN.frame_pricer(test), source=dict(fixture=True), labels=SimpleNamespace(sha256='l' * 64), category_sha256='k' * 64,
             snapshot=dict(iteration=-1, archive='run/actor--1.npz', archive_sha256='4' * 64, checkpoint='c.pt', checkpoint_sha256='3' * 64, model_sha256='5' * 64))
-        with test.engine(), patch.object(g2, 'bank_chunk_requests', lambda args: loaded), patch.object(g2, 'log', lambda m, **k: lines.append(dict(k, message=m))):
+        with test.engine(), patch.object(g2, 'bank_chunk_requests', return_value=loaded), patch.object(g2, 'log', lambda m, **k: lines.append(dict(k, message=m))):
             return g2.main(['--out', str(directory), '--d3-root', 'x', '--chunk', '0', '--depth2-capacity', '32', '--oracle-chunk', '64', *argv])
     with noisy_oracle_heads():
         for name, argv, real, files in (('depthn_standin_prior3_mutation', ('--mutation-test',), False, ('gate.json', gate.MUTATION_FILE)),

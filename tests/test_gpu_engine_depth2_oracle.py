@@ -1144,6 +1144,18 @@ class HeadOverrideTests(GateFixture, unittest.TestCase):
                 self.assertRaisesRegex(ValueError, 'SHA256 differs'):
             gate.load_head(args, plan=self.PLAN, labels=self.LABELS, category_sha256='c' * 64)
 
+    def test_load_head_requires_the_bank_encoding(self):
+        args = SimpleNamespace(**self.HEAD)
+        on_plan = SimpleNamespace(model=self.PLAN.model, self_moves=True)
+        with patch.object(gate_v5_model(), 'load', return_value=('PARAMS', FakeConfig(), {'self_moves': True})):
+            result = gate.load_head(args, plan=on_plan, labels=self.LABELS, category_sha256='c' * 64)
+            self.assertIs(result[2]['self_moves'], True)
+            with self.assertRaisesRegex(ValueError, 'differs from the plan'):
+                gate.load_head(args, plan=self.PLAN, labels=self.LABELS, category_sha256='c' * 64)
+        with patch.object(gate_v5_model(), 'load', return_value=('PARAMS', FakeConfig(), {})):
+            with self.assertRaisesRegex(ValueError, 'differs from the plan'):
+                gate.load_head(args, plan=on_plan, labels=self.LABELS, category_sha256='c' * 64)
+
     def test_bind_roots_checks_arms_and_moves_every_request_to_the_head(self):
         head = {'offset': j.asarray(.05, j.float32), 'logits': j.arange(9, dtype=j.float32) / 4}
         mixed = [list(self.requests[:4])]

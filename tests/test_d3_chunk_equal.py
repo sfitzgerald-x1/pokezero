@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from gpu_engine import d3_chunk_equal
+from gpu_engine import d3_chunk_equal, d3_depth2_gate, d3_depthn_gate
 from pokezero import checkpoint_self_moves, v5_contract, v5_run
 from test_v5_run import plan
 
@@ -49,7 +49,7 @@ class ChunkGateAdmissionTests(unittest.TestCase):
             archive.write_bytes(b'substituted archive')
         return replace(snapshot, checkpoint='initial.pt', archive='initial.npz')
 
-    def run_gate(self, recipe, metadata, *, document=None, origin=False, tamper=False, model_sha256=None,
+    def run_gate(self, recipe, metadata, *, gate='chunk', document=None, origin=False, tamper=False, model_sha256=None,
                  error=RuntimeError, message='collector reached'):
         model_sha256 = v5_run._sha(recipe.model.metadata()) if model_sha256 is None else model_sha256
         snapshot = v5_run.Snapshot(-1, 'initial.pt', 'b' * 64, 'initial.npz', 'c' * 64, model_sha256)
@@ -57,7 +57,8 @@ class ChunkGateAdmissionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
             root = Path(tmp)
             run = root / 'run'
-            args = ['--d3-root', str(root), '--out', str(root / 'out'), '--variant', 'batched_prep']
+            args = ['--d3-root', str(root), '--out', str(root / 'out')]
+            args.extend(['--variant', 'batched_prep'] if gate == 'chunk' else ['--chunk', '0', '--pricer-only'])
             if origin:
                 original_run = root / 'original'
                 snapshot = self.legacy_origin(original_run, recipe, tamper=tamper)
@@ -94,11 +95,19 @@ class ChunkGateAdmissionTests(unittest.TestCase):
                                                   side_effect=RuntimeError('collector reached')))
             # Use real plan admission and control flow, stopping as collection would begin.
             with self.assertRaisesRegex(error, message):
-                d3_chunk_equal.main(args)
+                if gate == 'chunk':
+                    d3_chunk_equal.main(args)
+                elif gate == 'depth':
+                    d3_depth2_gate.main(args)
+                elif gate == 'depthn':
+                    d3_depthn_gate.load_roots(SimpleNamespace(saved_roots=None, d3_root=root, chunk=0,
+                                                             memory_policy=False, initializer_run=None))
+                else:
+                    d3_depth2_gate.bank_chunk_requests(SimpleNamespace(d3_root=root, memory_policy=False))
             if error is RuntimeError:
                 collector.assert_called_once()
                 self.assertEqual(prepare.call_args.args[0].plan, recipe)
-                self.assertEqual(provider.call_count, 2)
+                self.assertEqual(provider.call_count, 2 if gate == 'chunk' else 1)
                 self.assertTrue(all(call.args[1] == recipe for call in provider.call_args_list))
                 backend.check_plan.assert_called_once_with(recipe)
                 load.assert_called_once()
@@ -139,6 +148,21 @@ class ChunkGateAdmissionTests(unittest.TestCase):
         self.run_gate(on, {}, origin=True)
         self.run_gate(on, {}, origin=True, tamper=True,
                       error=ValueError, message='original initializer archive binding differs')
+
+    def test_depth_gate_passes_the_bound_plan_to_collection(self):
+        off = plan(arm='D')
+        on = replace(off, self_moves=True)
+        self.run_gate(off, {}, gate='depth')
+        self.run_gate(on, {'self_moves': True}, gate='depth')
+        self.run_gate(on, {}, gate='depth', origin=True)
+        self.run_gate(on, {'self_moves': True}, gate='depthn')
+
+    def test_depth_gate_refuses_incompatible_actors_and_legacy_callers_refuse_on_banks(self):
+        off = plan(arm='D')
+        on = replace(off, self_moves=True)
+        self.run_gate(off, {'self_moves': True}, gate='depth', error=ValueError, message='differs from the plan')
+        self.run_gate(on, {}, gate='depth', error=ValueError, message='requires --initializer-run')
+        self.run_gate(on, {'self_moves': True}, gate='legacy', error=ValueError, message='not threaded')
 
 
 if __name__ == '__main__':

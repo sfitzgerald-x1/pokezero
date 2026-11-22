@@ -1441,7 +1441,8 @@ def load_head(args, *, plan, labels, category_sha256):
     params, head_config, meta = v5_model.load(args.head_archive, expected_archive_sha256=args.head_archive_sha256,
         expected_checkpoint_sha256=args.head_checkpoint_sha256, expected_category_vocabulary_sha256=category_sha256,
         expected_label_vocabulary_sha256=labels.sha256, enable_v5=True)
-    from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta, context='d3 depth2 gate head')   # V2 self_moves
+    from gpu_engine.private_self_moves import check_run_actor
+    check_run_actor(meta, plan_self_moves=getattr(plan, 'self_moves', False), iteration=None, context='d3 depth gate head')
     if replace(head_config, arm='D', replicate=0) != plan.model:raise ValueError('head geometry differs from the bank D model')
     model_sha256 = runs._sha(head_config.metadata())   # what Snapshot.model_sha256 records for a model
     if args.head_model_sha256 is not None and model_sha256 != args.head_model_sha256:
@@ -1759,43 +1760,34 @@ def saved_root_requests(args):
             archive=snapshot.archive, archive_sha256=snapshot.archive_sha256, model_sha256=snapshot.model_sha256))
 
 
-def bank_chunk_requests(args):
+def bank_chunk_requests(args, *, allow_self_moves=False):
     """One D3 bank chunk's Requests, as d3_chunk_equal builds the chunk and Provider._prepare_batched the requests."""
     root = Path(args.d3_root)
+    run_root = root / 'run'
+    from gpu_engine.d3_chunk_equal import load_actor, load_plan
     from pokezero import v5_worker as worker, v5_run as runs
     runtime_path = root / 'runtime.json'
     runtime = worker._record(dict(path=str(runtime_path), sha256=hashlib.sha256(runtime_path.read_bytes()).hexdigest()))
     if args.memory_policy:worker._memory(runtime['memory_policy'], apply=True)   # must precede the first JAX import
     import jax
-    from pokezero.v5_model import V5ModelConfig
-    from pokezero.v5_loss import V5LossConfig
-    from pokezero import v5_training as training
-    from gpu_engine import v5_device_rollout as rollout, v5_model
+    from gpu_engine import v5_device_rollout as rollout
     from gpu_engine.v5_device_backend import RuntimeBackend
     from gpu_engine.v5_device_teacher import Provider
     profile, vocabulary, gender, _ = worker._runtime_metadata(runtime, expected_pool_sha256=runtime['constructor_pool']['sha256'])
-    d = json.loads((root / 'run' / 'declaration.json').read_text())
-    loss_fields = {k: v for k, v in d['loss'].items() if k in V5LossConfig.__dataclass_fields__}
-    batches = tuple(tuple(runs.Batch(tuple(runs.Game(**g) for g in x['games']), x['constructor_seed'], x['sampling_seed'],
-        x.get('gender_seed'), x.get('gender_domain'), tuple(x.get('gender_root_ids', ()))) for x in it) for it in d['iterations'])
-    plan = runs.Plan(d['run_id'], V5ModelConfig.from_metadata(d['model']), V5LossConfig(**loss_fields), training.TrainConfig(**d['train']),
-        batches, d['pool_sha256'], d['selection_seed'], d['historical_fraction'], d['historical_window'], d['max_requests'],
-        runs.Watchdog(**d['watchdog']), checkpoint_updates=d['checkpoint_updates'], discount=d['discount'])
-    declared = json.loads((root / 'run' / 'journal' / '000000000.json').read_text())['payload']['declaration_sha256']
-    if runs._sha(plan.manifest()) != declared:raise SystemExit('rebuilt plan differs from the D3 declaration')
+    plan, declared = load_plan(run_root)
+    if not allow_self_moves:
+        from gpu_engine.private_self_moves import refuse_unthreaded
+        refuse_unthreaded(plan=plan, context='D3 bank chunk')
     _probe(worker, runtime, jax)
-    inputs = worker.Inputs(plan, profile, json.dumps(runtime), json.dumps(vocabulary), json.dumps(gender), runs._sha(plan.manifest()))
+    events = (json.loads(p.read_text()) for p in sorted((run_root / 'journal').glob('*.json')))
+    snapshot = next(e['payload'] for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1)
+    snap = runs.Snapshot(**snapshot)
+    params = load_actor(plan, snap, run_root, getattr(args, 'initializer_run', None))
+    inputs = worker.Inputs(plan, profile, json.dumps(runtime), json.dumps(vocabulary), json.dumps(gender), declared)
     prepared, pool, _, _ = worker.prepare_device_runtime(inputs)
     provider = Provider(prepared, plan, frame_batch=True, chunk_batch=True, vectorized=True, batched_prep=True)
     backend = RuntimeBackend(prepared, pool, gender_policy=gender, teacher=provider);backend.check_plan(plan)
-    events = (json.loads(p.read_text()) for p in sorted((root / 'run' / 'journal').glob('*.json')))
-    snapshot = next(e['payload'] for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1)
-    params, config, meta = v5_model.load(root / 'run' / snapshot['archive'], expected_archive_sha256=snapshot['archive_sha256'],
-        expected_checkpoint_sha256=snapshot['checkpoint_sha256'], expected_category_vocabulary_sha256=plan.model.category_vocabulary_sha256,
-        expected_label_vocabulary_sha256=plan.model.label_vocabulary.sha256, enable_v5=True)
-    from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta, context='d3 depth2 gate actor')   # V2 self_moves
-    if config != plan.model:raise SystemExit('actor configuration differs')
-    batch = plan.iterations[0][0];ordinal = {g.stream_id: i for i, g in enumerate(plan.games)};snap = runs.Snapshot(**snapshot)
+    batch = plan.iterations[0][0];ordinal = {g.stream_id: i for i, g in enumerate(plan.games)}
     assignments = json.loads(runs._json(tuple(runs.assignment(plan, g, ordinal[g.stream_id], snap, ()) for g in batch.games)))
     archive = snapshot['archive_sha256']
     bindings = rollout.Bindings(plan.model.category_vocabulary_sha256, plan.model.label_vocabulary, prepared.source_sha256,
@@ -1871,6 +1863,8 @@ def main(argv=None):
     parser.add_argument('--index-sha256', help='sha256 of bank/cost-root-index.json (with --saved-roots)')
     parser.add_argument('--d3-root', help='the D3 bank run root (prespec.json, runtime.json, run/)')
     parser.add_argument('--chunk', type=int, help='bank chunk index (with --d3-root); chunks 0..N are collected')
+    parser.add_argument('--initializer-run', type=Path,
+        help='original OFF run directory with the matching iteration -1 snapshot for an OFF initializer in an ON bank chunk')
     parser.add_argument('--memory-policy', action='store_true', help="with --d3-root: apply the bank runtime's JAX memory policy")
     parser.add_argument('--out', required=True, help='new output directory')
     for name in ('k-own', 'k-opp', 'k1-own', 'k1-opp'):
@@ -1941,7 +1935,7 @@ def main(argv=None):
         checkpoint_sha256=args.head_checkpoint_sha256, value_reference=args.value_reference,
         resolved='EVALUATOR_RESOLVED follows once the bank is loaded' + ('' if args.head_archive else ' (the bank snapshot\'s actor)'))
     out = Path(args.out);out.mkdir(parents=True, exist_ok=False)
-    loaded = (saved_root_requests if args.saved_roots else bank_chunk_requests)(args)
+    loaded = saved_root_requests(args) if args.saved_roots else bank_chunk_requests(args, allow_self_moves=True)
     provider, plan, params, frame_pricer, source = loaded.provider, loaded.plan, loaded.params, loaded.frame_pricer, loaded.source
     head = load_head(args, plan=plan, labels=loaded.labels, category_sha256=loaded.category_sha256) if args.head_archive else None
     if head is not None:params = (head[0],)
