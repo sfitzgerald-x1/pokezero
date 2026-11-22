@@ -18,6 +18,13 @@ from test_v5_run import plan
 
 
 class ChunkGateAdmissionTests(unittest.TestCase):
+    def write_events(self, journal, events):
+        previous = None
+        for sequence, (kind, payload) in enumerate(events):
+            event = dict(sequence=sequence, previous=previous, kind=kind, payload=payload)
+            previous = checkpoint_self_moves._sha(event)
+            (journal / f'{sequence:09d}.json').write_text(json.dumps(dict(event, sha256=previous)))
+
     def legacy_origin(self, directory, recipe, *, tamper):
         directory.mkdir()
         journal = directory / 'journal'
@@ -37,20 +44,16 @@ class ChunkGateAdmissionTests(unittest.TestCase):
         archive.write_bytes(b'legacy archive')
         snapshot = v5_run.Snapshot(-1, checkpoint.name, hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
             archive.name, hashlib.sha256(archive.read_bytes()).hexdigest(), checkpoint_self_moves._sha(metadata['model']))
-        previous = None
-        for sequence, (kind, payload) in enumerate((
+        self.write_events(journal, (
                 ('RUN_STARTED', {'declaration_sha256': checkpoint_self_moves._sha(declaration)}),
                 ('CHECKPOINT', dict(iteration=-1, path=snapshot.checkpoint, sha256=snapshot.checkpoint_sha256, steps=0, rows=0)),
-                ('SNAPSHOT', asdict(snapshot)))):
-            event = dict(sequence=sequence, previous=previous, kind=kind, payload=payload)
-            previous = checkpoint_self_moves._sha(event)
-            (journal / f'{sequence:09d}.json').write_text(json.dumps(dict(event, sha256=previous)))
+                ('SNAPSHOT', asdict(snapshot))))
         if tamper:
             archive.write_bytes(b'substituted archive')
         return replace(snapshot, checkpoint='initial.pt', archive='initial.npz')
 
     def run_gate(self, recipe, metadata, *, gate='chunk', document=None, origin=False, tamper=False, model_sha256=None,
-                 error=RuntimeError, message='collector reached'):
+                 corrupt=None, error=RuntimeError, message='collector reached'):
         model_sha256 = v5_run._sha(recipe.model.metadata()) if model_sha256 is None else model_sha256
         snapshot = v5_run.Snapshot(-1, 'initial.pt', 'b' * 64, 'initial.npz', 'c' * 64, model_sha256)
         params = object()
@@ -74,10 +77,19 @@ class ChunkGateAdmissionTests(unittest.TestCase):
                 stack.enter_context(patch.dict(sys.modules, torch=SimpleNamespace(load=load_checkpoint)))
             journal = run / 'journal'
             journal.mkdir(parents=True)
-            (run / 'declaration.json').write_text(json.dumps(recipe.manifest() if document is None else document))
-            (journal / '000000000.json').write_text(json.dumps(dict(
-                kind='DECLARATION', payload=dict(declaration_sha256=v5_run._sha(recipe.manifest())))))
-            (journal / '000000001.json').write_text(json.dumps(dict(kind='SNAPSHOT', payload=asdict(snapshot))))
+            declaration = recipe.manifest() if document is None else document
+            (run / 'declaration.json').write_text(json.dumps(declaration))
+            events = [('RUN_STARTED', dict(declaration_sha256=v5_run._sha(declaration))), ('SNAPSHOT', asdict(snapshot))]
+            if corrupt == 'duplicate':
+                events.append(('SNAPSHOT', asdict(snapshot)))
+            self.write_events(journal, events)
+            if corrupt == 'declaration':
+                (run / 'declaration.json').write_text(json.dumps(dict(declaration, contract_sha256='a' * 64)))
+            if corrupt == 'snapshot':
+                path = journal / '000000001.json'
+                event = json.loads(path.read_text())
+                event['payload']['archive'] = 'substituted.npz'
+                path.write_text(json.dumps(event))
             (root / 'runtime.json').write_text('{}')
             stack.enter_context(redirect_stdout(io.StringIO()))
             stack.enter_context(patch('pokezero.v5_worker._record', return_value={'constructor_pool': {'sha256': recipe.pool_sha256}}))
@@ -99,9 +111,10 @@ class ChunkGateAdmissionTests(unittest.TestCase):
                     d3_chunk_equal.main(args)
                 elif gate == 'depth':
                     d3_depth2_gate.main(args)
-                elif gate == 'depthn':
+                elif gate in ('depthn', 'champion'):
                     d3_depthn_gate.load_roots(SimpleNamespace(saved_roots=None, d3_root=root, chunk=0,
-                                                             memory_policy=False, initializer_run=None))
+                        memory_policy=False, initializer_run=None,
+                        champion_archive='champion.npz' if gate == 'champion' else None))
                 else:
                     d3_depth2_gate.bank_chunk_requests(SimpleNamespace(d3_root=root, memory_policy=False))
             if error is RuntimeError:
@@ -128,8 +141,8 @@ class ChunkGateAdmissionTests(unittest.TestCase):
         for value in (False, 1, 'true', None):
             with self.subTest(value=value):
                 self.run_gate(off, {}, document=dict(off.manifest(), self_moves=value),
-                              error=ValueError, message='omitted or declared as true')
-        self.run_gate(off, {}, document=dict(off.manifest(), self_moves=True),
+                              error=ValueError, message='explicit bool run self_moves|omitted or declared as true')
+        self.run_gate(off, {}, document=dict(off.manifest(), contract_sha256='a' * 64),
                       error=SystemExit, message='rebuilt plan differs')
 
     def test_actor_and_plan_mismatch_refuses_before_collection(self):
@@ -163,6 +176,16 @@ class ChunkGateAdmissionTests(unittest.TestCase):
         self.run_gate(off, {'self_moves': True}, gate='depth', error=ValueError, message='differs from the plan')
         self.run_gate(on, {}, gate='depth', error=ValueError, message='requires --initializer-run')
         self.run_gate(on, {'self_moves': True}, gate='legacy', error=ValueError, message='not threaded')
+        self.run_gate(on, {'self_moves': True}, gate='champion', error=ValueError, message='not threaded')
+
+    def test_depth_gate_verifies_destination_declaration_and_initial_snapshot(self):
+        on = replace(plan(arm='D'), self_moves=True)
+        for corrupt, message in (('declaration', 'RUN_STARTED original declaration binding differs'),
+                                 ('snapshot', 'original ordered run journal changed'),
+                                 ('duplicate', 'exactly one initial snapshot')):
+            with self.subTest(corrupt=corrupt):
+                self.run_gate(on, {}, gate='depth', origin=True, corrupt=corrupt,
+                              error=ValueError, message=message)
 
 
 if __name__ == '__main__':

@@ -1764,7 +1764,7 @@ def bank_chunk_requests(args, *, allow_self_moves=False):
     """One D3 bank chunk's Requests, as d3_chunk_equal builds the chunk and Provider._prepare_batched the requests."""
     root = Path(args.d3_root)
     run_root = root / 'run'
-    from gpu_engine.d3_chunk_equal import load_actor, load_plan
+    from gpu_engine.d3_chunk_equal import load_actor, load_bank_run
     from pokezero import v5_worker as worker, v5_run as runs
     runtime_path = root / 'runtime.json'
     runtime = worker._record(dict(path=str(runtime_path), sha256=hashlib.sha256(runtime_path.read_bytes()).hexdigest()))
@@ -1774,14 +1774,11 @@ def bank_chunk_requests(args, *, allow_self_moves=False):
     from gpu_engine.v5_device_backend import RuntimeBackend
     from gpu_engine.v5_device_teacher import Provider
     profile, vocabulary, gender, _ = worker._runtime_metadata(runtime, expected_pool_sha256=runtime['constructor_pool']['sha256'])
-    plan, declared = load_plan(run_root)
+    plan, declared, snap = load_bank_run(run_root)
     if not allow_self_moves:
         from gpu_engine.private_self_moves import refuse_unthreaded
         refuse_unthreaded(plan=plan, context='D3 bank chunk')
     _probe(worker, runtime, jax)
-    events = (json.loads(p.read_text()) for p in sorted((run_root / 'journal').glob('*.json')))
-    snapshot = next(e['payload'] for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1)
-    snap = runs.Snapshot(**snapshot)
     params = load_actor(plan, snap, run_root, getattr(args, 'initializer_run', None))
     inputs = worker.Inputs(plan, profile, json.dumps(runtime), json.dumps(vocabulary), json.dumps(gender), declared)
     prepared, pool, _, _ = worker.prepare_device_runtime(inputs)
@@ -1789,7 +1786,7 @@ def bank_chunk_requests(args, *, allow_self_moves=False):
     backend = RuntimeBackend(prepared, pool, gender_policy=gender, teacher=provider);backend.check_plan(plan)
     batch = plan.iterations[0][0];ordinal = {g.stream_id: i for i, g in enumerate(plan.games)}
     assignments = json.loads(runs._json(tuple(runs.assignment(plan, g, ordinal[g.stream_id], snap, ()) for g in batch.games)))
-    archive = snapshot['archive_sha256']
+    archive = snap.archive_sha256
     bindings = rollout.Bindings(plan.model.category_vocabulary_sha256, plan.model.label_vocabulary, prepared.source_sha256,
         (archive,) * 2, (True, True), backend.declaration_sha256)
     actor_bank = rollout.actor_bank_from_assignments(bindings, (archive,), current_archive=archive, assignments=assignments)
@@ -1807,7 +1804,7 @@ def bank_chunk_requests(args, *, allow_self_moves=False):
     return SimpleNamespace(provider=provider, plan=plan, params=(params,), groups=groups, frame_pricer=provider.frame_pricer,
         source=dict(d3_root=str(root), chunk=args.chunk, declaration_sha256=declared), labels=plan.model.label_vocabulary,
         category_sha256=plan.model.category_vocabulary_sha256,
-        snapshot={k: snapshot.get(k) for k in ('iteration', 'checkpoint', 'checkpoint_sha256', 'archive', 'archive_sha256', 'model_sha256')})
+        snapshot={k: getattr(snap, k) for k in ('iteration', 'checkpoint', 'checkpoint_sha256', 'archive', 'archive_sha256', 'model_sha256')})
 
 
 DIGEST_NOTE = ('--pricer-only keeps digest=True: Depth2Pricer passes digest into make_depth2_kernel, which adds the leaf digests '

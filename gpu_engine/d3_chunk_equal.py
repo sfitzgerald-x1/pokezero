@@ -83,12 +83,12 @@ def load_actor(plan, snapshot, run_root, initializer_run):
     return params
 
 
-def load_plan(run_root):
-    from pokezero import v5_run as runs, v5_training as training
+def load_bank_run(run_root):
+    from pokezero import checkpoint_self_moves, v5_run as runs, v5_training as training
     from pokezero.v5_loss import V5LossConfig
     from pokezero.v5_model import V5ModelConfig
 
-    d = json.loads((run_root / 'declaration.json').read_text())
+    _, d, events = checkpoint_self_moves.verified_run(run_root)
     if 'self_moves' in d and d['self_moves'] is not True:
         raise ValueError('self_moves must be omitted or declared as true in the plan')
     loss_fields = {k: v for k, v in d['loss'].items() if k in V5LossConfig.__dataclass_fields__}
@@ -98,9 +98,13 @@ def load_plan(run_root):
         batches, d['pool_sha256'], d['selection_seed'], d['historical_fraction'], d['historical_window'], d['max_requests'],
         runs.Watchdog(**d['watchdog']), checkpoint_updates=d['checkpoint_updates'], discount=d['discount'],
         self_moves=d.get('self_moves', False))
-    declared = json.loads((run_root / 'journal' / '000000000.json').read_text())['payload']['declaration_sha256']
+    declared = events[0]['payload']['declaration_sha256']
     if runs._sha(plan.manifest()) != declared:raise SystemExit('rebuilt plan differs from the D3 declaration')
-    return plan, declared
+    initializers = [event['payload'] for event in events
+                    if event['kind'] == 'SNAPSHOT' and event['payload']['iteration'] == -1]
+    if len(initializers) != 1:
+        raise ValueError('exactly one initial snapshot is required in the D3 bank journal')
+    return plan, declared, runs.Snapshot(**initializers[0])
 
 
 def main(argv=None):
@@ -129,7 +133,7 @@ def main(argv=None):
     from gpu_engine.v5_device_teacher import Provider
     from gpu_engine.d3_saved_root_gate import differences
     profile, vocabulary, gender, _ = worker._runtime_metadata(runtime, expected_pool_sha256=runtime['constructor_pool']['sha256'])
-    plan, declared = load_plan(run_root)
+    plan, declared, snap = load_bank_run(run_root)
     log('PLAN', declaration_sha256=declared, arm=plan.model.arm, games=len(plan.iterations[0][0].games),
         memory={k: os.environ.get(k) for k in ('XLA_PYTHON_CLIENT_PREALLOCATE', 'XLA_PYTHON_CLIENT_MEM_FRACTION', 'XLA_PYTHON_CLIENT_ALLOCATOR')})
     try:worker._probe(runtime)
@@ -137,8 +141,6 @@ def main(argv=None):
         log('PROBE_DIFFERS', error=str(error));jax.config.update('jax_enable_x64', False);jax.config.update('jax_default_matmul_precision', 'highest')
     inputs = worker.Inputs(plan, profile, json.dumps(runtime), json.dumps(vocabulary), json.dumps(gender), runs._sha(plan.manifest()))
     prepared, pool, _, _ = worker.prepare_device_runtime(inputs)
-    events = (json.loads(p.read_text()) for p in sorted((run_root / 'journal').glob('*.json')))
-    snap = next(runs.Snapshot(**e['payload']) for e in events if e['kind'] == 'SNAPSHOT' and e['payload']['iteration'] == -1)
     params = load_actor(plan, snap, run_root, args.initializer_run)
     base = dict(frame_batch=True, chunk_batch=True, vectorized=True)
     names = ['baseline'] + args.variant

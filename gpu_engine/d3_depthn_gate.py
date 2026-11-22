@@ -4522,9 +4522,10 @@ def per_ply(text, depth, name):
 def load_roots(args):
     """Requests (saved roots or a bank chunk), the evaluator (head override, champion 9375 or the bank snapshot's actor) and
     --max-roots. `forward` is the champion evaluator (None for V2: the pricers' default forward)."""
-    loaded = g2.saved_root_requests(args) if args.saved_roots else g2.bank_chunk_requests(args, allow_self_moves=True)
+    champion_archive = getattr(args, 'champion_archive', None)
+    loaded = g2.saved_root_requests(args) if args.saved_roots else g2.bank_chunk_requests(args, allow_self_moves=not champion_archive)
     head = g2.load_head(args, plan=loaded.plan, labels=loaded.labels, category_sha256=loaded.category_sha256) if args.head_archive else None
-    champion = g2.load_champion(args, loaded) if getattr(args, 'champion_archive', None) else None
+    champion = g2.load_champion(args, loaded) if champion_archive else None
     params = (head[0],) if head is not None else (champion.params,) if champion is not None else loaded.params
     groups, root_values, dropped, arm_checked = g2.bind_roots(loaded.groups, params, loaded.plan, head_config=None if head is None else head[1],
         evaluator=champion)
