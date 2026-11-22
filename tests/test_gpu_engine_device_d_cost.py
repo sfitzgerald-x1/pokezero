@@ -26,10 +26,11 @@ def plan():
     return replace(old,iterations=(batches,),max_requests=1024)
 
 
-def inputs():
-    p=plan();provider=teacher.Provider.__new__(teacher.Provider);provider.plan=p
+def inputs(self_moves=False):
+    p=replace(plan(),self_moves=self_moves);provider=teacher.Provider.__new__(teacher.Provider);provider.plan=p
     provider.prepared=NS(source_sha256='d'*64,source_binding_json=json.dumps(dict(source_commit='1'*40,pool_metadata_sha256='e'*64)),
-        source=NS(metadata=NS(source_hash='literal-original-source')),engine_tables=object(),observation_tables=object())
+        source=NS(metadata=NS(source_hash='literal-original-source')),engine_tables=object(),
+        catalog=NS(masks=NS(self_moves=self_moves)),observation_tables=NS(belief=NS(self_moves=object() if self_moves else None)))
     snapshot=runs.Snapshot(-1,'original.pt','2'*64,'current-source-d.npz','3'*64,runs._sha(p.model.metadata()))
     namespace=dict(source_commit='1'*40,source_sha256='d'*64,public_source_hash='literal-original-source',pool_sha256=p.pool_sha256,
         pool_metadata_sha256='e'*64,category_vocabulary_sha256=p.model.category_vocabulary_sha256,label_vocabulary_sha256=p.model.label_vocabulary.sha256)
@@ -45,6 +46,8 @@ def inputs():
         batches=[asdict(b)for b in p.iterations[0]],max_requests=p.max_requests,output_directory=str(directory/'output'),
         training_roster_index=dict(path='/inert/roster.json',sha256='7'*64),cost_recipe_seed=p.selection_seed,
         cost_selectors=[entry['selector']for entry in entries])
+    if self_moves:
+        doc['self_moves']=namespace['self_moves']=True
     path.write_text(runs._json(doc))
     return provider,snapshot,dict(schema='pokezero.device_heldout_saved_roots.v1',namespace=namespace,cost_roots=entries,
         cost_recipe_seed=p.selection_seed,declaration=dict(path=str(path),sha256=runs._file_sha(path)))
@@ -79,6 +82,61 @@ class DeviceDCostTests(unittest.TestCase):
         with patch.object(cost.v5_model,'load')as load:
             with self.assertRaises(ValueError):cost.actor('unused',snapshot=replace(snapshot,model_sha256='f'*64),plan=actual)
             load.assert_not_called()
+
+    def test_saved_root_gates_prepare_the_bank_encoding_before_actor_admission(self):
+        from tests import test_v5_phasec as phase
+        from gpu_engine import d3_depth2_gate,d3_depthn_gate,d3_saved_root_gate,device_d_frame_parity
+        from pokezero import v5_worker as worker
+
+        provider,snapshot,index=inputs(True)
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'runtime.json').write_text(json.dumps(dict(constructor_pool=dict(sha256=provider.plan.pool_sha256),memory_policy={})))
+            (root/'prespec.json').write_text(json.dumps(dict(cost_run_id='saved-bank-cost')))
+            (root/'cost-snapshot.json').write_text(json.dumps(asdict(snapshot)))
+            with patch.object(worker,'_runtime_metadata',return_value=(phase.profile(),{},None,phase.category())), \
+                 patch.object(worker,'_memory'),patch.object(worker,'_probe'),patch.object(worker,'_record',return_value=index), \
+                 patch.object(worker,'prepare_device_runtime',return_value=(provider.prepared,None,None,None)) as prepare, \
+                 patch.object(teacher,'Provider',return_value=provider) as make_provider, \
+                 patch.object(cost,'run',side_effect=RuntimeError('cost reached')), \
+                 patch.object(device_d_frame_parity,'run',side_effect=RuntimeError('parity reached')):
+                args=NS(saved_roots=root,index_sha256='f'*64,champion_archive='champion.npz')
+                with self.assertRaisesRegex(ValueError,'not threaded'):
+                    d3_depthn_gate.load_roots(args)
+                prepare.assert_not_called()
+                argv=['--bank-root',str(root),'--index-sha256','f'*64,'--out',str(root/'out'),'--execution-source','1'*40]
+                with self.assertRaisesRegex(RuntimeError,'parity reached'):
+                    d3_saved_root_gate.main(argv)
+                with self.assertRaisesRegex(RuntimeError,'cost reached'):
+                    d3_depth2_gate.saved_root_requests(args,allow_self_moves=True)
+                self.assertEqual(prepare.call_count,2)
+                for prepared_call, provider_call in zip(prepare.call_args_list,make_provider.call_args_list,strict=True):
+                    prepared_plan=prepared_call.args[0].plan
+                    self.assertIs(prepared_plan.self_moves,True)
+                    self.assertIs(provider_call.args[1],prepared_plan)
+
+    def test_saved_bank_encoding_must_agree_before_loading_the_actor(self):
+        provider,snapshot,index=inputs(True)
+        with patch.object(cost,'actor',side_effect=RuntimeError('actor reached')) as actor:
+            with self.assertRaisesRegex(RuntimeError,'actor reached'):
+                cost.run(provider,snapshot,'unused',index,enable_cost=True)
+            actor.assert_called_once()
+        for mismatch in ('index','declaration','catalog','tables'):
+            with self.subTest(mismatch=mismatch):
+                provider,snapshot,index=inputs(True)
+                if mismatch=='index':
+                    del index['namespace']['self_moves']
+                elif mismatch=='declaration':
+                    path=Path(index['declaration']['path']);doc=json.loads(path.read_text())
+                    del doc['self_moves'];path.write_text(runs._json(doc))
+                    index['declaration']['sha256']=runs._file_sha(path)
+                elif mismatch=='catalog':
+                    provider.prepared.catalog.masks.self_moves=False
+                else:
+                    provider.prepared.observation_tables.belief.self_moves=None
+                with patch.object(cost,'actor') as actor, self.assertRaisesRegex(ValueError,'self_moves differs'):
+                    cost.run(provider,snapshot,'unused',index,enable_cost=True)
+                actor.assert_not_called()
 
     def test_cold_first_p95_unknown_denominators_no_refill(self):
         values=[100.,*([2.]*19)]

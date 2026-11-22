@@ -84,13 +84,14 @@ def main(argv=None):
     except ValueError as error:
         # The probe pins the device count/kind of the original worker; keep its numeric settings.
         log('PROBE_DIFFERS', error=str(error));jax.config.update('jax_enable_x64', False);jax.config.update('jax_default_matmul_precision', 'highest')
-    prepared, pool, _, _ = worker.prepare_device_runtime(SimpleNamespace(runtime=runtime, vocabulary=vocabulary, plan=SimpleNamespace(pool_sha256=pool_sha)))
     from gpu_engine import device_d_cost as cost, v5_device_teacher as teacher, device_d_frame_parity as parity
     index = worker._record(dict(path=str(root / 'bank/cost-root-index.json'), sha256=args.index_sha256))
     declaration, batches, _, labels = schema.declaration(index['declaration'])
     prespec = json.loads((root / 'prespec.json').read_text())
     plan = cost.plan_from_bank(profile=profile, labels=labels, category=category, batches=batches, pool_sha256=pool_sha,
-        selection_seed=declaration['cost_recipe_seed'], run_id=prespec['cost_run_id'], max_requests=declaration['max_requests'])
+        selection_seed=declaration['cost_recipe_seed'], run_id=prespec['cost_run_id'], max_requests=declaration['max_requests'],
+        self_moves=declaration.get('self_moves', False))
+    prepared, _, _, _ = worker.prepare_device_runtime(SimpleNamespace(runtime=runtime, vocabulary=vocabulary, plan=plan))
     snapshot = runs.Snapshot(**json.loads((root / 'cost-snapshot.json').read_text()))
     provider = teacher.Provider(prepared, plan, batch_joint=True)
     def progress(record):
