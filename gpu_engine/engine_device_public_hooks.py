@@ -903,10 +903,10 @@ def turn_end(c,before,after,ordinary,*,upkeep=None,leftovers=None,residual=None,
             c=feature(c,side,p,name,j.ones_like(p),alive&active,add=True)
             c=feature(c,side,p,name,j.zeros_like(p),ordinary&~active)
     t=c.trackers;fields=t.field_features
-    # B2 counts a -weather|X|[upkeep] line (public_field.apply), printed by the residual's weather handler (order 8, before
-    # any residual faint): not on a step whose battle ended before its residual.
+    # The residual's weather handler prints either an upkeep line for active weather or a clear line when it expires.
+    # Match the public field fold and leave the count alone when the step skips residual work.
     weather_tick=ordinary if residual is None else _mask(residual,len(c.trackers.error))
-    up=fields['weather_upkeeps']+(weather_tick&(after.weather!=0)).astype(j.int32)
+    up=j.where(weather_tick,j.where(after.weather!=0,fields['weather_upkeeps']+1,0),fields['weather_upkeeps'])
     c=c._replace(trackers=t._replace(field_features={**fields,'weather_upkeeps':up}))
     if upkeep is not None:
         facts=c.trackers.mon_features

@@ -10,7 +10,7 @@ import jax
 import jax.numpy as j
 import numpy as np
 from gpu_engine import engine_device_public_hooks as h, engine_device_trackers as tr
-from gpu_engine import transition,secondary
+from gpu_engine import transition,secondary,weather
 from gpu_engine.state import empty_state
 
 BASE='db4ae97b6e560bb69c6c0bf9c845c82535ec0930'
@@ -27,6 +27,20 @@ def tables():
  return Belief(pool,m,a,i,j.tile(j.array([[1,2]],j.int32),(20,1)),j.arange(10,dtype=j.int32).at[8].set(2),j.ones(10,bool).at[0].set(False).at[9].set(False))
 
 class PublicHooksTests(unittest.TestCase):
+ def test_weather_upkeeps_count_active_residuals_and_clear_on_expiry(self):
+  before=state(3)._replace(weather=j.full(3,weather.RAIN,j.int32),weather_counter=j.array([1,0,1],j.int32))
+  carry=h.initialize(before,tables())
+  counts=carry.trackers.field_features
+  carry.trackers=carry.trackers._replace(field_features={**counts,'weather_upkeeps':j.full(3,4,j.int32)})
+  residual=j.array([True,True,False])
+  active,counter=weather.residual_clock(before.weather,before.weather_counter,eligible=residual)
+  after=before._replace(weather=active,weather_counter=counter)
+
+  carry=h.turn_end(carry,before,after,j.ones(3,bool),residual=residual)
+  self.assertEqual(carry.trackers.field_features['weather_upkeeps'].tolist(),[0,5,4])
+  carry=h.turn_end(carry,after,after,j.ones(3,bool),residual=residual)
+  self.assertEqual(carry.trackers.field_features['weather_upkeeps'].tolist(),[0,6,4])
+
  def test_actual_declarations_masks_private_noninterference_and_public_types(self):
   s=state();b=tables()
   @jax.jit
