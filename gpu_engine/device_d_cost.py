@@ -121,7 +121,7 @@ def summarize(records):
         scope='OFFLINE_SAVED_ROOT_LABEL_COST_ONLY_ZERO_NEW_GAMES_OR_OUTCOMES',scientific_strength_qualification=False)
 
 
-def plan_from_bank(*,profile,labels,category,batches,pool_sha256,selection_seed,run_id,max_requests):
+def plan_from_bank(*,profile,labels,category,batches,pool_sha256,selection_seed,run_id,max_requests,self_moves=False):
     """A genuine NONTRAINING cost Plan for the original saved-bank cells.
 
     This does not truncate/relabel a production D pool or invoke its roster.
@@ -131,7 +131,7 @@ def plan_from_bank(*,profile,labels,category,batches,pool_sha256,selection_seed,
     config=profile.configurations(labels,category_vocabulary=category,arm='D',replicate=0)
     return runs.Plan(run_id,config['model'],config['loss'],training.TrainConfig(**config['training']),
         (tuple(batches),),pool_sha256,selection_seed,config['historical_fraction'],config['historical_window'],
-        max_requests,runs.Watchdog(1800),discount=config['discount'])
+        max_requests,runs.Watchdog(1800),discount=config['discount'],self_moves=self_moves)
 
 
 def _observer(provider):
@@ -167,18 +167,27 @@ def run(provider,snapshot,archive_path,index,*,enable_cost=False,progress_callba
         raise ValueError('original immutable saved-root index required')
     from . import v5_device_evaluation_bank as saved
     import json
+    plan=provider.plan
     namespace=index['namespace'];binding_doc=json.loads(provider.prepared.source_binding_json)
     expected=dict(source_commit=binding_doc['source_commit'],source_sha256=provider.prepared.source_sha256,
         public_source_hash=provider.prepared.source.metadata.source_hash,pool_sha256=provider.plan.pool_sha256,
         pool_metadata_sha256=binding_doc['pool_metadata_sha256'],category_vocabulary_sha256=provider.plan.model.category_vocabulary_sha256,
         label_vocabulary_sha256=provider.plan.model.label_vocabulary.sha256)
+    if plan.self_moves:expected['self_moves']=True
+    if namespace.get('self_moves',False) is not plan.self_moves:
+        raise ValueError('saved-root index self_moves differs from the D cost Plan')
     if namespace!=expected:raise ValueError('saved bank/actual Prepared source, pool and namespaces differ')
     from pokezero import v5_device_evaluation_bank as schema
     try:
         declaration,batches,_games,labels=schema.declaration(index['declaration'])
     except (KeyError,TypeError,OSError)as error:
         raise ValueError('hash-bound actual saved-bank declaration required')from error
-    plan=provider.plan
+    if declaration.get('self_moves',False) is not plan.self_moves:
+        raise ValueError('saved-bank declaration self_moves differs from the D cost Plan')
+    catalog_encoding=getattr(provider.prepared.catalog.masks,'self_moves',False)
+    table_encoding=getattr(provider.prepared.observation_tables.belief,'self_moves',None) is not None
+    if catalog_encoding is not plan.self_moves or table_encoding!=plan.self_moves:
+        raise ValueError('prepared catalog or observation tables self_moves differs from the D cost Plan')
     if (plan.iterations!=(batches,)or plan.pool_sha256!=declaration['pool_sha256']
             or plan.selection_seed!=declaration['cost_recipe_seed']
             or index.get('cost_recipe_seed')!=declaration['cost_recipe_seed']
