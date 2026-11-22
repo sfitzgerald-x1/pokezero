@@ -136,9 +136,19 @@ class ManifestTests(unittest.TestCase):
   fake=SimpleNamespace(POSITIONS='p',SIBLINGS='s',declaration=lambda ref:(decl,None,range(256),SimpleNamespace(sha256='e'*64)),
    _records=lambda ref,kind:(header,positions if kind=='p'else groups),resolve_device_bank=lambda *a:None)
   with tempfile.TemporaryDirectory()as d:
-   p=Path(d)/'index.json';p.write_text(json.dumps(dict(declaration=declaration,namespace=dict(source_commit='a'*40),cost_roots=[])))
+   p=Path(d)/'index.json'
+   index=dict(declaration=declaration,namespace=dict(source_commit='a'*40),cost_roots=[])
+   p.write_text(json.dumps(index))
    config['root_index']=dict(path=str(p),sha256=hashlib.sha256(p.read_bytes()).hexdigest())
    manifest=producer.bank_manifest(config,fake)[-1]
+   self.assertNotIn('self_moves',manifest)
+   decl['self_moves']=True
+   with self.assertRaisesRegex(ValueError,'saved-root index self_moves differs'):
+    producer.bank_manifest(config,fake)
+   index['namespace']['self_moves']=True
+   p.write_text(json.dumps(index))
+   config['root_index']['sha256']=hashlib.sha256(p.read_bytes()).hexdigest()
+   self.assertIs(producer.bank_manifest(config,fake)[-1]['self_moves'],True)
   self.assertEqual(manifest['declared_slots'],1024);self.assertEqual(manifest['declared_children'],900)
   self.assertEqual(manifest['brief_comparison']['actual_minus_reported_children'],900-8378)
  def test_all_five_test_folds_are_disjoint_from_fit_and_validation(self):
@@ -183,6 +193,59 @@ class ReconstructionControllerTests(unittest.TestCase):
   self.assertEqual([x for x in published if x[0]==0],[(0,0)])
   self.assertEqual(sum(e['status']=='SAVED'for e in entries),61)
   self.assertEqual(len(entries),64)
+
+class SelfMovesTests(unittest.TestCase):
+ def test_truth_actor_encodes_off_and_grid_views_follow_the_bank(self):
+  from types import SimpleNamespace as Namespace
+  from unittest.mock import patch
+  import jax
+  import jax.numpy as j
+  from gpu_engine import benchmark_device_selfplay as sample, champion, engine_device_observation as obs
+  from gpu_engine import engine_device_trackers as public, transition
+  archive=dict(path='unused',sha256='a'*64)
+  meta=dict(weights_archive_sha256=archive['sha256'],checkpoint_sha256=t.CHAMPION)
+  config=Namespace(tokens=23,vocabulary=32)
+  prepared=Namespace(category_size=32,catalog=Namespace(masks=Namespace(self_moves=True)),
+                     observation_tables=Namespace(belief=None),engine_tables=None)
+  state=Namespace(done=j.zeros(1,bool))
+  def encode(s,p,tables,*,observer_sides,legal_action_mask,self_moves=None):
+   return Namespace(legal_action_mask=legal_action_mask,error=j.zeros(1,j.int32),self_moves=self_moves is not False)
+  def run_actor(params,config,views,*,actor_kind):
+   self.assertEqual(actor_kind,'champion23')
+   self.assertEqual([v.self_moves for v in views],[False,False])
+   return Namespace(policy_logits=j.zeros((1,2,9)),finite=j.ones((1,2),bool))
+  with patch.object(jax,'jit',side_effect=lambda f:f),patch.object(champion,'load',return_value=({},config,meta)), \
+       patch.object(sample,'request_seats',return_value=j.ones((1,2),bool)),patch.object(transition,'action_mask',return_value=j.ones((1,2,9),bool)), \
+       patch.object(public,'readout'),patch.object(obs,'encode',side_effect=encode),patch.object(obs,'map_actions',side_effect=lambda v,s,side,a:a), \
+       patch.object(sample,'run_actor',side_effect=run_actor):
+   executor=producer.RawExecutor(prepared,archive)
+   views,_,actions,valid=executor.query(state,None,None)
+   self.assertEqual([v.self_moves for v in views],[False,False])
+   self.assertTrue(bool(valid[0]))
+   self.assertEqual(actions.tolist(),[[0,0]])
+   self.assertEqual([v.self_moves for v in executor.view(state,None)],[True,True])
+
+ def test_both_head_kinds_must_match_the_bank_encoding(self):
+  from types import SimpleNamespace as Namespace
+  from unittest.mock import patch
+  from gpu_engine import champion, device_rollout_truth_score as score, v5_model
+  archive=dict(path='unused',sha256='a'*64)
+  bank=dict(category_count=32,category_vocabulary_sha256='b'*64,label_vocabulary={})
+  head=dict(archive=archive,checkpoint_sha256='c'*64,category_vocabulary_sha256='b'*64)
+  config=Namespace(tokens=23,vocabulary=32)
+  meta=dict(weights_archive_sha256=archive['sha256'],checkpoint_sha256=head['checkpoint_sha256'])
+  with patch.object(score,'label_vocabulary_sha256',return_value='d'*64):
+   for kind,loader in (('champion23',champion),('public-v5',v5_model)):
+    for on in (False,True):
+     with self.subTest(kind=kind,self_moves=on):
+      archive_meta=dict(meta,self_moves=True) if on else meta
+      with patch.object(loader,'load',return_value=({},config,archive_meta)):
+       matching=dict(bank,self_moves=True) if on else bank
+       mismatched=bank if on else dict(bank,self_moves=True)
+       self.assertTrue(callable(score.load_predictor(dict(head,kind=kind),matching)))
+       with self.assertRaisesRegex(ValueError,'scoring archive self_moves differs'):
+        score.load_predictor(dict(head,kind=kind),mismatched)
+
 
 class StoredPredictionTests(unittest.TestCase):
  def test_score_keeps_same_scalar_inputs_and_forwards_for_independent_recomputation(self):

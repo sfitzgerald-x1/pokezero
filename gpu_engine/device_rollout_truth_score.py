@@ -15,6 +15,7 @@ from .device_rollout_truth import read,publish,label_vocabulary_sha256
 def load_predictor(head,bank):
     import jax
     import jax.numpy as j
+    from pokezero.checkpoint_self_moves import archive_self_moves
     from . import champion,v5_model
     if head['kind']=='champion23':
         params,c,meta=champion.load(head['archive']['path'])
@@ -28,13 +29,14 @@ def load_predictor(head,bank):
     elif head['kind']=='public-v5':
         params,c,meta=v5_model.load(head['archive']['path'],expected_archive_sha256=head['archive']['sha256'],expected_checkpoint_sha256=head['checkpoint_sha256'],
             expected_category_vocabulary_sha256=bank['category_vocabulary_sha256'],expected_label_vocabulary_sha256=label_vocabulary_sha256(bank['label_vocabulary']),enable_v5=True)
-        from gpu_engine.private_self_moves import refuse_unthreaded;refuse_unthreaded(meta,context='device rollout truth score')   # V2 self_moves
         def forward(docs):
             inputs={k:j.asarray([d[k]for d in docs],dtype)[:,None]for k,dtype in [('numeric_features',j.float32),('categorical_ids',j.int32),('token_type_ids',j.int32),('attention_mask',bool)]}
             inputs['history_mask']=j.ones((len(docs),1),bool)
             out=v5_model.forward(params,inputs,c,compute_dtype='bfloat16')
             return out.value,out.valid&j.isfinite(out.value)&j.all(j.isfinite(out.policy_logits),axis=-1)
     else:raise ValueError('explicit public-v5/champion23 head required; privileged fitting is a separate partitioned step')
+    if archive_self_moves(meta) is not bank.get('self_moves', False):
+        raise ValueError('scoring archive self_moves differs from the device-bank declaration')
     # Batch shape does not select or reorder data; outputs are accepted only as
     # finite bounded predictions. This head never supplies rollout labels.
     def predict(docs):
@@ -79,6 +81,8 @@ def evaluate(config,summary_reference,head,output):
     summary=read(summary_reference)
     if any(summary['manifest'][k]!=manifest[k]for k in ('declaration','positions','siblings','declared_children','source_commit')):
         raise ValueError('truth and head bank differ')
+    if summary['manifest'].get('self_moves', False) is not manifest.get('self_moves', False):
+        raise ValueError('truth and head bank self_moves differ')
     def lines(ref):
         blob=Path(ref['path']).read_bytes()
         if hashlib.sha256(blob).hexdigest()!=ref['sha256']:raise ValueError('immutable truth/grid bytes differ')
