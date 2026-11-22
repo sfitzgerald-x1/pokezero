@@ -27,7 +27,12 @@ class Finished(NamedTuple):
 
 class SearchHeadToHeadEncodingTests(unittest.TestCase):
     def evaluate(self, enabled, metadata, *, catalog=None, tables=None, error=None):
-        recipe = replace(plan(), self_moves=enabled)
+        original = plan()
+        # Swapped games use the lower stream namespace, as in the paired runner.
+        iterations = tuple(tuple(replace(batch, games=tuple(
+            replace(game, stream_id=game.stream_id + search.SWAP_OFFSET) for game in batch.games))
+            for batch in iteration) for iteration in original.iterations)
+        recipe = replace(original, iterations=iterations, self_moves=enabled)
         configs = (recipe.model, replace(recipe.model, replicate=1), recipe.model)
         actors = [v5_run.Snapshot(0, 'actor.pt', 'a' * 64, 'actor.npz', digest * 64,
                   v5_run._sha(config.metadata())) for digest, config in zip('bcd', configs)]
