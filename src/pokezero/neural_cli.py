@@ -2966,7 +2966,8 @@ def _require_cache_masks_match_model_config(paths, model_config) -> None:
     Collection stamps the resolved masks into cache metadata (the mask-axis twin of the
     belief-provenance hash); a mismatch means the observations in the cache were encoded
     under different masks than this training run declares — never train through it.
-    Legacy caches and JSONL inputs record none and cannot be checked.
+    Legacy caches may omit mask metadata. A posterior-enabled model requires
+    an explicit declaration from each cache. JSONL inputs have no cache metadata.
     """
     expected = {
         "stats_block": model_config.stats_block_enabled,
@@ -2990,9 +2991,12 @@ def _require_cache_masks_match_model_config(paths, model_config) -> None:
         # getattr: a config without the V2 self_moves switch trained with zero self-token
         # move/PP columns (same strict latch).
         "self_moves": getattr(model_config, "self_moves", False),
+        "set_posterior_narrowing": getattr(model_config, "set_posterior_narrowing", False),
     }
     for cache_path, masks in cache_feature_masks_by_path(paths):
         if masks is None:
+            if expected["set_posterior_narrowing"]:
+                raise ValueError(f"training cache {cache_path} lacks the required set_posterior_narrowing declaration")
             continue
         # Caches collected before the investment channel record no field; they were
         # encoded with the column constant zero, i.e. tier2_investment=False.
@@ -3002,6 +3006,7 @@ def _require_cache_masks_match_model_config(paths, model_config) -> None:
             "investment_belief_narrowing": False,
             "item_belief_narrowing": False,
             "self_moves": False,
+            "set_posterior_narrowing": False,
             **masks,
         }
         if masks != expected:

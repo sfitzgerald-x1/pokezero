@@ -124,7 +124,8 @@ class ProtocolConstructor:
                         joint_seed=int.from_bytes(hashlib.sha256(json.dumps(('joint-v1',self.seed,request['battle_id'],
                             request['owner'],protocol.game_lines_sha256(lines)),separators=(',',':')).encode()).digest()[:8],'big')
                         joint_plan=self.joint_session.prepare(public.context,lines,dex=self.catalog.dex,seed=joint_seed,count=self.count,
-                            binding=self.source.binding_sha256,features=getattr(self.catalog.masks,'set_posterior_narrowing',False),deadline=deadline)
+                            binding=self.source.binding_sha256,address=public.address,
+                            features=getattr(self.catalog.masks,'set_posterior_narrowing',False),deadline=deadline)
                         elapsed,remaining=deadline.elapsed_seconds,deadline.remaining_seconds
                     joint_plan=JointSession.finish_handoff(joint_plan,deadline,elapsed_seconds=elapsed,remaining_seconds=remaining)
                 feature_kwargs={}
@@ -186,7 +187,7 @@ class ProtocolConstructor:
         if type(request['stream_id'])is int and type(request['decision_index'])is int:   # True == 1: a bool never matches a held root
             held=self.roots.get(((self.rung,request['battle_id'],request['owner'],request['stream_id']),request['decision_index'],prefix))
             if held is not None:return held
-        return capture_root(config=self.owning_config,contract=ActorContract.champion(),lines=lines,battle_id=request['battle_id'],
+        return capture_root(config=self.owning_config,contract=self.actor_contract,lines=lines,battle_id=request['battle_id'],
             address=DecisionAddress(request['stream_id'],request['decision_index'],int(request['owner'][1])-1),seed=self.seed&0xffffffff)
 
     def drop_roots(self,battles=None):

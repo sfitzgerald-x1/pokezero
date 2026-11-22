@@ -964,6 +964,10 @@ def world_range(root,detached,*,start,stop,lines,catalog,source,metadata,config,
         raise ValueError('world range must satisfy 0 <= start <= stop <= count')
     if detached.source_binding_sha256!=source.binding_sha256:
         raise live.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
+    if joint_plan is not None:
+        from pokezero.joint_serving import validate_plan
+        validate_plan(joint_plan,root,lines,address=detached.address,source_hash=source.source_hash,
+            source_binding=source.binding_sha256)
     inputs=ProtocolInputs(detached,tuple(lines),catalog,metadata,source,joint_plan=joint_plan)
     result=[];seeds=[];diagnostics=[];game=game_lines_sha256(lines)
     binding=(root.context.battle_id,root.owner_lines_sha256,detached.address,source.binding_sha256,seed,game)

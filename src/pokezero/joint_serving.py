@@ -27,6 +27,21 @@ class JointPlan:
     source_hash: str
     game_sha256: str
     fallback_plan: object = None
+    root_binding: tuple | None = None
+
+
+def _root_binding(context, lines, source_binding, address):
+    prefix = hashlib.sha256(''.join(line + '\n' for line in lines).encode()).hexdigest()
+    return context.battle_id, context.player_id, prefix, source_binding, address
+
+
+def validate_plan(plan, public_root, lines, *, address, source_hash, source_binding):
+    """Match the joint draw to the original owning decision and exact wire prefix."""
+    expected = _root_binding(public_root.context, lines, source_binding, address)
+    if (type(plan) is not JointPlan or plan.source_hash != source_hash
+            or plan.root_binding != expected or public_root.owner_lines_sha256 != expected[2]
+            or public_root.address != address or expected[1] != f'p{address.owner + 1}'):
+        raise ValueError('joint plan requires the same owning root, prefix and source binding')
 
 
 class JointSession:
@@ -63,7 +78,7 @@ class JointSession:
             provenance=hashlib.sha256(json.dumps((game,self.table.source_hash,'stage1',rows),
                 sort_keys=True,separators=(',',':')).encode()).hexdigest())
 
-    def _plan(self, teams, posts, payload, mode, reason, tv, game, original_posts, fallback=None):
+    def _plan(self, teams, posts, payload, mode, reason, tv, game, original_posts, root_binding, fallback=None):
         if payload is not None:
             payload['game_sha256'] = game
             payload['payload_sha256'] = hashlib.sha256(json.dumps(payload,sort_keys=True,
@@ -80,7 +95,7 @@ class JointSession:
         draws = None if teams is None else [[(m.species,m.variant_index,m.slot,m.incoming_context) for m in team] for team in teams]
         diagnostic['law_sha256'] = hashlib.sha256(json.dumps((game,self.table.provenance,self.model['sha256'],
             mode,diagnostic['tv_bound'],draws,payload),sort_keys=True,separators=(',',':')).encode()).hexdigest()
-        return JointPlan(teams,posts,payload,diagnostic,self.table.source_hash,game,fallback)
+        return JointPlan(teams,posts,payload,diagnostic,self.table.source_hash,game,fallback,root_binding)
 
     @staticmethod
     def finish_handoff(plan, deadline, *, elapsed_seconds=None, remaining_seconds=None):
@@ -95,12 +110,12 @@ class JointSession:
         plan.diagnostic['over_budget'] = late
         return plan
 
-    def prepare(self, context, lines, *, dex, seed, count, binding=None, features=False, deadline=None):
+    def prepare(self, context, lines, *, dex, seed, count, binding=None, address=None, features=False, deadline=None):
         from .joint_budget import check_deadline, defer_joint_gc, new_joint_deadline
         if deadline is None:
             with defer_joint_gc():
                 deadline = new_joint_deadline()
-                plan = self.prepare(context,lines,dex=dex,seed=seed,count=count,binding=binding,
+                plan = self.prepare(context,lines,dex=dex,seed=seed,count=count,binding=binding,address=address,
                     features=features,deadline=deadline)
                 elapsed,remaining = deadline.elapsed_seconds,deadline.remaining_seconds
             return self.finish_handoff(plan,deadline,elapsed_seconds=elapsed,remaining_seconds=remaining)
@@ -114,8 +129,9 @@ class JointSession:
         evidence = self._evidence(context,view,posts,stage1_posts=stage1_posts)
         fixed = self._generation_slots(lines,view.opponent_slot)
         game = set_posterior.game_lines_sha256(lines)
+        root_binding = _root_binding(context, lines, binding, address)
         fallback = self._plan(None,stage1_posts,self._fallback_payload(stage1_posts,game) if features else None,
-            'stage1_fallback',None,None,game,stage1_posts)
+            'stage1_fallback',None,None,game,stage1_posts,root_binding)
         fallback.diagnostic['owner'] = view.self_slot
         try:
             check_deadline(deadline,.175)
@@ -137,7 +153,7 @@ class JointSession:
             posts = {key: replace(post,weights=tuple(payload['rows'][canonical_gen3_randbat_species_id(key)]['weights']),
                 support=tuple(payload['rows'][canonical_gen3_randbat_species_id(key)]['support']),
                 provenance=payload['provenance']) for key,post in posts.items()}
-            plan = self._plan(outcome.teams,posts,payload,outcome.mode,None,outcome.tv_bound,game,stage1_posts,fallback)
+            plan = self._plan(outcome.teams,posts,payload,outcome.mode,None,outcome.tv_bound,game,stage1_posts,root_binding,fallback)
             plan.diagnostic['owner'] = view.self_slot
             check_deadline(deadline)
             return plan

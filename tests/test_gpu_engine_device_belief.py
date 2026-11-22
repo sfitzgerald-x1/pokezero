@@ -17,6 +17,24 @@ class DeviceBeliefTests(unittest.TestCase):
         cls.fixture = fixtures.DeviceObservationTests()
         cls.catalog = cls.fixture.catalog; cls.tables = cls.fixture.tables
 
+    def test_new_reveal_keeps_its_ordinary_weights_and_prior(self):
+        state, view, owners, legal = self.fixture.facts(b=1)
+        view = view._replace(
+            species=view.species.at[0, :2].set(2),
+            present=view.present.at[0, 1].set(True),
+            level=view.level.at[0, 1].set(80),
+        )
+        tables = self.tables._replace(belief=self.tables.belief._replace(standing_pins_enabled=j.asarray(True)))
+        plain = e.encode(state, view, tables, observer_sides=owners, legal_action_mask=legal)
+        variant = j.argmax(plain.numeric_features[0, 23, :64])
+        supplied = j.zeros((1, 6, 64), j.float32).at[0, 0, variant].set(1)
+        pinned = view._replace(set_posterior_weights=supplied, set_posterior_prior=supplied)
+        out = e.encode(state, pinned, tables, observer_sides=owners, legal_action_mask=legal)
+        np.testing.assert_array_equal(out.error, plain.error)
+        np.testing.assert_array_equal(out.numeric_features[0, 23, :64], supplied[0, 0])
+        np.testing.assert_array_equal(out.numeric_features[0, 23, 64:128], supplied[0, 0])
+        np.testing.assert_array_equal(out.numeric_features[0, 24], plain.numeric_features[0, 24])
+
     def reference(self, public):
         from gpu_engine import public_belief as p, public_mon_state as mon, public_moves
         from gpu_engine import public_belief_features as features

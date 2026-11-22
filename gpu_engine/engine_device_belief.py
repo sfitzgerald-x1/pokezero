@@ -250,10 +250,10 @@ def project(view, tables):
         selected64=j.pad(selected,((0,0),(0,0),(0,64-maximum)))
         weighted=j.where(selected64,supplied,0)
         total=weighted.sum(-1,keepdims=True)
-        bad=j.any(~j.isfinite(supplied)|(supplied<0),axis=(1,2))|j.any(view.present&(total[...,0]<=0),axis=-1)
-        supplied_rows=j.any(supplied>0,axis=(1,2))
-        malformed|=enabled&supplied_rows&bad
-        weights=j.where((enabled&supplied_rows)[:,None,None],weighted/j.maximum(total,j.finfo(j.float32).tiny),weights)
+        bad=j.any(~j.isfinite(supplied)|(supplied<0),axis=-1)|(total[...,0]<=0)
+        use_supplied=enabled&view.present&j.any(supplied!=0,axis=-1)
+        malformed|=j.any(use_supplied&bad,axis=-1)
+        weights=j.where(use_supplied[...,None],weighted/j.maximum(total,j.finfo(j.float32).tiny),weights)
     semantic_count = possible_ability.sum(axis=-1)
     certain = j.where(known_ability > 0, known_ability, j.where(semantic_count == 1, j.argmax(possible_ability, axis=-1), 0))
     return Result(numeric, categorical, j.where(visible, weights, 0), effective, count, uncertainty,

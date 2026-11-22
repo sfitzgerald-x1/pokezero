@@ -8,13 +8,31 @@ import unittest
 from unittest.mock import patch
 
 from pokezero import determinization as D,set_posterior as SP
-from pokezero.joint_serving import JointSession,opponent_team,JointPlan
+from pokezero.joint_serving import JointSession,opponent_team,JointPlan,validate_plan
+from pokezero.v5_contract import DecisionAddress
 from pokezero.joint_generator import JointMember
 from tests.test_depthn_set_posterior_worlds import ProtocolRoute
 from tests.test_depthn_set_posterior import fixture
 
 
 class JointEvidenceArithmetic(unittest.TestCase):
+    def test_joint_plan_rejects_a_different_root_or_prefix(self):
+        address = DecisionAddress(1, 2, 0)
+        context = NS(battle_id='battle', player_id='p1')
+        lines = ('|turn|2',)
+        prefix = hashlib.sha256(b'|turn|2\n').hexdigest()
+        root = NS(address=address, context=context, owner_lines_sha256=prefix)
+        plan = JointPlan(None, {}, None, {}, 'source', 'game',
+                         root_binding=('battle', 'p1', prefix, 'binding', address))
+        def check(root, lines, address):
+            validate_plan(plan, root, lines, address=address, source_hash='source', source_binding='binding')
+        check(root, lines, address)
+        later = DecisionAddress(1, 3, 0)
+        with self.assertRaisesRegex(ValueError, 'same owning root'):
+            check(NS(**{**vars(root), 'address': later}), lines, later)
+        with self.assertRaisesRegex(ValueError, 'same owning root'):
+            check(root, (*lines, '|-damage|p2a: Foe|50/100'), address)
+
     def test_fallback_features_use_the_actual_restricted_stage1_law(self):
         session=JointSession.__new__(JointSession)
         variants=tuple(NS(item='Leftovers',to_summary=lambda i=i:{'index':i})for i in range(2))

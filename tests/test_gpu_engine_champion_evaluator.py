@@ -192,6 +192,9 @@ class ChampionEvaluatorTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'category vocabulary'):ce.check_binding(ev, catalog(vocabulary=SimpleNamespace(sha=contract.category_vocab_sha256, size=915)))
             bad = SimpleNamespace(**dict(contract.feature_masks, stats_block=not dict(contract.feature_masks)['stats_block']))
             with self.assertRaisesRegex(ValueError, 'feature masks'):ce.check_binding(ev, catalog(masks=bad))
+            posterior_on = SimpleNamespace(**dict(contract.feature_masks, set_posterior_narrowing=True))
+            with self.assertRaisesRegex(ValueError, 'feature masks'):
+                ce.check_binding(ev, catalog(masks=posterior_on))
 
     def test_arm_check_on_the_first_root(self):
         ev = tiny_champion();root = {k: v[:1] for k, v in v2_inputs(ev.config, 1).items()}

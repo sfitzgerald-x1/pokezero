@@ -439,8 +439,8 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask, self_mov
     cat = cat.at[:, 0, 0].set(tables.request_categories[request_kind]).at[:, 0, 1].set(_lookup(tables.weather_categories, weather)).at[:, 0, 2].set(tables.field_role)
     prior = j.where(public.present[..., None], _lookup(tables.prior, public.species), 0)
     if tables.belief is not None and getattr(public,'set_posterior_prior',None) is not None:
-        supplied=j.any(public.set_posterior_prior>0,axis=(1,2))
-        prior=j.where((tables.belief.standing_pins_enabled&supplied)[:,None,None],public.set_posterior_prior,prior)
+        supplied=public.present&j.any(public.set_posterior_prior>0,axis=-1)
+        prior=j.where((tables.belief.standing_pins_enabled&supplied)[...,None],public.set_posterior_prior,prior)
     belief_error = j.zeros(b, bool); feature_error = j.zeros(b, bool)
     belief_result = None
     if tables.belief is not None:
