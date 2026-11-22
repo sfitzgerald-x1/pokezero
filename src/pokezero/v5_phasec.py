@@ -108,14 +108,24 @@ def bind_plan(profile,vocabulary,*,category_vocabulary,run_id,arm,replicate,iter
 
 
 CAMPAIGN_GAMES_PER_ROUND = 20_000
-CAMPAIGN_ROUNDS = (20, 250, 5000)
+CAMPAIGN_COOLDOWN_GAMES_BY_PARENT = {
+    2_000_000: 400_000,
+    5_000_000: 400_000,
+    12_000_000: 3_000_000,
+    13_500_000: 1_500_000,
+    **{9_000_000 * index: 1_000_000 * index for index in range(1, 10)},
+}
+CAMPAIGN_ROUNDS = frozenset({250, 5000} | {
+    games // CAMPAIGN_GAMES_PER_ROUND
+    for games in CAMPAIGN_COOLDOWN_GAMES_BY_PARENT.values()
+})
 
 
 def campaign_iterations(run_id, rounds, *, stream_start, team_start, identity_seed_start, constructor_seed_start,
                         sampling_seed_start, gender_seed, gender_domain, gender_root_start):
     """Declare a fixed bank from externally allocated ranges."""
     if type(rounds) is not int or rounds not in CAMPAIGN_ROUNDS:
-        raise ValueError('campaign needs the full 0.4M, 5M or 100M horizon')
+        raise ValueError('campaign needs a supported main-line or cooldown horizon')
     for value in (stream_start, team_start, identity_seed_start, constructor_seed_start,
                   sampling_seed_start, gender_seed, gender_domain, gender_root_start):
         runs._seed(value)
@@ -145,7 +155,7 @@ def bind_campaign_plan(profile, vocabulary, *, category_vocabulary, run_id, arm,
         or any(type(batch) is not runs.CampaignBatch for batch in batches)
         for batches in iterations
     ):
-        raise ValueError('campaign requires complete 20,000-game rounds at the 0.4M, 5M or 100M horizon')
+        raise ValueError('campaign requires complete 20,000-game rounds at a supported horizon')
     return _bind_plan(profile, vocabulary, category_vocabulary, run_id, arm, replicate, iterations,
                       pool_sha256, selection_seed)
 

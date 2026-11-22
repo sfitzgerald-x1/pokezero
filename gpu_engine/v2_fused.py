@@ -261,7 +261,8 @@ def select_learner_lr_start(context, lr_start, *, record_hash=True):
     return plan
 
 
-def _validate_lr_start_reports(runtime, reports, plan, policy, *, origin=(0, 0, 0), initial_campaign=None):
+def _validate_lr_start_reports(runtime, reports, plan, policy, *, origin=(0, 0, 0), initial_campaign=None,
+                               adopted_prefix=None):
     """Bind the fused round ledger and declared games to the loaded checkpoint."""
     if not reports or len(reports) > len(plan.iterations):
         raise ValueError('resuming LR start requires its committed fused rounds')
@@ -273,7 +274,9 @@ def _validate_lr_start_reports(runtime, reports, plan, policy, *, origin=(0, 0, 
     for iteration, report in enumerate(reports):
         games = sum(len(batch.games) for batch in plan.iterations[iteration])
         end_game = start_game + games
-        window = dict(start_game=start_game, end_game=end_game, total_games=total_games)
+        horizon = (adopted_prefix['previous_total_games'] if adopted_prefix is not None
+                   and iteration < adopted_prefix['rounds'] else total_games)
+        window = dict(start_game=start_game, end_game=end_game, total_games=horizon)
         training = report['training']
         start = training.get('lr_start')
         steps, rows = training['steps'], training['rows']
@@ -306,8 +309,10 @@ def argument_parser():
     parser.add_argument('--out', required=True)
     parser.add_argument('--require-resume', action='store_true',
         help='refuse to start without a committed fused state in --out')
+    parser.add_argument('--adopt-2m-prefix-runtime', metavar='PREVIOUS_RUNTIME',
+        help='adopt a committed S0a 2M prefix using its original digest-bound runtime')
     parser.add_argument('--cooldown-child', metavar='PARENT_OUT',
-        help='branch a separate 0.4M cooldown from a committed campaign parent output')
+        help='branch a declared cooldown from a committed campaign parent output')
     parser.add_argument('--cooldown-parent-sha256', help='exact checkpoint at the parent decision boundary')
     parser.add_argument('--arm', default='B', help='model shape for --config')
     parser.add_argument('--iterations', type=int, default=2, help='iterations for --config (1 or 2)')
@@ -367,6 +372,9 @@ def parse_args(argv=None):
         parser.error('--cooldown-child and --cooldown-parent-sha256 must be supplied together')
     if args.cooldown_child and (not args.campaign_anneal or args.advance_campaign_step_at is not None):
         parser.error('--cooldown-child needs --campaign-anneal and cannot advance a cut')
+    if args.adopt_2m_prefix_runtime and (not args.require_resume or not args.campaign_anneal
+                                        or args.cooldown_child or not args.declaration):
+        parser.error('2M prefix adoption needs a required resume with a successor campaign declaration')
     return args
 
 
@@ -404,8 +412,9 @@ def _validated_on_all_ranks(distribution, action):
             raise error_type(f'resume inputs failed on rank {rank}: {message}') from error
     return result
 
-def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy):
+def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy, cooldown_games):
     """Resolve one committed decision checkpoint and its warmed opponent history."""
+    from pokezero.v5_phasec import CAMPAIGN_COOLDOWN_GAMES_BY_PARENT, CAMPAIGN_GAMES_PER_ROUND
     from pokezero.v5_run import Snapshot
 
     root = root.resolve()
@@ -416,12 +425,15 @@ def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy):
         raise ValueError('cooldown requires a committed parent with the same model and LR-start policy')
     snapshot = matches[0]
     reports = state['reports'][:snapshot.iteration + 1]
-    if snapshot.iteration not in (99, 249) or len(reports) != snapshot.iteration + 1 or reports[-1]['iteration'] != snapshot.iteration:
-        raise ValueError('cooldown parent must be at a committed 2M or 5M decision boundary')
+    parent_games = CAMPAIGN_GAMES_PER_ROUND * (snapshot.iteration + 1)
+    if not reports or len(reports) != snapshot.iteration + 1 or reports[-1]['iteration'] != snapshot.iteration:
+        raise ValueError('cooldown parent must be at a committed campaign decision boundary')
+    if CAMPAIGN_COOLDOWN_GAMES_BY_PARENT.get(parent_games) != cooldown_games:
+        raise ValueError('cooldown duration differs from the declared campaign decision boundary')
     training = reports[-1]['training']
     campaign = CampaignSchedule(**training['campaign_schedule'])
     start_game = training['lr_start']['declared_window']['end_game']
-    if start_game != 20_000 * (snapshot.iteration + 1) or campaign.cooldown is not None:
+    if start_game != parent_games or campaign.cooldown is not None:
         raise ValueError('cooldown parent must belong to the uncooled campaign')
     warmup = next((row['iteration'] for row in reports
                    if row['training']['steps'] >= lr_start_policy['warmup_updates']), None)
@@ -432,8 +444,77 @@ def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy):
     if any(not (root / path).resolve().is_relative_to(root) for path in paths):
         raise ValueError('cooldown inputs must resolve within the parent output')
     proof = state.get('checkpoint_encoding_receipts', {}).get(checkpoint_sha256)
+    if proof is not None:
+        receipt_relative = Path(snapshot.checkpoint + '.encoding.json')
+        target = (root / receipt_relative).resolve()
+        original = Path(proof['path'])
+        if (not target.is_relative_to(root)
+                or (original != Path('/out') / receipt_relative and original.resolve() != target)):
+            raise ValueError('cooldown writer receipt does not belong to the parent checkpoint')
+        proof = dict(proof, path=str(target))
     return dict(snapshot=snapshot, history=history, origin=(training['steps'], training['rows'], start_game),
                 campaign=campaign, proof=proof, row_order=state['row_order'])
+
+
+def adopt_2m_prefix(out, args, saved, plan):
+    """Authorize one in-place declaration transition while keeping the committed state intact."""
+    from gpu_engine.source_provenance import verify_constructor_pool_prefix
+    from pokezero import v5_run as runs, v5_worker as worker
+
+    previous_digest = saved['declaration_sha256']
+    original = runs.read_evaluation_declaration(out, previous_digest)
+    successor = plan.manifest()
+    v2_fused_state.verify_campaign_prefix(original, successor, saved)
+
+    def ranges(batch):
+        games = batch['games']
+        count = games['game_count']
+        return (
+            (games['stream_start'], count),
+            (games['identity_seed_start'], count),
+            (games['team_start'], 2 * count),
+            (batch['constructor_seed'], 1),
+            (batch['sampling_seed'], 1),
+            (batch['gender_root_start'], count),
+        )
+
+    # S0a cooled children already used rounds 101–120 of the original bank.
+    reserved = [ranges(batch) for round_ in original['iterations'][:120] for batch in round_]
+    frontier = [max(start + size for start, size in column) for column in zip(*reserved, strict=True)]
+    for round_ in successor['iterations'][100:]:
+        for batch in round_:
+            for index, (start, size) in enumerate(ranges(batch)):
+                if start < frontier[index]:
+                    raise ValueError('successor reuses a committed or cooled-child roster or RNG address')
+                frontier[index] = start + size
+
+    previous_runtime_ref = dict(path=str(Path(args.adopt_2m_prefix_runtime).resolve()),
+                                sha256=saved['distribution']['declared']['runtime_sha256'])
+    previous_runtime = worker._record(previous_runtime_ref)
+    new_runtime = worker._record(dict(path=str(Path(args.runtime).resolve()), sha256=args.runtime_sha256))
+    mutable = {'source_commit', 'constructor_pool', 'gender_policy'}
+    fixed = [{key: value for key, value in item.items() if key not in mutable}
+             for item in (previous_runtime, new_runtime)]
+    if fixed[0] != fixed[1]:
+        raise ValueError('campaign adoption changes the original training runtime contract')
+    pools = [item['constructor_pool'] for item in (previous_runtime, new_runtime)]
+    if [pool['sha256'] for pool in pools] != [original['pool_sha256'], successor['pool_sha256']]:
+        raise ValueError('campaign adoption constructor pool binding differs')
+
+    gender_contracts = []
+    for runtime, pool in zip((previous_runtime, new_runtime), pools, strict=True):
+        policy = worker._record(runtime['gender_policy'])
+        if policy['provenance'].pop('pool_sha256') != pool['sha256']:
+            raise ValueError('campaign adoption GPU gender policy binds a different pool')
+        gender_contracts.append(policy)
+    if gender_contracts[0] != gender_contracts[1]:
+        raise ValueError('campaign adoption changes original gender constructor semantics')
+
+    last_prefix = original['iterations'][99][-1]['games']
+    team_end = last_prefix['team_start'] + 2 * last_prefix['game_count']
+    verify_constructor_pool_prefix(*pools, team_end)
+    return dict(rounds=100, previous_total_games=5_000_000, previous_declaration_sha256=previous_digest,
+                previous_runtime_sha256=previous_runtime_ref['sha256'])
 
 
 def main(argv=None, *, distribution=None):
@@ -446,6 +527,8 @@ def main(argv=None, *, distribution=None):
     state_path = out / 'state.json'
     if args.require_resume and not state_path.is_file():
         raise ValueError('--require-resume needs a committed state.json in --out')
+    if args.adopt_2m_prefix_runtime and distribution is None:
+        raise ValueError('2M prefix adoption requires distributed resume')
     (out / 'artifacts').mkdir(parents=True, exist_ok=True);(out / 'audit').mkdir(exist_ok=True)
     wall_start = time.perf_counter()
     if os.environ.get('JAX_COMPILATION_CACHE_DIR'):
@@ -474,17 +557,20 @@ def main(argv=None, *, distribution=None):
     base_campaign = CampaignSchedule() if args.campaign_anneal else None
     model_sha256 = runs._sha(plan.model.metadata())
     parent_binding = parent = None
+    cooldown_end_game = None
     parent_offset = 0
     origin = (0, 0, 0)
     if parent_root is not None:
-        if not compact or plan.game_offsets[-1] != 400_000:
-            raise ValueError('cooldown child requires a separate compact 0.4M declaration')
+        if not compact:
+            raise ValueError('cooldown child requires a separate compact declaration')
+        cooldown_games = plan.game_offsets[-1]
         parent = _rank_zero(distribution, 'cooldown parent', lambda: cooldown_parent(
-            parent_root, args.cooldown_parent_sha256, model_sha256, lr_start_policy))
+            parent_root, args.cooldown_parent_sha256, model_sha256, lr_start_policy, cooldown_games))
         if args.row_order not in (None, parent['row_order']):
             raise ValueError('cooldown child must use the parent row order')
         parent_offset = parent['snapshot'].iteration + 1
         origin = parent['origin']
+        cooldown_end_game = origin[2] + cooldown_games
         parent_binding = dict(snapshot=asdict(parent['snapshot']), origin=list(origin),
                               history_sha256=runs._sha(parent['history']))
         parent_receipt = out / v2_fused_state.PARENT_RECEIPT
@@ -507,6 +593,7 @@ def main(argv=None, *, distribution=None):
         distribution.bind(context, args)
     deferred = plan.evaluation is not None and plan.evaluation.deferred
     dispatch = None
+    retention_iterations = set()
     if compact or deferred:
         from pokezero.v5_deferred_evaluation import sync_actor
     if deferred:
@@ -514,24 +601,28 @@ def main(argv=None, *, distribution=None):
 
         def setup_dispatch():
             nonlocal dispatch
-            declaration = out / 'declaration.json'
-            if state_path.exists() and not declaration.is_file():
+            declaration = (runs.evaluation_declaration_path(out, declaration_sha256)
+                           if adopted_prefix is not None else out / 'declaration.json')
+            if state_path.exists() and not adopting and not declaration.is_file():
                 raise ValueError('original fused evaluation declaration is missing')
             if declaration.exists():
                 if runs._sha(json.loads(declaration.read_bytes())) != declaration_sha256:
                     raise ValueError('original fused evaluation declaration differs')
             else:
+                declaration.parent.mkdir(parents=True, exist_ok=True)
                 runs._publish(declaration, declaration_bytes)
-                sync_directory(out)
+                sync_directory(declaration.parent)
             dispatch = MilestoneDispatch(out, plan.evaluation, plan.evaluation_milestones(), declaration_sha256,
                 report_observer_error=lambda reason: log('EVALUATION_STOP_READ_ERROR', reason=reason))
-
-        _rank_zero(distribution, 'evaluation declaration', setup_dispatch)
+            retention_iterations.update(dispatch.milestones)
+            if parent is None and compact and plan.game_offsets[-1] == 100_000_000:
+                from pokezero.v5_phasec import CAMPAIGN_COOLDOWN_GAMES_BY_PARENT, CAMPAIGN_GAMES_PER_ROUND
+                retention_iterations.update(games // CAMPAIGN_GAMES_PER_ROUND - 1
+                                            for games in CAMPAIGN_COOLDOWN_GAMES_BY_PARENT)
 
     if args.torch_memory_fraction > 0:
         # The runtime probe caps Torch for the file pipeline; V2 holds the row store in Torch too.
         torch.cuda.set_per_process_memory_fraction(args.torch_memory_fraction, 0)
-    del declaration_bytes
     total_games = sum(len(batch.games) for batches in plan.iterations for batch in batches)
     log('PREPARED', seconds=context['preparation_seconds'], iterations=len(plan.iterations), games=total_games, **context['declared'])
     if parent is None:
@@ -561,10 +652,19 @@ def main(argv=None, *, distribution=None):
     saved = _rank_zero(distribution, 'resume manifest', read_resume_manifest)
     if compact and saved is not None and 'round_ledger' not in saved:
         raise ValueError('compact declaration needs its original fused round ledger')
+    adopted_prefix = None if saved is None else saved.get('adopted_prefix')
+    adopting = bool(saved is not None and saved.get('declaration_sha256') != declaration_sha256
+                    and args.adopt_2m_prefix_runtime)
+    if adopting:
+        if not compact or not deferred or adopted_prefix is not None:
+            raise ValueError('2M prefix adoption requires an original compact deferred campaign')
+        adopted_prefix = _rank_zero(distribution, 'verify committed 2M prefix', lambda: adopt_2m_prefix(out, args, saved, plan))
+    elif args.adopt_2m_prefix_runtime and adopted_prefix is None:
+        raise ValueError('2M prefix adoption needs a different successor declaration')
     committed_bytes = 0 if saved is None or not compact else saved['round_ledger']['committed_bytes']
     if saved is not None:
         def resume_inputs():
-            if saved.get('declaration_sha256') != declaration_sha256:
+            if not adopting and saved.get('declaration_sha256') != declaration_sha256:
                 raise ValueError('original fused run declaration binding required')
             if saved.get('lr_start') != lr_start_policy:
                 raise ValueError('resume requires the original fused LR-start declaration')
@@ -578,11 +678,18 @@ def main(argv=None, *, distribution=None):
             if (parent is None) != (cooldown is None) or cooldown is not None and (
                 cooldown.parent.sha256 != args.cooldown_parent_sha256
                 or cooldown.parent.declared_games != origin[2] or cooldown.parent.completed_updates != origin[0]
-                or cooldown.end_game != origin[2] + 400_000
+                or cooldown.end_game != cooldown_end_game
             ):
                 raise ValueError('resume requires its original finite cooldown')
             if distribution is not None:
-                distribution.check_resume(saved)
+                binding = saved
+                if adopting:
+                    old_distribution = saved['distribution']
+                    declared = dict(old_distribution['declared'])
+                    for key in ('declaration_sha256', 'effective_plan_sha256', 'runtime_sha256'):
+                        declared[key] = context['declared'][key]
+                    binding = dict(saved, distribution=dict(old_distribution, declared=declared))
+                distribution.check_resume(binding)
             elif 'distribution' in saved:
                 raise ValueError('distributed fused run requires its original placement on resume')
             recorded = saved.get('row_order')
@@ -612,7 +719,7 @@ def main(argv=None, *, distribution=None):
         if lr_start is not None:
             _validated_on_all_ranks(distribution, lambda: _validate_lr_start_reports(
                 runtime, reports, plan, lr_start_policy, origin=origin,
-                initial_campaign=campaign if parent is not None else None))
+                initial_campaign=campaign if parent is not None else None, adopted_prefix=adopted_prefix))
         if args.advance_campaign_step_at is not None:
             advanced = _validated_on_all_ranks(distribution, lambda: v2t.advance_campaign_step(
                 runtime, args.advance_campaign_step_at))
@@ -623,7 +730,7 @@ def main(argv=None, *, distribution=None):
         snapshots = [first]; reports = []; row_order = parent['row_order']; encoding_receipts = {}
         proof = encoding.off_from_receipt(parent['proof']) if not plan.self_moves and parent['proof'] is not None else None
         runtime = v2t.load_campaign_cooldown(parent_root / first.checkpoint,
-            parent_checkpoint_sha256=first.checkpoint_sha256, start_game=origin[2], end_game=origin[2] + 400_000,
+            parent_checkpoint_sha256=first.checkpoint_sha256, start_game=origin[2], end_game=cooldown_end_game,
             enable_v5=True, v2_config=replace(v2_config, campaign=parent['campaign']),
             expected_model_config=plan.model, expected_loss_config=plan.loss, expected_train_config=plan.train,
             device='cuda', expected_self_moves=plan.self_moves, off_provenance=proof, **placement)
@@ -653,6 +760,9 @@ def main(argv=None, *, distribution=None):
     else:
         from pokezero.v2_distributed import DistributedTrainer
         trainer = DistributedTrainer(runtime)
+    if deferred:
+        _rank_zero(distribution, 'evaluation declaration', setup_dispatch)
+    del declaration_bytes
     params = {}
     def actor_params(digest):
         if digest not in params:
@@ -671,11 +781,13 @@ def main(argv=None, *, distribution=None):
     if deferred and saved is not None:
         def recover_evaluations():
             for snapshot in snapshots[1:]:
+                if adopted_prefix is not None and snapshot.iteration < adopted_prefix['rounds']:
+                    continue
                 if snapshot.iteration in dispatch.milestones and dispatch.request_missing(snapshot):
                     publish_evaluation(snapshot)
             retain_full_checkpoints(out, [
                 dict(iteration=item.iteration, path=item.checkpoint) for item in snapshots[1:]
-            ], dispatch.milestones)
+            ], retention_iterations)
 
         _rank_zero(distribution, 'evaluation recovery and retention', recover_evaluations)
     route_stop = None
@@ -815,6 +927,8 @@ def main(argv=None, *, distribution=None):
             entropy_min=report['training'].get('entropy_min'))
         def commit_round():
             state = dict(row_order=row_order, declaration_sha256=declaration_sha256)
+            if adopted_prefix is not None:
+                state['adopted_prefix'] = adopted_prefix
             if lr_start is not None:
                 state['lr_start'] = lr_start_policy
             if parent is not None:
@@ -840,7 +954,7 @@ def main(argv=None, *, distribution=None):
                 # The reference initializer is outside this run's retention.
                 retain_full_checkpoints(out, [
                     dict(iteration=item.iteration, path=item.checkpoint) for item in snapshots[-2:]
-                    if item.iteration >= 0], dispatch.milestones)
+                    if item.iteration >= 0], retention_iterations)
             return end
 
         committed_bytes = _rank_zero(distribution, 'round commit, outbox and retention', commit_round)

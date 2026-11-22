@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,29 @@ import re
 SCHEMA = 'pokezero.v2-fused-state.v1'
 REPORTS = 'reports.jsonl'
 PARENT_RECEIPT = 'cooldown-parent.json'
+
+
+def verify_campaign_prefix(original, successor, saved):
+    """Verify the committed S0a declaration prefix before admitting its successor."""
+    from .v5_run import _json
+
+    rounds = 100
+    ledger = saved.get('round_ledger', {})
+    if ledger.get('completed_rounds') != rounds or ledger.get('schema') != SCHEMA:
+        raise ValueError('campaign adoption requires exactly 100 committed compact rounds')
+    if hashlib.sha256(_json(original).encode()).hexdigest() != saved.get('declaration_sha256'):
+        raise ValueError('original campaign declaration differs from the committed state')
+    if len(original['iterations']) != 250 or len(successor['iterations']) != 5000:
+        raise ValueError('campaign adoption requires the original 5M and successor 100M declarations')
+    if _json(original['iterations'][:rounds]) != _json(successor['iterations'][:rounds]):
+        raise ValueError('successor changes a committed game, seed or training roster address')
+    # The successor may extend the physical pool. Its used prefix bytes are
+    # checked separately from the roster addresses in these documents.
+    def immutable_fields(document):
+        return {key: value for key, value in document.items() if key not in ('iterations', 'pool_sha256')}
+
+    if _json(immutable_fields(original)) != _json(immutable_fields(successor)):
+        raise ValueError('successor changes the campaign identity or learner policy')
 
 
 def _directory_identity(path):

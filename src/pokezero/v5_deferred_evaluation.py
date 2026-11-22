@@ -483,7 +483,7 @@ def _restore_milestone(value, *, staged_run_root=None, original_root_visible=Tru
         request = replace(request, run_directory=root, archive_path=root / request.snapshot.archive,
                           checkpoint_path=root / request.snapshot.checkpoint)
     require_live_milestone(request, published_root=original if original_root_visible else None)
-    declaration = json.loads((request.run_directory / 'declaration.json').read_bytes())
+    declaration = run.read_evaluation_declaration(request.run_directory, request.declaration_sha256)
     policy = declaration['evaluation']
     if (run._sha(declaration) != request.declaration_sha256
             or policy['protocol_sha256'] != request.protocol_sha256
