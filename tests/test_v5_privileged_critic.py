@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock,patch
 import numpy as np
 from pokezero import v5_privileged_critic as c
 from gpu_engine import device_privileged_rows as prep
@@ -75,6 +75,34 @@ class CriticTests(unittest.TestCase):
   ckpt=event('CHECKPOINT',dict(steps=30,rows=300,sha256='a'*64),1)
   with patch.object(c,'artifact',side_effect=[plan,start,ckpt]):
    with self.assertRaises(ValueError):c.production_binding(dict(production_declaration={},run_started_event={},checkpoint_event={},checkpoint=dict(sha256='a'*64)))
+ def test_row_preparation_rejects_a_different_truth_index_or_encoding(self):
+  bank=dict(declaration={},positions={},siblings={},root_index=dict(path='index.json',sha256='a'*64),
+            source_commit='source',declared_children=0)
+  helper=Mock()
+  helper._import_original.return_value=(None,None)
+  helper.bank_manifest.return_value=(None,None,None,None,[],[],None,bank)
+  for truth,reason in ((dict(bank,root_index=dict(bank['root_index'],sha256='b'*64)),'same original truth bank'),
+                       (dict(bank,self_moves=True),'truth and privileged bank self_moves differ')):
+   with self.subTest(reason=reason),patch.object(prep,'_file_module',side_effect=[helper,object()]):
+    helper.read.return_value=dict(manifest=truth)
+    with self.assertRaisesRegex(ValueError,reason):
+     prep.prepare(dict(truth_summary={}),None,None,enable_prepare=True)
+  helper.prepare_original.assert_not_called()
+ def test_crossfit_rejects_checkpoint_encoding_before_writing_output(self):
+  from pokezero import checkpoint_self_moves
+  reference=dict(path='truth.json',sha256='a'*64)
+  config=dict(fit={},truth_summary=reference,production_declaration=dict(path='run/declaration.json'))
+  event=dict(path='checkpoint.pt',sha256='b'*64,iteration=0)
+  with tempfile.TemporaryDirectory()as d,patch.object(c,'production_binding',return_value=({},event)):
+   output=Path(d)/'fit'
+   for bank,encoding in (({},True),(dict(self_moves=True),False)):
+    with self.subTest(encoding=encoding):
+     manifest=dict(view='PRIVILEGED_OFFLINE_ONLY',split_seed=2103700000,truth_summary=reference,bank=bank)
+     with patch.object(c,'load_rows',return_value=(manifest,[],{})), \
+          patch.object(checkpoint_self_moves,'run_checkpoint',return_value=(None,encoding,None)):
+      with self.assertRaisesRegex(ValueError,'privileged checkpoint self_moves differs'):
+       c.crossfit(config,{},output,enable_fit=True)
+     self.assertFalse(output.exists())
  def test_full_oos_metrics_keep_missing_and_use_actual_reply_grid(self):
   def outcomes(v):return [dict(replicate=i,status='COMPLETE',outcome=v)for i in range(64)]
   selector=dict(stream=1,frame=4,owner=0)
