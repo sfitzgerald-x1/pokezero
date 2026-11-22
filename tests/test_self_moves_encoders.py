@@ -317,7 +317,8 @@ class B2SelfMovesTests(unittest.TestCase):
         self.assertIsNone(off.self_moves); self.assertFalse(off.masks.self_moves); self.assertTrue(on.masks.self_moves)
         # self_moves is an encode-only switch: the fold-state binding is the same, so one fold serves both.
         self.assertTrue(np.array_equal(np.asarray(off.binding), np.asarray(on.binding)))
-        self.assertEqual(self.e.ENCODE_ONLY, frozenset({'self_moves'})); self.assertEqual(self.e.OPTIONAL_KEYS, frozenset({'self_moves'}))
+        self.assertEqual(self.e.ENCODE_ONLY, frozenset({'self_moves'}))
+        self.assertEqual(self.e.OPTIONAL_KEYS, frozenset({'self_moves', 'set_posterior_narrowing'}))
         with self.assertRaisesRegex(ValueError, 'without defaults'):self.e.Masks.from_checkpoint(dict(self_moves=True))
         from pokezero.recorded_mirror_roots import CHAMPION_CONTRACT
         base = dict(CHAMPION_CONTRACT['feature_masks'])

@@ -1467,9 +1467,20 @@ class TrainMaskFlagsTest(unittest.TestCase):
             masked_model = SimpleNamespace(**{**vars(model_config), "tier2_residuals": False})
             with self.assertRaisesRegex(ValueError, "mask-mismatched"):
                 _require_cache_masks_match_model_config([cache], masked_model)
+            posterior_on = SimpleNamespace(**vars(model_config), set_posterior_narrowing=True)
+            with self.assertRaisesRegex(ValueError, "mask-mismatched"):
+                _require_cache_masks_match_model_config([cache], posterior_on)
+            (cache / "metadata.json").write_text(json.dumps({
+                "feature_masks": dict(matching, set_posterior_narrowing=True),
+            }))
+            _require_cache_masks_match_model_config([cache], posterior_on)
+            with self.assertRaisesRegex(ValueError, "mask-mismatched"):
+                _require_cache_masks_match_model_config([cache], model_config)
             # Legacy cache (no field) cannot be checked -> passes.
             (cache / "metadata.json").write_text(json.dumps({}))
             _require_cache_masks_match_model_config([cache], wide_model)
+            with self.assertRaisesRegex(ValueError, "required set_posterior_narrowing"):
+                _require_cache_masks_match_model_config([cache], posterior_on)
 
     def test_a_zero_capacity_is_a_real_capacity_not_a_missing_one(self) -> None:
         """v4 REMOVES the transition region, so its capacity is 0 and its only budget is 0.

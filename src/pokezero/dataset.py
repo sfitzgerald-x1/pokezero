@@ -439,10 +439,10 @@ def _feature_masks_payload(feature_masks) -> dict | None:
         return None
     if is_dataclass(feature_masks):
         payload = asdict(feature_masks)
-        # self_moves (V2) is recorded only when on: cache metadata of every pipeline that does
-        # not use it stays byte-identical, and readers resolve the absent key to False.
-        if payload.get("self_moves") is False:
-            del payload["self_moves"]
+        # Omit disabled optional features to preserve existing cache metadata.
+        for key in ("self_moves", "set_posterior_narrowing"):
+            if payload.get(key) is False:
+                del payload[key]
         # Wire-format compat: the serialized key stays "stats_block" (frozen in existing
         # checkpoint cache metadata + the golden corpus) even though the attribute was
         # renamed to opponent_tendency_stats_block. Remap on the way out until the corpus

@@ -353,6 +353,7 @@ class TransformerPolicyConfig:
     # columns zero). to_dict emits the key ONLY when True, so every existing config's
     # serialization, and every model_config_sha256 pinned on it, is unchanged.
     self_moves: bool = False
+    set_posterior_narrowing: bool = False
     # Dense potential-based reward-shaping provenance (canonical JSON of the
     # pokezero.shaping ShapingConfig the value targets were trained under, or None for an
     # unshaped head). Same latch pattern as tier2_residuals: from_dict resolves payloads
@@ -600,6 +601,8 @@ class TransformerPolicyConfig:
         # byte-identical, and from_dict resolves the absent key to False.
         if not payload["self_moves"]:
             del payload["self_moves"]
+        if not self.set_posterior_narrowing:
+            payload.pop('set_posterior_narrowing')
         return payload
 
     @property
@@ -694,6 +697,7 @@ class TransformerPolicyConfig:
             # Self-moves latch: absent means a checkpoint trained with zero self-token move/PP
             # columns (every checkpoint predating the switch).
             self_moves=bool(payload.get("self_moves", False)),
+            set_posterior_narrowing=bool(payload.get("set_posterior_narrowing", False)),
             # Shaping latch: payloads lacking the field are pre-shaping checkpoints trained
             # on terminal-only value targets -> always resolve to unshaped.
             reward_shaping=(str(payload["reward_shaping"]) if payload.get("reward_shaping") else None),
@@ -3031,6 +3035,7 @@ def feature_masks_from_model_config(config: TransformerPolicyConfig) -> Observat
         ),
         item_belief_narrowing=bool(getattr(config, "item_belief_narrowing", False)),
         self_moves=self_moves,
+        set_posterior_narrowing=bool(getattr(config, "set_posterior_narrowing", False)),
     )
 
 

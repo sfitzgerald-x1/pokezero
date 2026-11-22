@@ -14,6 +14,14 @@ from pokezero.v5_contract import DecisionAddress
 
 
 class WorldRanges(unittest.TestCase):
+    def test_root_recapture_reuses_the_constructor_actor_contract(self):
+        constructor, prepared = self.fixture()
+        constructor.actor_contract = NS(feature_masks=(('set_posterior_narrowing', True),))
+        request = dict(lines=prepared.lines, stream_id=5, decision_index=7, owner='p1', battle_id='range-test')
+        with patch.object(pc, 'capture_root', return_value=prepared.public) as capture:
+            self.assertIs(constructor.public_root(request), prepared.public)
+        self.assertIs(capture.call_args.kwargs['contract'], constructor.actor_contract)
+
     def fixture(self, count=16):
         address = DecisionAddress(5, 7, 0)
         public = NS(context=NS(battle_id='range-test'), owner_lines_sha256='wire', address=address)

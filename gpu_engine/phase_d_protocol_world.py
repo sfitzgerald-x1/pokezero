@@ -51,6 +51,7 @@ HOST_WORLDS=True
 SET_POSTERIOR_DRAW=True
 SET_POSTERIOR_CHECK=True
 SET_POSTERIOR_CHECK_FATAL=True
+JOINT_POSTERIOR_DRAW=True
 
 
 def _device(state):
@@ -78,6 +79,7 @@ class ProtocolInputs:
     source:object
     # One root's world-independent line scans, computed once for its worlds (_once); not part of the inputs' identity.
     memo:dict=field(default_factory=dict,compare=False,repr=False)
+    joint_plan:object=None
 
 
 def _once(inputs,root,name,compute,*,shared=False):
@@ -609,6 +611,8 @@ def _host_arrays(seed,key):
 def _set_posteriors(inputs,root):
     """The root's set posteriors (set_posterior.posterior over its owning lines and the belief view the start sampler filters
     with), computed once per root and shared by its worlds."""
+    if inputs.joint_plan is not None:
+        return inputs.joint_plan.posts
     def compute():
         context=root.context
         view=player_belief_view_from_payload(context.observation.metadata.get('belief_view'))
@@ -947,7 +951,7 @@ class WorldRange:
     mapper_diagnostics:tuple
 
 
-def world_range(root,detached,*,start,stop,lines,catalog,source,metadata,config,battle_id,seed,count):
+def world_range(root,detached,*,start,stop,lines,catalog,source,metadata,config,battle_id,seed,count,joint_plan=None):
     """Sample [start, stop) of an already carried root, without capture or B2 work.
 
     Use ProtocolConstructor.prepare_root to obtain the carried root. Each range
@@ -960,23 +964,34 @@ def world_range(root,detached,*,start,stop,lines,catalog,source,metadata,config,
         raise ValueError('world range must satisfy 0 <= start <= stop <= count')
     if detached.source_binding_sha256!=source.binding_sha256:
         raise live.Refusal('SAME_PUBLIC_ROOT_SOURCE_BINDING_REQUIRED')
-    inputs=ProtocolInputs(detached,tuple(lines),catalog,metadata,source)
+    if joint_plan is not None:
+        from pokezero.joint_serving import validate_plan
+        validate_plan(joint_plan, root, detached, lines, source_hash=source.source_hash)
+    inputs=ProtocolInputs(detached,tuple(lines),catalog,metadata,source,joint_plan=joint_plan)
     result=[];seeds=[];diagnostics=[];game=game_lines_sha256(lines)
     binding=(root.context.battle_id,root.owner_lines_sha256,detached.address,source.binding_sha256,seed,game)
+    if joint_plan is not None:binding+=(joint_plan.diagnostic['law_sha256'],)
     pairs=[world_seeds(root,detached,game,seed,index) for index in range(start,stop)]
     keys=states.world_keys([kernel for _,kernel in pairs]) if HOST_WORLDS else [None]*len(pairs)
     for offset,(world_seed,kernel_seed) in enumerate(pairs):
         index=start+offset
         seeds.append(world_seed)
         try:
+            joint = {}
+            if joint_plan is not None and joint_plan.teams is not None:
+                from pokezero.joint_serving import opponent_team
+                joint['joint_opponent_team'] = lambda rng: opponent_team(joint_plan,index,
+                    context=root.context,source=source.original,rng=rng)
             sampled_start,reason=_gen3_randbat_belief_start_override_result(context=root.context,set_source=source.original,
                 rng=random.Random(world_seed),team_size=6,canonicalize_revealed_variants=True,
-                **(dict(set_posteriors=lambda:_set_posteriors(inputs,root)) if SET_POSTERIOR_DRAW else {}))
+                **(dict(set_posteriors=lambda:_set_posteriors(inputs,root)) if SET_POSTERIOR_DRAW else {}),**joint)
             if sampled_start is None:
                 unknown=[];_downstream_unknowns(unknown,'Original public sampler unavailable: '+str(reason))
                 made=ProtocolWorld(None,None,(reason or 'public-sampler-unavailable',),mapper_diagnostics=tuple(unknown))
             else:made=v5_public_world.materialize(root,sampled_start,prepared=inputs,history=None,own_static=None,seed=kernel_seed,host_key=keys[offset])
-            diagnostics.append(dict(world=index,checks=list(made.mapper_diagnostics)))
+            checks=list(made.mapper_diagnostics)
+            if joint_plan is not None:checks.append(dict(joint_plan.diagnostic))
+            diagnostics.append(dict(world=index,checks=checks))
             result.append(states.World(index,made.state,made.public,made.refusals,kernel_seed,False))
         except (ValueError,KeyError,TypeError,IndexError)as error:
             unknown=[];_downstream_unknowns(unknown,'Production sample prerequisite refused: '+str(error))

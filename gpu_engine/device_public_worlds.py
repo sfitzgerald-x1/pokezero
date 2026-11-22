@@ -117,6 +117,7 @@ class Root:
     public: object                 # Owner-safe REDACTED carry; rebase foe cursor.
     source_binding_sha256: str
     reply_private_history_available: bool = False
+    owning_wire: tuple[str, str] | None = None  # Battle ID and literal prefix digest from a joint-enabled B2 capture.
 
 
 def _redact_peer_private(cloned, owner):
@@ -318,6 +319,7 @@ class Plans:
         'HP/status/PP/conditions and own exact cells to hypothetical BattleState; '
         'use original latent treatment or explicit refusal for unavailable '
         'clocks, then SAME device_public_leaf and completed-Q consumer.')
+    joint_diagnostic: object = None
 
 
 def _array(view, name, shape, dtype):
@@ -404,7 +406,8 @@ def _revealed(root, source):
     return tuple(result)
 
 
-def plan_starts(root, source, recipe):
+def plan_starts(root, source, recipe, *, joint_plan=None, public_root=None,
+                joint_session=None, lines=None, dex=None):
     """Original recipe address selection and two shared source fixture draws.
 
     The canonical sampler's revealed draw order is gender then uniform variant;
@@ -429,6 +432,17 @@ def plan_starts(root, source, recipe):
         raise ValueError('root public source/engine namespace binding differs')
     if not recipe.selected(root.address):
         return Plans(root, False, (), source.source_hash, source.source_rows_sha256, 0.0)
+    if joint_plan is not None or joint_session is not None:
+        if public_root is None or lines is None:
+            raise ValueError('owning root evidence required for joint plan')
+        if joint_session is not None:
+            if dex is None:
+                raise ValueError('dex required to prepare joint plan')
+            joint_plan=joint_session.prepare(public_root.context,lines,dex=dex,
+                seed=recipe.world_seed(root.address,0),count=2,binding=source.binding_sha256,address=root.address)
+        from pokezero.joint_serving import validate_plan
+        validate_plan(joint_plan, public_root, root, lines, source_hash=source.source_hash)
+    diagnostic = dict(joint_plan.diagnostic) if joint_plan is not None else None
     try:
         revealed = _revealed(root, source)
         pre_error = None
@@ -439,11 +453,24 @@ def plan_starts(root, source, recipe):
         seed = recipe.world_seed(root.address, world)
         fixtures, indices, failure = [], [], pre_error
         rng = random.Random(seed)
-        if failure is None:
+        if failure is None and joint_plan is not None and joint_plan.teams is not None:
+            from pokezero.joint_serving import opponent_team
+            try:
+                fixtures=list(opponent_team(joint_plan,world,context=public_root.context,source=source.original,rng=rng))
+                from pokezero.randbat import canonical_gen3_randbat_species_id
+                selected={m.species:m.variant_index for m in joint_plan.teams[world]}
+                indices=[(slot,selected[canonical_gen3_randbat_species_id(name)])for slot,_,_,_,name in revealed]
+            except ValueError as error:failure=str(error)
+        elif failure is None:
             for slot, universe, candidates, shown_gender, shown_species in revealed:
                 gender = shown_gender or _sample_gender(shown_species,
                     set_source=source.original, rng=rng)
-                index, variant = candidates[rng.randrange(len(candidates))]
+                if joint_plan is not None:
+                    from pokezero import set_posterior
+                    post=joint_plan.posts[set_posterior.species_key(shown_species)]
+                    index=set_posterior.draw(set_posterior.restrict(post,[i for i,_ in candidates]),rng)
+                    variant=next(v for i,v in candidates if i==index)
+                else:index, variant = candidates[rng.randrange(len(candidates))]
                 fixture = _fixture_from_variant_payload(variant.to_summary(),
                     fallback_species=shown_species, set_source=source.original, gender=gender)
                 if fixture is None:
@@ -462,4 +489,4 @@ def plan_starts(root, source, recipe):
         starts.append(Start(world, seed, None if failure else tuple(fixtures),
             tuple(indices), () if failure is None else (failure,)))
     return Plans(root, True, tuple(starts), source.source_hash, source.source_rows_sha256,
-        sum(start.opponent_fixtures is None for start in starts) / 2)
+        sum(start.opponent_fixtures is None for start in starts) / 2,joint_diagnostic=diagnostic)

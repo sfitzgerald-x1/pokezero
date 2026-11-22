@@ -369,6 +369,7 @@ def _gen3_randbat_belief_start_override_result(
     witnessed_fallback: bool = False,
     canonicalize_revealed_variants: bool = False,
     set_posteriors: Any = None,
+    joint_opponent_team: Any = None,
 ) -> tuple[BattleStartOverride | None, str | None]:
     """Return a sampled start override plus a public-data failure reason for diagnostics.
 
@@ -401,19 +402,22 @@ def _gen3_randbat_belief_start_override_result(
     )
     if team_index_constraints is None:
         return None, "public opponent switch constraints are inconsistent"
-    opponent_team, opponent_team_failure = _opponent_team_from_belief_result(
-        view,
-        set_source=set_source,
-        format_id=context.format_id,
-        rng=rng,
-        team_size=team_size,
-        move_slot_constraints=_public_opponent_move_slot_constraints(context, view.opponent_slot),
-        team_index_constraints=team_index_constraints,
-        public_context=context,
-        witnessed_fallback=witnessed_fallback,
-        canonicalize_revealed_variants=canonicalize_revealed_variants,
-        set_posteriors=set_posteriors,
-    )
+    if joint_opponent_team is not None:
+        opponent_team, opponent_team_failure = tuple(joint_opponent_team(rng)), None
+    else:
+        opponent_team, opponent_team_failure = _opponent_team_from_belief_result(
+            view,
+            set_source=set_source,
+            format_id=context.format_id,
+            rng=rng,
+            team_size=team_size,
+            move_slot_constraints=_public_opponent_move_slot_constraints(context, view.opponent_slot),
+            team_index_constraints=team_index_constraints,
+            public_context=context,
+            witnessed_fallback=witnessed_fallback,
+            canonicalize_revealed_variants=canonicalize_revealed_variants,
+            set_posteriors=set_posteriors,
+        )
     if opponent_team is None:
         return None, opponent_team_failure or "opponent belief could not be materialized"
     if view.self_slot not in {"p1", "p2"} or view.opponent_slot not in {"p1", "p2"}:

@@ -278,7 +278,8 @@ def _exact_own(request, state, catalog, source, metadata, owner, *, defer_sleep=
     return own, joined
 
 
-def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, protocol_facts=None, lines=()):
+def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, protocol_facts=None, lines=(),
+            bind_joint_root=False):
     """One original owning fold plus own request; no engine donor accepted."""
     from pokezero.recorded_encoder_runner import JaxRecordedAdapter
     from . import v4_encoder
@@ -288,6 +289,12 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     catalog, state, owner = adapter.catalog, adapter.state, address.owner
     if catalog.source.source_hash != source.source_hash:
         raise Refusal('PUBLIC_SOURCE_BINDING_DIFFERS')
+    owning_wire = None
+    if bind_joint_root:
+        if not lines or tuple(lines) != adapter.own_lines or adapter.stream_ids.tolist() != [address.stream]:
+            raise Refusal('ORIGINAL_OWNING_WIRE_REQUIRED_FOR_JOINT_ROOT')
+        prefix = hashlib.sha256(''.join(line + '\n' for line in lines).encode()).hexdigest()
+        owning_wire = (adapter.battle_id, prefix)
     # Authoritative B2 admission happens before any materialization. This parses
     # ONLY request and reads original public fold, never another owner's packet.
     expected_inputs = adapter.encode(request, owner_side=owner)
@@ -498,7 +505,8 @@ def from_b2(adapter, request, source, metadata, *, address, defer_sleep=False, p
     t=t._replace(damage_history=hist,visible_belief=visible)
     view=trackers.readout(t,j.asarray([owner],j.int32))
     snapshot=original._freeze({**view._asdict(),'hp_percent':j.asarray(percent[:,foe]),'_b2_root_inputs':expected_inputs})
-    return original.Root(address,original._freeze(own),snapshot,original._redact_peer_private(t,owner),source.binding_sha256,False)
+    return original.Root(address,original._freeze(own),snapshot,original._redact_peer_private(t,owner),
+        source.binding_sha256,owning_wire=owning_wire)
 
 
 @dataclass(frozen=True)

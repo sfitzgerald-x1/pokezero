@@ -101,6 +101,7 @@ class JaxRecordedAdapter:
         # V2 self_moves: the owner's protocol history (fed lines plus the requests it encodes, in order) and an explicit
         # override a caller sets for one block (literal_history); both read only under masks.self_moves.
         self._own_log=[];self._own_requests=[];self.own_lines=None
+        self._root_set_posterior=None
         owners=None if self.owner_side is None else np.array([self.owner_side],np.int32)
         self.state=self.encoder.initialize(self.catalog,stream_ids=self.jax.numpy.asarray(self.stream_ids),owner_sides=owners)
         self.host=public_wire.WireState();self.bindings=None;self.registered[stream_id]=battle_id
@@ -130,6 +131,7 @@ class JaxRecordedAdapter:
             if np.any(np.asarray(error)!=0):raise ValueError('JAX public fold refused boundary')
         # A late host/device failure leaves both previous public cursors intact.
         self.state,self.host,self.bindings=state,host,bindings
+        self._root_set_posterior=None
         if getattr(self.catalog,'self_moves',None) is not None:self._own_log.extend(lines)
 
     def own_history(self,request):
@@ -142,13 +144,30 @@ class JaxRecordedAdapter:
             self._own_log.append('|request|'+json.dumps(request,separators=(',',':')));self._own_requests.append(request)
         return tuple(self._own_log)
 
-    def encode(self,request,*,owner_side):
+    def bind_set_posterior(self,payload,*,game_sha256):
+        """Bind a fresh owning-root payload before B2 root extraction encodes it."""
+        from pokezero.set_posterior import feature_rows
+        feature_rows(payload,self.catalog.source,game_sha256=game_sha256)
+        self._root_set_posterior=(json.loads(json.dumps(payload)),game_sha256)
+
+    def encode(self,request,*,owner_side,set_posterior_payload=None,game_sha256=None):
         self._check_compiled_functions()
         if self.owner_side is not None and owner_side != self.owner_side:
             raise ValueError('request owner differs from owning stream')
         own_lines=None if getattr(self.catalog,'self_moves',None) is None else [self.own_history(request)]
         own=self.encoder.parse_own_requests(self.catalog,[request],owner_sides=[owner_side],own_lines=own_lines)
-        out=self.encode_step(self.state,own,self.jax.numpy.array([owner_side],self.jax.numpy.int32))
+        side=self.jax.numpy.array([owner_side],self.jax.numpy.int32)
+        if self.catalog.masks.set_posterior_narrowing:
+            from gpu_engine.set_posterior_features import compile_inputs
+            if set_posterior_payload is None and getattr(self,'_root_set_posterior',None) is not None:
+                set_posterior_payload,game_sha256=self._root_set_posterior
+            if set_posterior_payload is None:raise ValueError('root set posterior payload required')
+            inputs=compile_inputs(set_posterior_payload,self.catalog,self.state,owner=owner_side,game_sha256=game_sha256)
+            if not hasattr(self,'_set_posterior_encode'):
+                self._set_posterior_encode=self.jax.jit(lambda state,own,side,post:
+                    self.encoder.encode(state,own,self.catalog,observer_sides=side,set_posterior=post))
+            out=self._set_posterior_encode(self.state,own,side,inputs)
+        else:out=self.encode_step(self.state,own,side)
         observation=out.observation
         valid=bool(np.asarray(observation.admitted).all()) and not np.asarray(out.pending_numeric_columns).size
         for name,coverage in (('numeric_features','numeric_written'),('categorical_ids','categorical_written')):

@@ -70,6 +70,8 @@ class PublicView(NamedTuple):
     own_transformed: object = None          # Transform: the observer's own six (request order); encode reads state
     own_transform_species: object = None
     own_shown_types: object = None          # the own six's carried shown types (the own transformed active's TYPE_1/2)
+    set_posterior_weights: object = None
+    set_posterior_prior: object = None
 
 
 class Tables(NamedTuple):
@@ -436,6 +438,9 @@ def encode(state, public, tables, *, observer_sides, legal_action_mask, self_mov
     request_kind = j.where(state.done, 0, j.where(~j.any(legal_action_mask, axis=-1), 1, j.where(forced, 2, 3)))
     cat = cat.at[:, 0, 0].set(tables.request_categories[request_kind]).at[:, 0, 1].set(_lookup(tables.weather_categories, weather)).at[:, 0, 2].set(tables.field_role)
     prior = j.where(public.present[..., None], _lookup(tables.prior, public.species), 0)
+    if tables.belief is not None and getattr(public,'set_posterior_prior',None) is not None:
+        supplied=public.present&j.any(public.set_posterior_prior>0,axis=-1)
+        prior=j.where((tables.belief.standing_pins_enabled&supplied)[...,None],public.set_posterior_prior,prior)
     belief_error = j.zeros(b, bool); feature_error = j.zeros(b, bool)
     belief_result = None
     if tables.belief is not None:

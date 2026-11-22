@@ -1,5 +1,6 @@
 """Synthetic public-source/own-cell fixtures; no battle/model/world execution."""
 from dataclasses import replace
+import hashlib
 import random
 from types import SimpleNamespace
 import unittest
@@ -68,6 +69,24 @@ def root_fixture(owner=0):
 
 
 class DevicePublicWorldsTests(unittest.TestCase):
+    def test_joint_plan_refuses_another_detached_capture_at_the_same_address(self):
+        from pokezero.joint_serving import JointPlan
+
+        source = compile_fixture()
+        detached, recipe = root_fixture()
+        lines = ('|turn|2',)
+        digest = hashlib.sha256(b'|turn|2\n').hexdigest()
+        captured = SimpleNamespace(
+            address=detached.address, owner_lines_sha256=digest,
+            context=SimpleNamespace(battle_id='battle-a', player_id='p1'),
+        )
+        plan = JointPlan(None, {}, None, {}, source.source_hash, 'game',
+                         root_binding=('battle-a', 'p1', digest, source.binding_sha256, detached.address))
+        for wire in (None, ('battle-b', digest), ('battle-a', 'different-prefix')):
+            with self.subTest(wire=wire), self.assertRaisesRegex(ValueError, 'same owning root'):
+                worlds.plan_starts(replace(detached, owning_wire=wire), source, recipe,
+                                   joint_plan=plan, public_root=captured, lines=lines)
+
     def test_original_source_draw_order_two_worlds_and_no_pool_prior(self):
         compiled = compile_fixture()
         for owner in (0, 1):

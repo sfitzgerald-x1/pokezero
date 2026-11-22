@@ -70,6 +70,52 @@ def reverse_self_moves(module):
     return module
 
 
+def reverse_posterior(module):
+    """Remove the reviewed Stage 2 delta before checking the earlier encoder pin."""
+    for index, node in enumerate(module.body):
+        text = ast.unparse(node)
+        if isinstance(node, ast.Assign) and text.startswith('OPTIONAL_KEYS = '):
+            assert ast.literal_eval(node.value.args[0]) == {'self_moves', 'set_posterior_narrowing'}
+            node.value.args[0] = ast.Set(elts=[ast.Constant('self_moves')])
+        elif getattr(node, 'name', None) == 'Masks':
+            assert text.count('    set_posterior_narrowing: bool = False\n') == 1
+            module.body[index] = ast.parse(text.replace('    set_posterior_narrowing: bool = False\n', '')).body[0]
+        elif getattr(node, 'name', None) == 'compile_encoder':
+            optional = ("    feature_masks = dict(feature_masks)\n"
+                        "    if not masks.set_posterior_narrowing:\n"
+                        "        feature_masks.pop('set_posterior_narrowing', None)\n")
+            assert text.count(optional) == 1
+            module.body[index] = ast.parse(text.replace(optional, '')).body[0]
+        elif getattr(node, 'name', None) == 'encode':
+            posterior = '    posterior = summary.effective[rows, jnp.clip(observer, 0, 1)]\n'
+            delta = (
+                ("observer_sides, set_posterior=None):", "observer_sides):"),
+                ("    if catalog.masks.set_posterior_narrowing:\n"
+                 "        if set_posterior is None:\n"
+                 "            raise ValueError('source-bound set posterior inputs required')\n"
+                 "        from .set_posterior_features import apply\n"
+                 "        summary, posterior_ok = apply(summary, set_posterior, state.beliefs, catalog.source.device)\n"
+                 "        valid &= posterior_ok\n", ''),
+                (posterior + "    weights = beliefs.posterior_weights\n"
+                 "    if catalog.masks.set_posterior_narrowing:\n"
+                 "        weights = set_posterior.weights\n"
+                 "        from .public_belief_features import _bits\n"
+                 "        selected = _bits(posterior, weights.shape[-1])\n"
+                 "        weight_ok = jnp.all(jnp.isfinite(weights) & (weights >= 0) & ((weights == 0) | selected), axis=(1, 2))\n"
+                 "        weight_ok &= jnp.all(jnp.where(result.attention_mask[:, 7:13], jnp.abs(weights.sum(-1) - 1) < 1e-06, weights.sum(-1) == 0), axis=-1)\n"
+                 "        valid &= weight_ok\n", ''),
+                ("    return Encoded(result, jnp.where(admitted[:, None, None], posterior, 0), "
+                 "jnp.where(admitted[:, None, None], weights, 0),", posterior +
+                 "    return Encoded(result, jnp.where(admitted[:, None, None], posterior, 0), "
+                 "jnp.where(admitted[:, None, None], beliefs.posterior_weights, 0),"),
+            )
+            for added, original in delta:
+                assert text.count(added) == 1, added
+                text = text.replace(added, original, 1)
+            module.body[index] = ast.parse(text).body[0]
+    return module
+
+
 @dataclass
 class Facts:
     tokens: object
@@ -222,7 +268,7 @@ class StaticInstructionReuseTests(unittest.TestCase):
                     return None
                 return self.generic_visit(node)
         current = Reverse().visit(current)
-        current = reverse_self_moves(current)
+        current = reverse_self_moves(reverse_posterior(current))
         self.assertEqual(ast.dump(current, include_attributes=False), ast.dump(ast.parse(old), include_attributes=False))
         path='gpu_engine/engine_retained_encoder_driver.py'
         self.assertEqual((root/path).read_bytes(),subprocess.check_output(['git','show','b8092a85:'+path],cwd=root))

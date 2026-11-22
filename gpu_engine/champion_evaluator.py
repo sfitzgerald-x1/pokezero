@@ -245,13 +245,13 @@ def check_binding(evaluator, catalog):
     (ActorContract.champion()), and the bank's encoder catalog was compiled for it: its checkpoint sha256, its category
     vocabulary (the contract's sha256 and the archive's size) and its feature masks are the champion contract's, the JAX
     encoder contract live_protocol_actor checks for B2. ValueError otherwise."""
-    from pokezero.live_protocol_actor import ActorContract, MASK_NAMES, _vocab_sha
+    from pokezero.live_protocol_actor import ActorContract, _mask_values, _vocab_sha
     contract = ActorContract.champion();check_checkpoint(evaluator)
     if catalog.checkpoint_sha256 != evaluator.checkpoint_sha256:
         raise ValueError(f'the bank encoder catalog was compiled for checkpoint {catalog.checkpoint_sha256}, not the champion\'s')
     if _vocab_sha(catalog.vocabulary) != contract.category_vocab_sha256 or catalog.vocabulary.size != evaluator.config.vocabulary:
         raise ValueError('the bank encoder catalog\'s category vocabulary is not the champion\'s (sha256 or size)')
-    if tuple((k, getattr(catalog.masks, k)) for k in MASK_NAMES) != contract.feature_masks:
+    if _mask_values(catalog.masks) != contract.feature_masks:
         raise ValueError('the bank encoder catalog\'s feature masks are not the champion contract\'s')
     # V2 self_moves: the archive declares it (meta['self_moves'], written only when on; absent = False) and the catalog
     # that encodes for it must agree, both ways.

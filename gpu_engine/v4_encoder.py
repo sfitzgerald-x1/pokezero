@@ -36,7 +36,7 @@ PENDING_NUMERIC_COLUMNS=()
 # Mask keys a checkpoint's resolved mask dict may omit (absent resolves False), and the subset that changes encode() only,
 # never the fold, so it stays out of the fold-state binding. A future fold-changing V2 mask (e.g. set-posterior narrowing)
 # is OPTIONAL but NOT encode-only: it must join the binding.
-OPTIONAL_KEYS=frozenset({'self_moves'})
+OPTIONAL_KEYS=frozenset({'self_moves','set_posterior_narrowing'})
 ENCODE_ONLY=frozenset({'self_moves'})
 
 
@@ -54,6 +54,7 @@ class Masks:
     # declaration and wins; absent (every checkpoint predating it) it resolves False unless the OBS_SELF_MOVES
     # measurement override says on (pokezero.observation.resolve_self_moves, as for the Python masks).
     self_moves: bool = False
+    set_posterior_narrowing: bool = False
 
     @classmethod
     def from_checkpoint(cls,values):
@@ -325,6 +326,8 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     if not isinstance(checkpoint_sha256,str) or len(checkpoint_sha256)!=64 or any(c not in '0123456789abcdef' for c in checkpoint_sha256):
         raise ValueError('exact champion checkpoint SHA256 required')
     masks=Masks.from_checkpoint(feature_masks)
+    feature_masks=dict(feature_masks)
+    if not masks.set_posterior_narrowing:feature_masks.pop('set_posterior_narrowing',None)
     # Request adapters also consult the dex on host. Freeze their source facts
     # along with device tables so a caller cannot mutate them after binding.
     dex=ShowdownDex(MappingProxyType({k:replace(v,boosts=MappingProxyType(dict(v.boosts))) for k,v in dex.moves.items()}),
@@ -508,7 +511,7 @@ def _overlay_active(result,patch,mons,own_status,observer):
     return result
 
 
-def encode(state,own,catalog,*,observer_sides):
+def encode(state,own,catalog,*,observer_sides,set_posterior=None):
     """Run all installed retained writers, preserving their source order/masks."""
     b=state.mons.encounter.shape[0];rows=jnp.arange(b)
     _outer_binding(state.binding,b);_outer_binding(own.binding,b)
@@ -542,6 +545,11 @@ def encode(state,own,catalog,*,observer_sides):
     result=v4_assembly.project_base_sections(facts=own.actions,action_tables=catalog.actions.device,mons=mons,context=context,
         team_tables=catalog.species.device,field_tables=tables.field,tendency=tendency,observer_side=observer,
         vocabulary_binding=catalog.species.device.vocabulary_binding,category_count=catalog.vocabulary.size,exact_state=catalog.masks.exact_state)
+    if catalog.masks.set_posterior_narrowing:
+        if set_posterior is None:raise ValueError('source-bound set posterior inputs required')
+        from .set_posterior_features import apply
+        summary,posterior_ok=apply(summary,set_posterior,state.beliefs,catalog.source.device)
+        valid &= posterior_ok
     beliefs=public_belief_features.project_opponent(state.beliefs,summary,mons,context,catalog.features,
         observer_side=observer,expected_binding=catalog.features.binding,exact_state=catalog.masks.exact_state)
     result=v4_assembly.overlay(result,beliefs.patch,section='opponent')
@@ -603,11 +611,19 @@ def encode(state,own,catalog,*,observer_sides):
     clause=public_sleep_clause.project(context.sleep_clause,tables.sleep_clause,observer_side=observer,
         expected_vocabulary=catalog.species.device.vocabulary_binding,exact_state=catalog.masks.exact_state)
     result=v4_assembly.overlay(result,clause,section='field')
+    posterior=summary.effective[rows,jnp.clip(observer,0,1)]
+    weights=beliefs.posterior_weights
+    if catalog.masks.set_posterior_narrowing:
+        weights=set_posterior.weights
+        from .public_belief_features import _bits
+        selected=_bits(posterior,weights.shape[-1])
+        weight_ok=jnp.all(jnp.isfinite(weights)&(weights>=0)&((weights==0)|selected),axis=(1,2))
+        weight_ok &= jnp.all(jnp.where(result.attention_mask[:,7:13],jnp.abs(weights.sum(-1)-1)<1e-6,weights.sum(-1)==0),axis=-1)
+        valid &= weight_ok
     admitted=result.admitted&valid
     result=result._replace(admitted=admitted,numeric_features=jnp.where(admitted[:,None,None],result.numeric_features,0),
         categorical_ids=jnp.where(admitted[:,None,None],result.categorical_ids,0),attention_mask=result.attention_mask&admitted[:,None],
         legal_action_mask=result.legal_action_mask&admitted[:,None],switch_targets=jnp.where(admitted[:,None],result.switch_targets,-1))
-    posterior=summary.effective[rows,jnp.clip(observer,0,1)]
     return Encoded(result,jnp.where(admitted[:,None,None],posterior,0),
-        jnp.where(admitted[:,None,None],beliefs.posterior_weights,0),beliefs.reason,
+        jnp.where(admitted[:,None,None],weights,0),beliefs.reason,
         jnp.asarray(PENDING_NUMERIC_COLUMNS,jnp.int32),jnp.zeros(b,bool))
