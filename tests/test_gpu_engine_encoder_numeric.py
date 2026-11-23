@@ -1,5 +1,6 @@
 """Bitwise Python reference checks for observation arithmetic on any backend."""
 import unittest
+from unittest.mock import patch
 
 import jax
 import jax.numpy as j
@@ -23,6 +24,43 @@ class EncoderNumericTests(unittest.TestCase):
                                            for v in values], np.float32)
                     got = jax.jit(lambda x: en.normalized(x, divisor, minimum=minimum))(values)
                     same_bits(got, expected)
+
+    def test_nested_vmap_runs_exact_division_only_on_the_fallback_path(self):
+        fallback_calls = []
+        exact = en._integer_ratio_pair
+
+        def observe(*args, **kwargs):
+            jax.debug.callback(lambda: fallback_calls.append(None))
+            return exact(*args, **kwargs)
+
+        def encode(numerator, denominator):
+            return en.normalized(numerator, 100), en.ratio(numerator, denominator, pair=True)
+
+        numerator = j.arange(24, dtype=j.float32).reshape(2, 3, 4)
+        denominator = j.full(numerator.shape, 31, dtype=j.int32)
+        mixed_numerator = numerator.at[0, 1, 0].set(-0.).at[0, 1, 1].set(1.).at[1, 0, 2].set(.25)
+        # Float32 rounds this denominator down, so integer fallback must stay local to its group.
+        mixed_denominator = denominator.at[0, 1, 1].set(2**24 + 1)
+        with patch.object(en, '_integer_ratio_pair', observe):
+            mapped = jax.jit(jax.vmap(jax.vmap(encode)))
+            normalized, ratios = mapped(numerator, denominator)
+            jax.effects_barrier()
+            self.assertEqual(fallback_calls, [])
+            normalized_expected = np.asarray(numerator, np.float64) / 100
+            ratio_expected = np.asarray(numerator, np.float64) / 31
+            high = ratio_expected.astype(np.float32)
+            same_bits(normalized, normalized_expected)
+            same_bits(ratios, np.stack((high, ratio_expected - high), axis=-1))
+            mixed = mapped(mixed_numerator, mixed_denominator)
+            jax.effects_barrier()
+            self.assertTrue(fallback_calls)
+
+        serial = jax.jit(encode)
+        for i in range(mixed_numerator.shape[0]):
+            for k in range(mixed_numerator.shape[1]):
+                expected = serial(mixed_numerator[i, k], mixed_denominator[i, k])
+                for actual, reference in zip(mixed, expected, strict=True):
+                    same_bits(actual[i, k], reference)
 
     def test_all_gen3_hp_fractions_and_residuals(self):
         d, n = np.meshgrid(np.arange(1, 715, dtype=np.int32),
