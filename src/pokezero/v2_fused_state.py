@@ -1,8 +1,10 @@
 """Committed report prefix for compact fused runs."""
 
+from bisect import bisect_left
 from contextlib import contextmanager
 import fcntl
 import hashlib
+from itertools import accumulate
 import json
 import os
 from pathlib import Path
@@ -35,6 +37,34 @@ def verify_campaign_prefix(original, successor, saved):
 
     if _json(immutable_fields(original)) != _json(immutable_fields(successor)):
         raise ValueError('successor changes the campaign identity or learner policy')
+
+
+def campaign_batch_addresses(batch):
+    """Return the ranges in the compact declaration's six address spaces."""
+    games = batch['games']
+    count = games['game_count']
+    return (
+        (games['stream_start'], count),
+        (games['identity_seed_start'], count),
+        (games['team_start'], 2 * count),
+        (batch['constructor_seed'], 1),
+        (batch['sampling_seed'], 1),
+        (batch['gender_root_start'], count),
+    )
+
+
+def verify_disjoint_campaign_addresses(committed, child):
+    """Refuse reuse of any address in the committed part of the parent."""
+    parent = (campaign_batch_addresses(batch) for batches in committed for batch in batches)
+    continuation = (campaign_batch_addresses(batch) for batches in child for batch in batches)
+    for occupied, requested in zip(zip(*parent, strict=True), zip(*continuation, strict=True), strict=True):
+        intervals = sorted(occupied)
+        starts = [start for start, _ in intervals]
+        frontier = list(accumulate((start + size for start, size in intervals), max))
+        for start, size in requested:
+            index = bisect_left(starts, start + size)
+            if index and frontier[index - 1] > start:
+                raise ValueError('cooldown child reuses a committed parent roster or RNG address')
 
 
 def _directory_identity(path):

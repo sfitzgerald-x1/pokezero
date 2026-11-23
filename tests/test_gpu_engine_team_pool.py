@@ -53,7 +53,9 @@ class PoolTests(unittest.TestCase):
             stats = np.arange(3 * 6 * 6, dtype=np.int32).reshape(3, 6, 6)
             parent = write('parent', stats[:2])
             successor = write('successor', stats)
-            verify_constructor_pool_prefix(parent, successor, 2)
+            verify_constructor_pool_prefix(parent, successor, 2, successor_teams=3)
+            with self.assertRaisesRegex(ValueError, 'does not cover the declared successor roster'):
+                verify_constructor_pool_prefix(parent, successor, 2, successor_teams=4)
             with self.assertRaisesRegex(ValueError, 'does not cover the committed roster'):
                 verify_constructor_pool_prefix(parent, successor, 3)
             stats[1, 0, 0] = -1

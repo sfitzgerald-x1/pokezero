@@ -70,7 +70,15 @@ def fake_fused(root, replica, policy, key, *, mount_alias=False, compact=False):
 
 def test_compact_fused_milestone_at_one_million_of_five(tmp_path):
     policy = run.EvaluationProtocol(digest("synthetic protocol"), 1_000_000, "deferred", digest("synthetic route"))
-    fake_fused(tmp_path / "replica", 0, policy, b"c" * 32, mount_alias=True, compact=True)
+    root = tmp_path / "replica"
+    _, ref, _ = fake_fused(root, 0, policy, b"c" * 32, mount_alias=True, compact=True)
+    state_path = root / "state.json"
+    state = json.loads(state_path.read_bytes())
+    original_digest = state["declaration_sha256"]
+    state.update(declaration_sha256=digest("successor"), adopted_prefix=dict(
+        rounds=100, previous_declaration_sha256=original_digest))
+    write_json(state_path, state)
+    fused_snapshots(dict(dispatch=asdict(ref), run=str(root)), 50, policy.route_declaration_sha256)
 
 
 def synthetic(root, n, key, *, mount_alias=False, second_key=None):

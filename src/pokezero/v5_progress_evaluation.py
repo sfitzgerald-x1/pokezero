@@ -44,7 +44,7 @@ def load_profile(dispatch, protocol):
     request = deferred.read_milestone(dispatch, staged_run_root=profile.get('staged_run_root'))
     if protocol.sha256 != request.protocol_sha256 or request.declared_games % INTERVAL_GAMES:
         raise ValueError('original 1M evaluation request and protocol required')
-    declaration = run.read_evaluation_declaration(request.run_directory, request.declaration_sha256)
+    declaration = deferred.read_evaluation_declaration(request.run_directory, request.declaration_sha256)
     if declaration['evaluation']['interval_games'] != INTERVAL_GAMES:
         raise ValueError('progress panels require the declared million-game interval')
     inventory = _ref(profile['inventory']).document()

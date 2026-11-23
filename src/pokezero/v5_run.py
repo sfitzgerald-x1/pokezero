@@ -46,24 +46,6 @@ def _sha(value):return hashlib.sha256(_json(value).encode()).hexdigest()
 def _file_sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def evaluation_declaration_path(root, digest):
-    c._binding(digest)
-    return Path(root) / 'artifacts' / 'declarations' / f'{digest}.json'
-
-
-def read_evaluation_declaration(root, digest):
-    """Resolve an immutable declaration for this milestone, including pre-adoption looks."""
-    bound = evaluation_declaration_path(root, digest)
-    try:
-        blob = bound.read_bytes()
-    except FileNotFoundError:
-        blob = (Path(root) / 'declaration.json').read_bytes()
-    declaration = json.loads(blob)
-    if _sha(declaration) != digest:
-        raise ValueError('original accepted run declaration differs')
-    return declaration
-
-
 def _seed(value):
     if type(value) is not int or not 0<=value<2**32:raise ValueError('explicit uint32 seed required')
 

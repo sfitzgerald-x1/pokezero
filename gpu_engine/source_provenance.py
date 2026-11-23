@@ -75,12 +75,13 @@ def load_constructor_pool(path):
     return ConstructorPool(MappingProxyType(arrays),_json(metadata),_json(receipt),_sha(receipt))
 
 
-def verify_constructor_pool_prefix(original, successor, teams):
-    """Verify the physical rows used by the adopted prefix without loading either pool."""
+def verify_constructor_pool_prefix(original, successor, teams, *, successor_teams=None):
+    """Verify committed rows and successor capacity without loading either pool."""
     import numpy as np
 
-    if type(teams) is not int or teams <= 0:
-        raise ValueError('positive committed roster size required')
+    successor_teams = teams if successor_teams is None else successor_teams
+    if type(teams) is not int or teams <= 0 or type(successor_teams) is not int or successor_teams < teams:
+        raise ValueError('valid committed and successor roster sizes required')
 
     def check_digest(stream, ref):
         if hashlib.file_digest(stream, 'sha256').hexdigest() != ref['sha256']:
@@ -110,6 +111,8 @@ def verify_constructor_pool_prefix(original, successor, teams):
             metadata = [json.loads(pool['metadata_utf8'].tobytes()) for pool in (old, new)]
             if any(doc['completed_teams'] < teams for doc in metadata):
                 raise ValueError('constructor pool does not cover the committed roster')
+            if metadata[1]['completed_teams'] < successor_teams:
+                raise ValueError('constructor pool does not cover the declared successor roster')
             fixed = [{k: v for k, v in doc.items() if k not in population_fields} for doc in metadata]
             if fixed[0] != fixed[1]:
                 raise ValueError('constructor pool static metadata differs across campaign adoption')
@@ -125,6 +128,8 @@ def verify_constructor_pool_prefix(original, successor, teams):
                             or min(old_shape[0], new_shape[0]) < teams or old_dtype != new_dtype
                             or old_dtype.kind not in 'iu' or old_fortran or new_fortran):
                         raise ValueError(f'constructor array layout differs for {name}')
+                    if new_shape[0] < successor_teams:
+                        raise ValueError(f'constructor array does not cover the declared successor roster: {name}')
                     remaining = teams * math.prod(old_shape[1:]) * old_dtype.itemsize
                     while remaining:
                         size = min(remaining, 1 << 20)

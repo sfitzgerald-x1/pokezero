@@ -164,6 +164,15 @@ class ResumeOptionsTests(unittest.TestCase):
             bound = v2_fused.cooldown_parent(root, parent.checkpoint_sha256, parent.model_sha256, policy, 1_500_000)
             self.assertEqual(bound['origin'][2], 13_500_000)
             self.assertEqual(bound['proof'], dict(receipt, path=str(root.resolve() / 'checkpoint.pt.encoding.json')))
+            local = root / 'checkpoint.pt.encoding.json'
+            local.write_text('{}')
+            alias = root / 'writer' / local.name
+            alias.parent.mkdir()
+            alias.hardlink_to(local)
+            receipt['path'] = str(alias)
+            (root / 'state.json').write_text(v5_run._json(state))
+            mounted = v2_fused.cooldown_parent(root, parent.checkpoint_sha256, parent.model_sha256, policy, 1_500_000)
+            self.assertEqual(mounted['proof'], bound['proof'])
             with self.assertRaisesRegex(ValueError, 'cooldown duration differs'):
                 v2_fused.cooldown_parent(root, parent.checkpoint_sha256, parent.model_sha256, policy, 400_000)
             receipt['path'] = '/out/other.pt.encoding.json'

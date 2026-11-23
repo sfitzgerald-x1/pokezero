@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 from gpu_engine import v2_distributed, v2_fused
 from pokezero import v2_fused_state as state
-from pokezero.v5_run import _json, _sha, evaluation_declaration_path, read_evaluation_declaration
+from pokezero.v5_deferred_evaluation import evaluation_declaration_path, read_evaluation_declaration
+from pokezero.v5_run import _json, _sha
 
 
 def report(iteration, digest):
@@ -19,6 +20,21 @@ def report(iteration, digest):
 
 
 class CampaignPrefixTests(unittest.TestCase):
+    def test_cooldown_requires_disjoint_committed_addresses(self):
+        def batch(start):
+            return dict(games=dict(game_count=5, stream_start=start, identity_seed_start=start, team_start=start),
+                        constructor_seed=start, sampling_seed=start, gender_root_start=start)
+
+        committed = [[batch(10)]]
+        state.verify_disjoint_campaign_addresses(committed, [[batch(20)]])
+        for name in ('stream_start', 'identity_seed_start', 'team_start',
+                     'constructor_seed', 'sampling_seed', 'gender_root_start'):
+            child = batch(20)
+            target = child['games'] if name in child['games'] else child
+            target[name] = 10
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'reuses a committed parent'):
+                state.verify_disjoint_campaign_addresses(committed, [[child]])
+
     def test_pre_adoption_and_successor_dispatches_keep_their_bound_declarations(self):
         original = {'run_id': 'lineage', 'iterations': [[1]]}
         successor = {'run_id': 'lineage', 'iterations': [[1], [2]]}

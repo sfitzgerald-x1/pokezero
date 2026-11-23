@@ -412,7 +412,7 @@ def _validated_on_all_ranks(distribution, action):
             raise error_type(f'resume inputs failed on rank {rank}: {message}') from error
     return result
 
-def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy, cooldown_games):
+def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy, cooldown_games, *, child_declaration=None):
     """Resolve one committed decision checkpoint and its warmed opponent history."""
     from pokezero.v5_phasec import CAMPAIGN_COOLDOWN_GAMES_BY_PARENT, CAMPAIGN_GAMES_PER_ROUND
     from pokezero.v5_run import Snapshot
@@ -430,6 +430,11 @@ def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy, cool
         raise ValueError('cooldown parent must be at a committed campaign decision boundary')
     if CAMPAIGN_COOLDOWN_GAMES_BY_PARENT.get(parent_games) != cooldown_games:
         raise ValueError('cooldown duration differs from the declared campaign decision boundary')
+    if child_declaration is not None:
+        from pokezero.v5_deferred_evaluation import read_evaluation_declaration
+        declaration = read_evaluation_declaration(root, state['declaration_sha256'])
+        v2_fused_state.verify_disjoint_campaign_addresses(
+            declaration['iterations'][:snapshot.iteration + 1], child_declaration['iterations'])
     training = reports[-1]['training']
     campaign = CampaignSchedule(**training['campaign_schedule'])
     start_game = training['lr_start']['declared_window']['end_game']
@@ -448,9 +453,15 @@ def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy, cool
         receipt_relative = Path(snapshot.checkpoint + '.encoding.json')
         target = (root / receipt_relative).resolve()
         original = Path(proof['path'])
-        if (not target.is_relative_to(root)
-                or (original != Path('/out') / receipt_relative and original.resolve() != target)):
+        if not target.is_relative_to(root):
             raise ValueError('cooldown writer receipt does not belong to the parent checkpoint')
+        if original != Path('/out') / receipt_relative and original.resolve() != target:
+            try:
+                same_receipt = original.samefile(target)
+            except OSError:
+                same_receipt = False
+            if not same_receipt:
+                raise ValueError('cooldown writer receipt does not belong to the parent checkpoint')
         proof = dict(proof, path=str(target))
     return dict(snapshot=snapshot, history=history, origin=(training['steps'], training['rows'], start_game),
                 campaign=campaign, proof=proof, row_order=state['row_order'])
@@ -459,24 +470,14 @@ def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy, cool
 def adopt_2m_prefix(out, args, saved, plan):
     """Authorize one in-place declaration transition while keeping the committed state intact."""
     from gpu_engine.source_provenance import verify_constructor_pool_prefix
-    from pokezero import v5_run as runs, v5_worker as worker
+    from pokezero import v5_worker as worker
+    from pokezero.v5_deferred_evaluation import read_evaluation_declaration
 
     previous_digest = saved['declaration_sha256']
-    original = runs.read_evaluation_declaration(out, previous_digest)
+    original = read_evaluation_declaration(out, previous_digest)
     successor = plan.manifest()
     v2_fused_state.verify_campaign_prefix(original, successor, saved)
-
-    def ranges(batch):
-        games = batch['games']
-        count = games['game_count']
-        return (
-            (games['stream_start'], count),
-            (games['identity_seed_start'], count),
-            (games['team_start'], 2 * count),
-            (batch['constructor_seed'], 1),
-            (batch['sampling_seed'], 1),
-            (batch['gender_root_start'], count),
-        )
+    ranges = v2_fused_state.campaign_batch_addresses
 
     # S0a cooled children already used rounds 101–120 of the original bank.
     reserved = [ranges(batch) for round_ in original['iterations'][:120] for batch in round_]
@@ -512,7 +513,9 @@ def adopt_2m_prefix(out, args, saved, plan):
 
     last_prefix = original['iterations'][99][-1]['games']
     team_end = last_prefix['team_start'] + 2 * last_prefix['game_count']
-    verify_constructor_pool_prefix(*pools, team_end)
+    last_successor = successor['iterations'][-1][-1]['games']
+    successor_end = last_successor['team_start'] + 2 * last_successor['game_count']
+    verify_constructor_pool_prefix(*pools, team_end, successor_teams=successor_end)
     return dict(rounds=100, previous_total_games=5_000_000, previous_declaration_sha256=previous_digest,
                 previous_runtime_sha256=previous_runtime_ref['sha256'])
 
@@ -565,7 +568,8 @@ def main(argv=None, *, distribution=None):
             raise ValueError('cooldown child requires a separate compact declaration')
         cooldown_games = plan.game_offsets[-1]
         parent = _rank_zero(distribution, 'cooldown parent', lambda: cooldown_parent(
-            parent_root, args.cooldown_parent_sha256, model_sha256, lr_start_policy, cooldown_games))
+            parent_root, args.cooldown_parent_sha256, model_sha256, lr_start_policy, cooldown_games,
+            child_declaration=plan.manifest()))
         if args.row_order not in (None, parent['row_order']):
             raise ValueError('cooldown child must use the parent row order')
         parent_offset = parent['snapshot'].iteration + 1
@@ -597,11 +601,13 @@ def main(argv=None, *, distribution=None):
     if compact or deferred:
         from pokezero.v5_deferred_evaluation import sync_actor
     if deferred:
-        from pokezero.v5_deferred_evaluation import MilestoneDispatch, retain_full_checkpoints, sync_directory
+        from pokezero.v5_deferred_evaluation import (
+            MilestoneDispatch, evaluation_declaration_path, retain_full_checkpoints, sync_directory,
+        )
 
         def setup_dispatch():
             nonlocal dispatch
-            declaration = (runs.evaluation_declaration_path(out, declaration_sha256)
+            declaration = (evaluation_declaration_path(out, declaration_sha256)
                            if adopted_prefix is not None else out / 'declaration.json')
             if state_path.exists() and not adopting and not declaration.is_file():
                 raise ValueError('original fused evaluation declaration is missing')
@@ -612,8 +618,14 @@ def main(argv=None, *, distribution=None):
                 declaration.parent.mkdir(parents=True, exist_ok=True)
                 runs._publish(declaration, declaration_bytes)
                 sync_directory(declaration.parent)
-            dispatch = MilestoneDispatch(out, plan.evaluation, plan.evaluation_milestones(), declaration_sha256,
-                report_observer_error=lambda reason: log('EVALUATION_STOP_READ_ERROR', reason=reason))
+            milestones = plan.evaluation_milestones()
+            prior = {} if adopted_prefix is None else {
+                iteration: adopted_prefix['previous_declaration_sha256']
+                for iteration in milestones if iteration < adopted_prefix['rounds']
+            }
+            dispatch = MilestoneDispatch(out, plan.evaluation, milestones, declaration_sha256,
+                report_observer_error=lambda reason: log('EVALUATION_STOP_READ_ERROR', reason=reason),
+                prior_declarations=prior)
             retention_iterations.update(dispatch.milestones)
             if parent is None and compact and plan.game_offsets[-1] == 100_000_000:
                 from pokezero.v5_phasec import CAMPAIGN_COOLDOWN_GAMES_BY_PARENT, CAMPAIGN_GAMES_PER_ROUND
@@ -781,8 +793,6 @@ def main(argv=None, *, distribution=None):
     if deferred and saved is not None:
         def recover_evaluations():
             for snapshot in snapshots[1:]:
-                if adopted_prefix is not None and snapshot.iteration < adopted_prefix['rounds']:
-                    continue
                 if snapshot.iteration in dispatch.milestones and dispatch.request_missing(snapshot):
                     publish_evaluation(snapshot)
             retain_full_checkpoints(out, [

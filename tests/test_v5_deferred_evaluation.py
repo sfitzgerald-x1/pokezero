@@ -13,6 +13,34 @@ import test_v5_evaluation as panel_fixture
 
 
 class DeferredEvaluationTests(unittest.TestCase):
+    def test_adoption_recovers_original_milestone_and_honors_its_signed_stop(self):
+        original, successor, route = 'a' * 64, 'b' * 64, 'c' * 64
+        policy = run.EvaluationProtocol('d' * 64, 1_000_000, 'deferred', route)
+        key = b'z' * 32
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            dispatch = deferred.MilestoneDispatch(root, policy, {99: 2_000_000, 149: 3_000_000}, successor,
+                                                  stop_key=key, prior_declarations={99: original})
+            snapshot = run.Snapshot(99, 'full.pt', 'e' * 64, 'actor.npz', 'f' * 64, '0' * 64)
+            self.assertTrue(dispatch.request_missing(snapshot))
+            result = dispatch.publish_committed(snapshot, report_error=self.fail)
+            self.assertFalse(dispatch.request_missing(snapshot))
+            value = json.loads((root / result.request).read_text())
+            self.assertEqual(value['request']['declaration_sha256'], original)
+
+            stop = dict(schema=deferred.STOP, verdict='FAIL', route_schema='s0.transfer.r2',
+                        route_declaration_sha256=route, protocol_sha256=policy.protocol_sha256,
+                        iteration=99, declared_games=2_000_000, declaration_sha256=original,
+                        dispatch_sha256=result.request_sha256, independent_verdict_sha256='1' * 64)
+            path = root / 'evaluation-stop.json'
+            path.write_text(run._json(dict(payload=stop, signature=deferred._signature(stop, key))))
+            self.assertIsNone(dispatch.stop_at_boundary(99))
+            self.assertEqual(dispatch.stop_at_boundary(100), stop)
+
+            wrong_scope = dict(stop, declaration_sha256=successor)
+            path.write_text(run._json(dict(payload=wrong_scope, signature=deferred._signature(wrong_scope, key))))
+            self.assertIsNone(dispatch.stop_at_boundary(100))
+
     def recipe(self,root):
         recipe=fixture.plan();path=Path(root)/'protocol.json'
         path.write_text(run._json({'model_sha256':run._sha(recipe.model.metadata())}))

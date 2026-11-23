@@ -144,7 +144,7 @@ def load_bank(reference):
 
 
 def check_training_declaration(bank, request):
-    declaration = run.read_evaluation_declaration(request.run_directory, request.declaration_sha256)
+    declaration = json.loads((request.run_directory / 'declaration.json').read_bytes())
     if run._sha(declaration) != request.declaration_sha256:raise ValueError('accepted run declaration differs')
     identity = (declaration['model']['arm'], declaration['model']['replicate'])
     roster = next((r for r in bank.training_rosters if (r['arm'],r['replicate']) == identity), None)

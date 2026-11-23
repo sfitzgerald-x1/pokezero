@@ -46,7 +46,8 @@ class ProgressEvaluationTests(unittest.TestCase):
             foul_play={'config': {}}, opponent_sha256s={name: 'checkpoint' for name in opponents},
             opponent_law_sha256s={name: run._sha(law) for name, law in opponents.items()})
         protocol = SimpleNamespace(sha256='protocol', document=lambda: profile)
-        request = SimpleNamespace(protocol_sha256='protocol', declared_games=1_000_000, run_directory=Path('.'))
+        request = SimpleNamespace(protocol_sha256='protocol', declared_games=1_000_000, run_directory=Path('.'),
+                                  declaration_sha256='a' * 64)
 
         def artifact(value):
             data = {'showdown': {'compiled_tree_sha256': 'showdown'}} if value is runtime else [{}]
@@ -60,8 +61,7 @@ class ProgressEvaluationTests(unittest.TestCase):
             with self.subTest(games=games), patch.object(progress, '_ref', side_effect=artifact), \
                     patch.object(progress, 'validate_banks'), \
                     patch.object(progress.deferred, 'read_milestone', return_value=request), \
-                    patch.object(Path, 'read_bytes', return_value=b'{}'), \
-                    patch.object(progress.json, 'loads', return_value={
+                    patch.object(progress.deferred, 'read_evaluation_declaration', return_value={
                         'evaluation': {'interval_games': 1_000_000},
                         'iterations': [[{'games': games}]],
                     }):

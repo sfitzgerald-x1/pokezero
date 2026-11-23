@@ -130,21 +130,25 @@ def fused_snapshots(entry, cycles, route_sha):
     """Bind the published milestone to the committed fused state and original B."""
     from itertools import islice
     from . import v2_fused_state, v5_run
-    from .v5_deferred_evaluation import read_owned_milestone
+    from .v5_deferred_evaluation import read_evaluation_declaration, read_owned_milestone
     from .v5_evaluation import Artifact
 
     ref = Artifact(**entry["dispatch"])
     request = read_owned_milestone(ref)
     base = request.run_directory
     state = v2_fused_state.read_state(base, include_full_reports=False)
-    declaration = json.loads((base / "declaration.json").read_bytes())
+    declaration = read_evaluation_declaration(base, request.declaration_sha256)
+    prefix = state.get("adopted_prefix")
+    digest_for_iteration = state["declaration_sha256"]
+    if prefix is not None and request.snapshot.iteration < prefix["rounds"]:
+        digest_for_iteration = prefix["previous_declaration_sha256"]
     snapshots = state["snapshots"]
     reports = state["reports"][:cycles]
     if (base != Path(entry["run"]).resolve() or request.declared_games != cycles * 20_000
             or request.snapshot.iteration != cycles - 1
             or declaration["evaluation"]["route_declaration_sha256"] != route_sha or not route_sha
             or digest(declaration) != request.declaration_sha256
-            or state["declaration_sha256"] != request.declaration_sha256
+            or digest_for_iteration != request.declaration_sha256
             or [s["iteration"] for s in snapshots[:cycles + 1]] != list(range(-1, cycles))
             or [r["iteration"] for r in reports] != list(range(cycles))
             or any(r["games"] != 20_000 for r in reports)
