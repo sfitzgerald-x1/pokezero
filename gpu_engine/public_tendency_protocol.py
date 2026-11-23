@@ -5,7 +5,6 @@ Ordered stream integration must bind its namespace and consume each line once.
 """
 from dataclasses import dataclass
 import jax.numpy as jnp
-import numpy as np
 
 from . import public_tendency as t
 
@@ -37,10 +36,10 @@ def valid_words(d,side):
 
 
 def project_line(line,*,catalog):
-    f=t.decode_line(line,catalog=catalog)
-    flags=sum(int(np.asarray(getattr(f,name)))<<i for i,name in enumerate(('called','locked','recharge','baton','ability')))
-    payload=tuple(int(np.asarray(getattr(f,name))) for name in ('kind','species','action','target','turn'))
-    return TendencyProjection(line,int(np.asarray(f.side)),(*payload,flags,int(np.asarray(f.weather)),int(np.asarray(f.outcome))))
+    (kind,side,species,action,target,turn,called,locked,recharge,baton,weather,ability,
+     outcome)=t.decode_line_values(line,catalog=catalog)
+    flags=sum(int(value)<<i for i,value in enumerate((called,locked,recharge,baton,ability)))
+    return TendencyProjection(line,side,(kind,species,action,target,turn,flags,weather,outcome))
 
 
 def unpack(payload,side):
