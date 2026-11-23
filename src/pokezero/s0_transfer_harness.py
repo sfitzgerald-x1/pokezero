@@ -159,6 +159,15 @@ def fused_snapshots(entry, cycles, route_sha):
             state["checkpoint_encoding_receipts"])
 
 
+def _fused_writer_proof(owner, checkpoint, reference):
+    from .checkpoint_self_moves import off_from_receipt
+
+    receipt = Path(str(checkpoint) + '.encoding.json').resolve()
+    if not receipt.is_relative_to(owner):
+        raise ValueError("actor writer receipt must belong to the training run")
+    return off_from_receipt(dict(reference, path=str(receipt)))
+
+
 def production_actors(root, spec):
     from . import checkpoint_self_moves, v5_training
     from .live_protocol_actor import ActorContract
@@ -189,23 +198,23 @@ def production_actors(root, spec):
             raise ValueError("fused encoder configuration differs")
         actors = {}
         for role, snap, owner in (("B", first, reference), ("T", trained, base)):
+            checkpoint = (owner / snap.checkpoint).resolve()
+            archive = (owner / snap.archive).resolve()
+            if not checkpoint.is_relative_to(owner) or not archive.is_relative_to(owner):
+                raise ValueError("actor artifacts must belong to the training run")
             if role == "B":
                 checked, self_moves, _ = checkpoint_self_moves.run_checkpoint(
                     owner, snap.checkpoint, snap.checkpoint_sha256, iteration=-1,
                     expected_snapshot=snap, require_snapshot=True)
             else:
                 checked = checkpoint_self_moves.checked_checkpoint(
-                    owner / snap.checkpoint, expected_checkpoint_sha256=snap.checkpoint_sha256)
-                proof = None if spec["self_moves"] else checkpoint_self_moves.off_from_receipt(
-                    receipts[snap.checkpoint_sha256])
+                    checkpoint, expected_checkpoint_sha256=snap.checkpoint_sha256)
+                proof = None if spec["self_moves"] else _fused_writer_proof(
+                    owner, checkpoint, receipts[snap.checkpoint_sha256])
                 self_moves = checkpoint_self_moves.resolve_self_moves(
                     checked, expected_self_moves=spec["self_moves"], off_provenance=proof)
             if self_moves != spec["self_moves"]:
                 raise ValueError("baseline/target input convention differs")
-            checkpoint = (owner / snap.checkpoint).resolve()
-            archive = (owner / snap.archive).resolve()
-            if not archive.is_relative_to(owner):
-                raise ValueError("actor archive must belong to the training run")
             model = checked.metadata["model"]
             if digest(model) != snap.model_sha256:
                 raise ValueError("checkpoint model differs from its published snapshot")

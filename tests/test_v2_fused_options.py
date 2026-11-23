@@ -180,6 +180,54 @@ class ResumeOptionsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'receipt does not belong'):
                 v2_fused.cooldown_parent(root, parent.checkpoint_sha256, parent.model_sha256, policy, 1_500_000)
 
+    def test_cooldown_checks_later_commits_and_reserved_s0_addresses(self):
+        from pokezero.v2_campaign_schedule import CampaignSchedule
+        from pokezero.v5_deferred_evaluation import evaluation_declaration_path
+
+        def batch(start):
+            return [dict(games=dict(game_count=1, stream_start=start, identity_seed_start=start, team_start=2*start),
+                         constructor_seed=start, sampling_seed=start, gender_root_start=start)]
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = dict(scaling='sqrt', warmup_updates=1)
+            initial = v5_run.Snapshot(-1, 'initial.pt', 'd' * 64, 'initial.npz', 'e' * 64, 'c' * 64)
+            parent = v5_run.Snapshot(99, 'parent.pt', 'a' * 64, 'parent.npz', 'b' * 64, initial.model_sha256)
+            later = v5_run.Snapshot(100, 'later.pt', 'f' * 64, 'later.npz', '0' * 64, initial.model_sha256)
+            original = dict(iterations=[batch(i) for i in range(250)])
+            successor = dict(iterations=original['iterations'][:100] + [batch(1000)])
+            digest = v5_run._sha(successor)
+            state = dict(snapshots=[asdict(item) for item in (initial, parent, later)], lr_start=policy,
+                         row_order='file', declaration_sha256=digest,
+                         reports=[dict(iteration=i, training=dict(steps=i+1, rows=i+1,
+                                      lr_start=dict(declared_window=dict(end_game=20_000*(i+1))),
+                                      campaign_schedule=asdict(CampaignSchedule()))) for i in range(101)])
+            state_path = root / 'state.json'
+            state_path.write_text(v5_run._json(state))
+            legacy = root / 'legacy-effective.json'
+            legacy.write_text(v5_run._json(successor))
+
+            def resolve(start, fallback=None):
+                return v2_fused.cooldown_parent(root, parent.checkpoint_sha256, parent.model_sha256, policy, 400_000,
+                    child_declaration=dict(iterations=[batch(start)]), parent_declaration_path=fallback)
+
+            self.assertEqual(resolve(2000, legacy)['snapshot'], parent)
+            with self.assertRaisesRegex(ValueError, 'reuses a committed parent'):
+                resolve(1000, legacy)
+            with self.assertRaisesRegex(ValueError, 'declaration differs'):
+                legacy.write_text(v5_run._json(original))
+                resolve(2000, legacy)
+
+            (root / 'declaration.json').write_text(v5_run._json(original))
+            version = evaluation_declaration_path(root, digest)
+            version.parent.mkdir(parents=True)
+            version.write_text(v5_run._json(successor))
+            state['adopted_prefix'] = dict(rounds=100, previous_declaration_sha256=v5_run._sha(original))
+            state_path.write_text(v5_run._json(state))
+            with self.assertRaisesRegex(ValueError, 'reuses a committed parent'):
+                resolve(110)
+            self.assertEqual(resolve(2000)['snapshot'], parent)
+
 
 if __name__ == '__main__':
     unittest.main()

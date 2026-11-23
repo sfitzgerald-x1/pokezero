@@ -37,6 +37,8 @@ from pokezero import v2_fused_state
 
 from gpu_engine.v2_bench_collector import log
 
+S0_RESERVED_ROUNDS = 120
+
 
 def journal(run):
     """Reference run journal; tolerant of an event being written by a live run."""
@@ -314,6 +316,8 @@ def argument_parser():
     parser.add_argument('--cooldown-child', metavar='PARENT_OUT',
         help='branch a declared cooldown from a committed campaign parent output')
     parser.add_argument('--cooldown-parent-sha256', help='exact checkpoint at the parent decision boundary')
+    parser.add_argument('--cooldown-parent-declaration', metavar='EFFECTIVE_DECLARATION',
+        help='effective declaration for a legacy parent, checked against its committed digest')
     parser.add_argument('--arm', default='B', help='model shape for --config')
     parser.add_argument('--iterations', type=int, default=2, help='iterations for --config (1 or 2)')
     parser.add_argument('--max-iterations', type=int, default=None, help='stop after this many declared iterations')
@@ -370,6 +374,8 @@ def parse_args(argv=None):
         parser.error('--advance-campaign-step-at requires --campaign-anneal and a positive boundary')
     if bool(args.cooldown_child) != bool(args.cooldown_parent_sha256):
         parser.error('--cooldown-child and --cooldown-parent-sha256 must be supplied together')
+    if args.cooldown_parent_declaration and not args.cooldown_child:
+        parser.error('--cooldown-parent-declaration requires --cooldown-child')
     if args.cooldown_child and (not args.campaign_anneal or args.advance_campaign_step_at is not None):
         parser.error('--cooldown-child needs --campaign-anneal and cannot advance a cut')
     if args.adopt_2m_prefix_runtime and (not args.require_resume or not args.campaign_anneal
@@ -412,7 +418,8 @@ def _validated_on_all_ranks(distribution, action):
             raise error_type(f'resume inputs failed on rank {rank}: {message}') from error
     return result
 
-def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy, cooldown_games, *, child_declaration=None):
+def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy, cooldown_games, *,
+                    child_declaration=None, parent_declaration_path=None):
     """Resolve one committed decision checkpoint and its warmed opponent history."""
     from pokezero.v5_phasec import CAMPAIGN_COOLDOWN_GAMES_BY_PARENT, CAMPAIGN_GAMES_PER_ROUND
     from pokezero.v5_run import Snapshot
@@ -432,9 +439,16 @@ def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy, cool
         raise ValueError('cooldown duration differs from the declared campaign decision boundary')
     if child_declaration is not None:
         from pokezero.v5_deferred_evaluation import read_evaluation_declaration
-        declaration = read_evaluation_declaration(root, state['declaration_sha256'])
-        v2_fused_state.verify_disjoint_campaign_addresses(
-            declaration['iterations'][:snapshot.iteration + 1], child_declaration['iterations'])
+        declaration = read_evaluation_declaration(root, state['declaration_sha256'], fallback=parent_declaration_path)
+        completed_rounds = len(state['reports'])
+        if len(declaration['iterations']) < completed_rounds:
+            raise ValueError('parent declaration does not cover the committed rounds')
+        occupied = declaration['iterations'][:completed_rounds]
+        prefix = state.get('adopted_prefix')
+        if prefix is not None:
+            original = read_evaluation_declaration(root, prefix['previous_declaration_sha256'])
+            occupied.extend(original['iterations'][prefix['rounds']:S0_RESERVED_ROUNDS])
+        v2_fused_state.verify_disjoint_campaign_addresses(occupied, child_declaration['iterations'])
     training = reports[-1]['training']
     campaign = CampaignSchedule(**training['campaign_schedule'])
     start_game = training['lr_start']['declared_window']['end_game']
@@ -480,7 +494,7 @@ def adopt_2m_prefix(out, args, saved, plan):
     ranges = v2_fused_state.campaign_batch_addresses
 
     # S0a cooled children already used rounds 101–120 of the original bank.
-    reserved = [ranges(batch) for round_ in original['iterations'][:120] for batch in round_]
+    reserved = [ranges(batch) for round_ in original['iterations'][:S0_RESERVED_ROUNDS] for batch in round_]
     frontier = [max(start + size for start, size in column) for column in zip(*reserved, strict=True)]
     for round_ in successor['iterations'][100:]:
         for batch in round_:
@@ -552,7 +566,8 @@ def main(argv=None, *, distribution=None):
     plan = select_learner_precision(context, args.learner_precision, record_hash=False)
     plan = select_learner_lr_start(context, lr_start, record_hash=False)
     lr_start_policy = context['declared'].get('lr_start') if lr_start is not None else None
-    declaration_bytes = runs._json(plan.manifest()).encode()
+    manifest = plan.manifest()
+    declaration_bytes = runs._json(manifest).encode()
     declaration_sha256 = hashlib.sha256(declaration_bytes).hexdigest()
     compact = getattr(plan, 'compact', False)
     if args.recipe is not None or args.learner_precision is not None or lr_start is not None:
@@ -569,7 +584,7 @@ def main(argv=None, *, distribution=None):
         cooldown_games = plan.game_offsets[-1]
         parent = _rank_zero(distribution, 'cooldown parent', lambda: cooldown_parent(
             parent_root, args.cooldown_parent_sha256, model_sha256, lr_start_policy, cooldown_games,
-            child_declaration=plan.manifest()))
+            child_declaration=manifest, parent_declaration_path=args.cooldown_parent_declaration))
         if args.row_order not in (None, parent['row_order']):
             raise ValueError('cooldown child must use the parent row order')
         parent_offset = parent['snapshot'].iteration + 1
@@ -600,24 +615,26 @@ def main(argv=None, *, distribution=None):
     retention_iterations = set()
     if compact or deferred:
         from pokezero.v5_deferred_evaluation import sync_actor
+    from pokezero.v5_deferred_evaluation import evaluation_declaration_path, sync_directory
+
+    def publish_declaration():
+        declaration = (evaluation_declaration_path(out, declaration_sha256)
+                       if adopted_prefix is not None else out / 'declaration.json')
+        if deferred and state_path.exists() and not adopting and not declaration.is_file():
+            raise ValueError('original fused evaluation declaration is missing')
+        if declaration.exists():
+            if runs._sha(json.loads(declaration.read_bytes())) != declaration_sha256:
+                raise ValueError('original fused declaration differs')
+        else:
+            declaration.parent.mkdir(parents=True, exist_ok=True)
+            runs._publish(declaration, declaration_bytes)
+            sync_directory(declaration.parent)
+
     if deferred:
-        from pokezero.v5_deferred_evaluation import (
-            MilestoneDispatch, evaluation_declaration_path, retain_full_checkpoints, sync_directory,
-        )
+        from pokezero.v5_deferred_evaluation import MilestoneDispatch, retain_full_checkpoints
 
         def setup_dispatch():
             nonlocal dispatch
-            declaration = (evaluation_declaration_path(out, declaration_sha256)
-                           if adopted_prefix is not None else out / 'declaration.json')
-            if state_path.exists() and not adopting and not declaration.is_file():
-                raise ValueError('original fused evaluation declaration is missing')
-            if declaration.exists():
-                if runs._sha(json.loads(declaration.read_bytes())) != declaration_sha256:
-                    raise ValueError('original fused evaluation declaration differs')
-            else:
-                declaration.parent.mkdir(parents=True, exist_ok=True)
-                runs._publish(declaration, declaration_bytes)
-                sync_directory(declaration.parent)
             milestones = plan.evaluation_milestones()
             prior = {} if adopted_prefix is None else {
                 iteration: adopted_prefix['previous_declaration_sha256']
@@ -772,9 +789,10 @@ def main(argv=None, *, distribution=None):
     else:
         from pokezero.v2_distributed import DistributedTrainer
         trainer = DistributedTrainer(runtime)
+    _rank_zero(distribution, 'fused declaration', publish_declaration)
     if deferred:
-        _rank_zero(distribution, 'evaluation declaration', setup_dispatch)
-    del declaration_bytes
+        _rank_zero(distribution, 'evaluation dispatch', setup_dispatch)
+    del declaration_bytes, manifest
     params = {}
     def actor_params(digest):
         if digest not in params:

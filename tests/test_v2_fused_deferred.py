@@ -34,6 +34,10 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
     batches = tuple((run.Batch(tuple(run.Game(i+1, f'game-{i}', 100+i, (2*i, 2*i+1))
                               for i in range(8*j, 8*j+8)), 10+j, 20+j),) for j in range(5))
     declaration = dict(fixture='fused-boundary', evaluation=None if evaluation is None else evaluation.metadata())
+    if parent_window and cooldown_from is None:
+        declaration['iterations'] = [[asdict(run.CampaignBatch(
+            run.GameRange('fixture', 8*i, 8, 8*i + 1, 100 + 8*i, 16*i),
+            10 + i, 20 + i, 60, 7, 80 + 8*i))] for i in range(100)]
     plan_fields = dict(model=model, loss=loss, train=train, evaluation=evaluation, self_moves=False,
         iterations=batches, games=tuple(g for b, in batches for g in b.games), discount=1.,
         max_requests=64, historical_fraction=.5, historical_window=2,
@@ -42,9 +46,11 @@ def run_fixture(root, out, *, distribution=None, evaluation=None, limit=None, wr
         from pokezero.v5_phasec import campaign_iterations
         plan_fields['compact'] = True
         plan_fields['iterations'] = campaign_iterations(
-            'fixture', 20, stream_start=10, team_start=20, identity_seed_start=30,
-            constructor_seed_start=40, sampling_seed_start=50, gender_seed=60, gender_domain=7, gender_root_start=80)
+            'fixture', 20, stream_start=10_000, team_start=20_000, identity_seed_start=10_000,
+            constructor_seed_start=10_000, sampling_seed_start=10_000,
+            gender_seed=60, gender_domain=7, gender_root_start=10_000)
         plan_fields['game_offsets'] = tuple(range(0, 400_001, 20_000))
+        declaration['iterations'] = [[asdict(batch) for batch in batches] for batches in plan_fields['iterations']]
     plan_type = make_dataclass('CampaignFixturePlan', plan_fields) if campaign else SimpleNamespace
     plan = plan_type(**plan_fields)
     context = dict(plan=plan, declared={}, preparation_seconds=1, gender=None, pool=None,

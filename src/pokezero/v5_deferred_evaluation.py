@@ -478,13 +478,19 @@ def evaluation_declaration_path(root, digest):
     return Path(root) / 'artifacts' / 'declarations' / f'{digest}.json'
 
 
-def read_evaluation_declaration(root, digest):
+def read_evaluation_declaration(root, digest, *, fallback=None):
     """Resolve an immutable declaration for this milestone, including pre-adoption looks."""
     bound = evaluation_declaration_path(root, digest)
     try:
         blob = bound.read_bytes()
     except FileNotFoundError:
-        blob = (Path(root) / 'declaration.json').read_bytes()
+        path = Path(root) / 'declaration.json'
+        try:
+            blob = path.read_bytes()
+        except FileNotFoundError:
+            if fallback is None:
+                raise
+            blob = Path(fallback).read_bytes()
     declaration = json.loads(blob)
     if run._sha(declaration) != digest:
         raise ValueError('original accepted run declaration differs')
