@@ -443,9 +443,12 @@ def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy, cool
         completed_rounds = len(state['reports'])
         if len(declaration['iterations']) < completed_rounds:
             raise ValueError('parent declaration does not cover the committed rounds')
-        occupied = declaration['iterations'][:completed_rounds]
         prefix = state.get('adopted_prefix')
-        if prefix is not None:
+        if prefix is None:
+            occupied = declaration['iterations'][:completed_rounds]
+        else:
+            # Reserve the parent's future rounds so a fork remains valid as the main line advances.
+            occupied = list(declaration['iterations'])
             original = read_evaluation_declaration(root, prefix['previous_declaration_sha256'])
             occupied.extend(original['iterations'][prefix['rounds']:S0_RESERVED_ROUNDS])
         v2_fused_state.verify_disjoint_campaign_addresses(occupied, child_declaration['iterations'])

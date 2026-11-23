@@ -53,9 +53,9 @@ def campaign_batch_addresses(batch):
     )
 
 
-def verify_disjoint_campaign_addresses(committed, child):
-    """Refuse reuse of any address in the committed part of the parent."""
-    parent = (campaign_batch_addresses(batch) for batches in committed for batch in batches)
+def verify_disjoint_campaign_addresses(parent_rounds, child):
+    """Refuse reuse of any committed or reserved parent address."""
+    parent = (campaign_batch_addresses(batch) for batches in parent_rounds for batch in batches)
     continuation = (campaign_batch_addresses(batch) for batches in child for batch in batches)
     for occupied, requested in zip(zip(*parent, strict=True), zip(*continuation, strict=True), strict=True):
         intervals = sorted(occupied)
@@ -64,7 +64,7 @@ def verify_disjoint_campaign_addresses(committed, child):
         for start, size in requested:
             index = bisect_left(starts, start + size)
             if index and frontier[index - 1] > start:
-                raise ValueError('cooldown child reuses a committed parent roster or RNG address')
+                raise ValueError('cooldown child reuses a committed or reserved parent roster or RNG address')
 
 
 def _directory_identity(path):

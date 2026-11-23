@@ -32,7 +32,7 @@ class CampaignPrefixTests(unittest.TestCase):
             child = batch(20)
             target = child['games'] if name in child['games'] else child
             target[name] = 10
-            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'reuses a committed parent'):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'reuses a committed or reserved parent'):
                 state.verify_disjoint_campaign_addresses(committed, [[child]])
 
     def test_pre_adoption_and_successor_dispatches_keep_their_bound_declarations(self):
