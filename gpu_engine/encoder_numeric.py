@@ -12,6 +12,29 @@ import jax.numpy as j
 import numpy as np
 
 
+def _lookup_or_exact(eligible, operands, lookup, exact):
+    """Keep the lookup branch lazy under vmap without mixing fallback groups."""
+    def choose(mask, values):
+        return jax.lax.cond(j.all(mask), lambda args: lookup(*args),
+                            lambda args: exact(*args), (mask, values))
+
+    grouped = jax.custom_batching.custom_vmap(choose)
+
+    @grouped.def_vmap
+    def batch(size, mapped, mask, values):
+        def leading_axis(value, has_axis):
+            return value if has_axis else j.broadcast_to(value, (size,) + value.shape)
+
+        mask, values = jax.tree.map(leading_axis, (mask, values), tuple(mapped))
+        # A batch entirely covered by the lookup needs no exact division.
+        # On mixed input, keep the original per-group branch choices. Applying
+        # the same rule recursively preserves the fast path under nested vmap.
+        return _lookup_or_exact(mask, values, jax.vmap(lookup), jax.vmap(choose)), True
+
+    # Indexing and bit-level division below already give zero tangents.
+    return grouped(eligible, jax.tree.map(jax.lax.stop_gradient, operands))
+
+
 @lru_cache(None)
 def _normalized_table(divisor, minimum):
     return np.asarray([i / divisor for i in range(minimum, divisor + 1)], np.float32)
@@ -29,13 +52,19 @@ def normalized(value, divisor, *, minimum=None):
     lower = 0 if minimum is None else minimum
     clipped = j.minimum(value, divisor)
     if minimum is not None:clipped = j.maximum(clipped, minimum)
-    table = j.asarray(_normalized_table(divisor, lower))
     index = j.clip(clipped, lower, divisor).astype(j.int32) - lower
     integral = (clipped >= lower) & (clipped == j.floor(clipped))
     if j.issubdtype(j.asarray(clipped).dtype, j.floating):
         integral &= ~((clipped == 0) & j.signbit(clipped))
-    return jax.lax.cond(j.all(integral), lambda _: table[index],
-        lambda _: _float_quotient_pair(clipped, j.float32(divisor))[..., 0], None)
+    def lookup(_, values):
+        indices, _ = values
+        return j.asarray(_normalized_table(divisor, lower))[indices]
+
+    def exact(_, values):
+        _, clipped = values
+        return _float_quotient_pair(clipped, j.float32(divisor))[..., 0]
+
+    return _lookup_or_exact(integral, (index, clipped), lookup, exact)
 
 
 def hazard_exposure(count, layers):
@@ -66,7 +95,6 @@ def ratio(numerator, denominator, *, limit=714, pair=False):
     positive int32 denominator domain through integer long division, including
     the binary64 rounding performed by Python. No device float division runs.
     """
-    table = j.asarray(_ratio_table(limit, pair))
     numerator, denominator = j.broadcast_arrays(j.asarray(numerator), j.asarray(denominator))
     if j.issubdtype(denominator.dtype, j.floating):
         bits = jax.lax.bitcast_convert_type(denominator, j.uint32)
@@ -83,9 +111,14 @@ def ratio(numerator, denominator, *, limit=714, pair=False):
         integral_int32(numerator) & integral_int32(denominator))
     n = j.clip(numerator, 0, denominator).astype(j.int32)
     d = denominator.astype(j.int32)
-    def lookup(_):
+    def lookup(_, values):
+        n, d, _, _, _ = values
+        table = j.asarray(_ratio_table(limit, pair))
         return table[j.clip(d, 1, limit), j.clip(n, 0, limit)]
-    def generic(_):
+
+    def generic(_, values):
+        n, d, numerator, denominator, integer_domain = values
+
         def floating(_):
             raw = _float_quotient_pair(numerator, denominator)
             high = jax.lax.bitcast_convert_type(raw[..., 0], j.uint32)
@@ -96,7 +129,8 @@ def ratio(numerator, denominator, *, limit=714, pair=False):
         result = jax.lax.cond(j.all(integer_domain),
             lambda _: _integer_ratio_pair(n, d), floating, None)
         return result if pair else result[..., 0]
-    return jax.lax.cond(j.all(integer_domain & (denominator <= limit)), lookup, generic, operand=None)
+    return _lookup_or_exact(integer_domain & (denominator <= limit),
+                            (n, d, numerator, denominator, integer_domain), lookup, generic)
 
 
 def _float_quotient_pair(numerator, denominator):
