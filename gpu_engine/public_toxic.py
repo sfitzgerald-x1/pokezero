@@ -266,8 +266,8 @@ def project_active(state,tables,*,expected_vocabulary):
     return ToxicPatch(numeric,jnp.zeros(132,bool).at[COLUMN].set(True),ok)
 
 
-def decode_line(line,*,identity_ids):
-    """Decode raw syntax and integer HP; all counter arithmetic stays on device."""
+def decode_line_values(line,*,identity_ids):
+    """Return validated host values in ToxicFact field order."""
     if not isinstance(line,str):raise ValueError('raw Toxic line must be text')
     active_words=set()
     for raw_ident,word in identity_ids.items():
@@ -314,7 +314,12 @@ def decode_line(line,*,identity_ids):
     if condition:tox='tox' in condition.split()
     residual=name=='-damage' and len(parts)>=4 and any(x.strip()=='[from] psn' for x in parts[4:])
     if any(x>=2**31 for x in (turn,hp,maximum)):raise ValueError('public Toxic integers exceed exact int32 transport')
-    raw=(kind,side,identity,canonical,reference._is_active_protocol_ident(ident),turn,hp,maximum,tox,residual,baton,
+    return (kind,side,identity,canonical,reference._is_active_protocol_ident(ident),turn,hp,maximum,tox,residual,baton,
         name in reference._TOXIC_RESET_PROOF_BOUNDARY_EVENTS,name in reference._TOXIC_RESET_PROOF_OCCUPANCY_EVENTS)
+
+
+def decode_line(line,*,identity_ids):
+    """Decode raw syntax and integer HP; all counter arithmetic stays on device."""
+    raw=decode_line_values(line,identity_ids=identity_ids)
     flags={3,4,8,9,10,11,12}
     return ToxicFact(*(jnp.asarray(x,jnp.bool_ if i in flags else jnp.int32) for i,x in enumerate(raw)))

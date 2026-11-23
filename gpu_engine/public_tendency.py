@@ -244,8 +244,8 @@ def apply(state,tables,fact,*,producer_binding,valid=True):
     return result,~enabled|ok
 
 
-def decode_line(line,*,catalog):
-    """Translate source lexical predicates, without folding counters on host."""
+def decode_line_values(line,*,catalog):
+    """Return validated host values in TendencyFact field order."""
     if not isinstance(line,str):raise ValueError('tendency input requires a raw protocol string')
     p=line.split('|');name=p[1] if len(p)>1 else '';ident=p[2] if len(p)>2 else ''
     seat=reference._slot_from_ident(ident);side=int(seat[1])-1 if seat in ('p1','p2') else -1
@@ -300,7 +300,12 @@ def decode_line(line,*,catalog):
         if rank is not None:k=OUTCOME;target=side;outcome=rank
     if k in (SWITCH,DRAG,REPLACE,FAINT,MOVE,CANT,PREPARE,OUTCOME,PURSUIT) and side<0:
         raise ValueError('tendency action facts require a public side')
-    values=(k,side,species,action,target,turn,called,locked,recharge,baton,weather,ability,outcome)
+    return (k,side,species,action,target,turn,called,locked,recharge,baton,weather,ability,outcome)
+
+
+def decode_line(line,*,catalog):
+    """Translate source lexical predicates, without folding counters on host."""
+    values=decode_line_values(line,catalog=catalog)
     bools={6,7,8,9,11}
     return TendencyFact(*(jnp.asarray(v,jnp.bool_ if i in bools else jnp.int32) for i,v in enumerate(values)))
 

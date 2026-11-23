@@ -1,6 +1,7 @@
 """Lexical tendency transport round trips and canonical payload refusal."""
 import importlib.util
 import unittest
+from unittest.mock import patch
 
 
 @unittest.skipUnless(importlib.util.find_spec('jax'),'requires isolated JAX')
@@ -55,6 +56,25 @@ class PublicTendencyProtocolTests(unittest.TestCase):
             _,ok=self.jax.jit(self.codec.unpack)(payload,self.j.array([side],self.j.int32))
             self.assertEqual(ok.tolist(),[False],line)
             self.assertFalse(self.codec.valid_words(tuple(payload[0].tolist()),side))
+
+    def test_toxic_and_tendency_host_words_require_no_jax_scalar_conversion(self):
+        from gpu_engine import public_toxic as toxic, public_toxic_protocol as toxic_codec
+
+        with patch.object(self.j, 'asarray', side_effect=AssertionError('host projection allocated a JAX array')):
+            tendency = self.codec.project_line('|turn|1', catalog=self.catalog)
+            poison = toxic_codec.project_line('|turn|1', identity_ids={})
+            self.assertEqual((tendency.side, tendency.payload), (-1, (self.t.TURN, 0, 0, -1, 1, 0, 0, 9)))
+            self.assertEqual((poison.side, poison.payload), (-1, (toxic.TURN, 0, 1, -1, 0, 33, 0, 0)))
+            self.assertTrue(poison.shared_event)
+            self.assertFalse(poison.timestamp)
+            with self.assertRaisesRegex(ValueError, 'unsigned integer fraction'):
+                toxic_codec.project_line('|-damage|p1a: Snorlax|bad', identity_ids={})
+            with self.assertRaisesRegex(ValueError, 'cannot share one public identity word'):
+                toxic_codec.project_line('|', identity_ids={'p1a: Snorlax': 1, 'p1a: Alias': 1})
+            with self.assertRaisesRegex(ValueError, 'canonical catalog species spelling'):
+                self.codec.project_line('|switch|p2a: absol|absol, L80|100/100', catalog=self.catalog)
+            with self.assertRaisesRegex(ValueError, 'int32 turn'):
+                self.codec.project_line('|turn|2147483648', catalog=self.catalog)
 
 
 if __name__=='__main__':unittest.main()

@@ -7,7 +7,6 @@ consumers. A handled Toxic no-op does not authorize dropping unknown raw kinds.
 from dataclasses import dataclass
 
 import jax.numpy as jnp
-import numpy as np
 
 from . import public_toxic as toxic
 
@@ -27,12 +26,12 @@ class ToxicProjection:
 
 
 def project_line(line,*,identity_ids):
-    fact=toxic.decode_line(line,identity_ids=identity_ids)
-    values={name:np.asarray(x).item() for name,x in zip(fact._fields,fact)}
-    flags=sum(int(values[name])<<i for i,name in enumerate(FLAG_NAMES))
-    payload=(values['kind'],values['identity'],values['turn'],values['hp'],values['maximum'],flags,0,0)
-    shared=(values['kind'] in COMMON_KINDS and values['canonical']) or line=='|'
-    return ToxicProjection(line,values['side'],payload,shared,values['kind']==toxic.TIMESTAMP)
+    (kind,side,identity,canonical,active_form,turn,hp,maximum,tox,residual,baton,
+     retire_all,retire_side)=toxic.decode_line_values(line,identity_ids=identity_ids)
+    flags=sum(int(value)<<i for i,value in enumerate((canonical,active_form,tox,residual,baton,retire_all,retire_side)))
+    payload=(kind,identity,turn,hp,maximum,flags,0,0)
+    shared=(kind in COMMON_KINDS and canonical) or line=='|'
+    return ToxicProjection(line,side,payload,shared,kind==toxic.TIMESTAMP)
 
 
 def unpack(side,payload):
