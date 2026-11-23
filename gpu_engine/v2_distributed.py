@@ -102,6 +102,13 @@ class Distribution:
             for name in report['phase_seconds']}
         combined['games_per_second'] = combined['games'] / combined['iteration_seconds']
         combined['games_per_second_steady'] = combined['games'] / combined['steady_seconds']
+        if 'both_seat_collection' in report:
+            collections = [r['both_seat_collection'] for r in reports]
+            exchange = {(c['exchange_rows'], c['exchange_digest']) for c in collections}
+            if exchange != {(combined['rows'], report['both_seat_collection']['exchange_digest'])}:
+                raise ValueError('row exchange differs from collected rows')
+            combined['both_seat_collection'] = dict(report['both_seat_collection'],
+                peak_rank_rss_bytes=max(c['peak_rank_rss_bytes'] for c in collections))
         combined['audit'] = [a for r in reports for a in r['audit']]
         if report['games_matching_reference'] is not None:
             combined['games_matching_reference'] = {k: sum(r['games_matching_reference'][k] for r in reports)

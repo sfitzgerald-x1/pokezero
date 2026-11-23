@@ -377,9 +377,11 @@ class Plan:
     # resume and identity are byte-identical), and every collector, export and actor load of the run follows it.
     self_moves:bool=False
     historical_anchor_slots:int=0
+    train_both_seats:bool=False
 
     def __post_init__(self):
         if type(self.self_moves) is not bool:raise ValueError('explicit bool self_moves required')
+        if type(self.train_both_seats) is not bool:raise ValueError('explicit bool train_both_seats required')
         if (type(self.historical_anchor_slots) is not int or self.historical_anchor_slots not in (0,8)
                 or self.historical_anchor_slots and self.historical_window!=32):
             raise ValueError('log-spaced history reserves eight of 32 opponent slots')
@@ -459,6 +461,7 @@ class Plan:
             game_seed_scope='TRAJECTORY_IDENTITY_ONLY_BATCH_CONSTRUCTOR_AND_SAMPLING_SEEDS_DRIVE_RNG',scientific_qualification=False)
         if self.evaluation is not None:value['evaluation']=self.evaluation.metadata()
         if self.self_moves:value['self_moves']=True
+        if self.train_both_seats:value['train_both_seats']=True
         if self.historical_anchor_slots:
             rule = ('UNIFORM_24_RECENT_8_EXACT_LOG_AGE_SLOTS_ELSE_CURRENT_AFTER_WARMUP'
                     if self.compact else 'UNIFORM_24_RECENT_8_LOG_AGE_PAST_SNAPSHOTS_NO_OUTCOME_ADAPTATION')
@@ -834,6 +837,8 @@ def _run(plan,path,*,backend,resume=False,enable_v5=False,evaluation_hook=None,m
     if enable_v5 is not True or type(plan) is not Plan:raise ValueError('explicit v5 finite run enablement required')
     if plan.compact:
         raise ValueError('campaign game ranges require the fused V2 runner')
+    if plan.train_both_seats:
+        raise ValueError('both-seat collection requires the fused V2 runner')
     milestones = plan.evaluation_milestones()
     deferred = plan.evaluation is not None and plan.evaluation.deferred
     if deferred and iteration_policy_lag:
