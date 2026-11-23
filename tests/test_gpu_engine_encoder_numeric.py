@@ -37,9 +37,10 @@ class EncoderNumericTests(unittest.TestCase):
             return en.normalized(numerator, 100), en.ratio(numerator, denominator, pair=True)
 
         numerator = j.arange(24, dtype=j.float32).reshape(2, 3, 4)
-        denominator = j.full_like(numerator, 31)
-        mixed_numerator = numerator.at[0, 1, 0].set(-0.).at[1, 0, 2].set(.25)
-        mixed_denominator = denominator.at[0, 1, 1].set(1000)
+        denominator = j.full(numerator.shape, 31, dtype=j.int32)
+        mixed_numerator = numerator.at[0, 1, 0].set(-0.).at[0, 1, 1].set(1.).at[1, 0, 2].set(.25)
+        # Float32 rounds this denominator down, so integer fallback must stay local to its group.
+        mixed_denominator = denominator.at[0, 1, 1].set(2**24 + 1)
         with patch.object(en, '_integer_ratio_pair', observe):
             mapped = jax.jit(jax.vmap(jax.vmap(encode)))
             normalized, ratios = mapped(numerator, denominator)
