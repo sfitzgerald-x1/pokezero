@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -5,6 +6,7 @@ import unittest
 
 import numpy as np
 
+from gpu_engine import source_provenance
 from gpu_engine.team_pool import FIELDS
 from scripts.assemble_v2_campaign_pool import assemble, file_sha
 
@@ -24,6 +26,31 @@ def make_shard(path, start, stop, row_start, *, value=1):
 
 
 class CampaignPoolTests(unittest.TestCase):
+    def test_streamed_loader_keeps_original_bytes_and_read_only_receipt(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / 'pool.npz'
+            arrays = {
+                name: np.asfortranarray(np.arange(2 * int(np.prod(shape)), dtype=dtype).reshape(2, *shape))
+                for name, (shape, dtype) in FIELDS.items()
+            }
+            arrays['gender'] = np.arange(12, dtype=np.uint8).reshape(2, 6)
+            arrays['happiness'] = np.full((2, 6), 255, dtype=np.uint8)
+            metadata = {'seed_start': 200, 'completed_teams': 2}
+            np.savez_compressed(
+                path, **arrays,
+                metadata_utf8=np.frombuffer(json.dumps(metadata).encode(), dtype=np.uint8),
+            )
+            loaded = source_provenance.load_constructor_pool(path)
+            receipt = source_provenance._pool(loaded, rehash=True)
+            self.assertEqual(receipt['pool_sha256'], file_sha(path))
+            self.assertEqual(loaded.metadata(), metadata)
+            for name, actual in loaded.arrays.items():
+                expected = arrays[name].tobytes()
+                self.assertEqual(actual.tobytes(), expected)
+                self.assertEqual(receipt['arrays'][name]['sha256'], hashlib.sha256(expected).hexdigest())
+                with self.assertRaises(ValueError):
+                    actual.setflags(write=True)
+
     def test_preserves_prefix_with_fresh_team_seed_band(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
