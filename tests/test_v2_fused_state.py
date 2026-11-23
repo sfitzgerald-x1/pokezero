@@ -1,4 +1,6 @@
 from contextlib import redirect_stderr
+from copy import deepcopy
+import hashlib
 from io import StringIO
 import json
 from pathlib import Path
@@ -8,11 +10,64 @@ from unittest.mock import patch
 
 from gpu_engine import v2_distributed, v2_fused
 from pokezero import v2_fused_state as state
+from pokezero.v5_deferred_evaluation import evaluation_declaration_path, read_evaluation_declaration
+from pokezero.v5_run import _json, _sha
 
 
 def report(iteration, digest):
     return dict(iteration=iteration, snapshot=dict(iteration=iteration, checkpoint_sha256=digest),
                 ranks=[dict(rows=100)])
+
+
+class CampaignPrefixTests(unittest.TestCase):
+    def test_cooldown_requires_disjoint_committed_addresses(self):
+        def batch(start):
+            return dict(games=dict(game_count=5, stream_start=start, identity_seed_start=start, team_start=start),
+                        constructor_seed=start, sampling_seed=start, gender_root_start=start)
+
+        committed = [[batch(10)]]
+        state.verify_disjoint_campaign_addresses(committed, [[batch(20)]])
+        for name in ('stream_start', 'identity_seed_start', 'team_start',
+                     'constructor_seed', 'sampling_seed', 'gender_root_start'):
+            child = batch(20)
+            target = child['games'] if name in child['games'] else child
+            target[name] = 10
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'reuses a committed or reserved parent'):
+                state.verify_disjoint_campaign_addresses(committed, [[child]])
+
+    def test_pre_adoption_and_successor_dispatches_keep_their_bound_declarations(self):
+        original = {'run_id': 'lineage', 'iterations': [[1]]}
+        successor = {'run_id': 'lineage', 'iterations': [[1], [2]]}
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'declaration.json').write_text(_json(original))
+            successor_digest = _sha(successor)
+            path = evaluation_declaration_path(root, successor_digest)
+            path.parent.mkdir(parents=True)
+            path.write_text(_json(successor))
+            self.assertEqual(read_evaluation_declaration(root, _sha(original)), original)
+            self.assertEqual(read_evaluation_declaration(root, successor_digest), successor)
+            path.write_text(_json(original))
+            with self.assertRaisesRegex(ValueError, 'declaration differs'):
+                read_evaluation_declaration(root, successor_digest)
+
+    def test_adoption_binds_committed_addresses_and_learner_identity(self):
+        original = dict(run_id='lineage', pool_sha256='a' * 64, train={'epochs': 2},
+                        iterations=[[{'games': dict(team_start=i * 40_000, identity_seed_start=i * 20_000)}]
+                                    for i in range(250)])
+        successor = dict(deepcopy(original), pool_sha256='b' * 64,
+                         iterations=deepcopy(original['iterations'][:100]) + [[] for _ in range(4900)])
+        saved = dict(round_ledger=dict(completed_rounds=100, schema=state.SCHEMA),
+                     declaration_sha256=hashlib.sha256(_json(original).encode()).hexdigest())
+        state.verify_campaign_prefix(original, successor, saved)
+        changed = deepcopy(successor)
+        changed['iterations'][99][0]['games']['team_start'] += 1
+        with self.assertRaisesRegex(ValueError, 'changes a committed game'):
+            state.verify_campaign_prefix(original, changed, saved)
+        with self.assertRaisesRegex(ValueError, 'learner policy'):
+            state.verify_campaign_prefix(original, dict(successor, train={'epochs': 3}), saved)
+        with self.assertRaisesRegex(ValueError, 'original campaign declaration'):
+            state.verify_campaign_prefix(dict(original, run_id='other'), successor, saved)
 
 
 class FusedStateTests(unittest.TestCase):

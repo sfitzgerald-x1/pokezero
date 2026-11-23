@@ -12,7 +12,7 @@ import pytest
 
 from pokezero import s0_transfer_recompute as scorer
 from pokezero import v5_deferred_evaluation as deferred, v5_evaluation as ev, v5_run as run
-from pokezero.s0_transfer_harness import fused_snapshots
+from pokezero.s0_transfer_harness import _fused_writer_proof, fused_snapshots
 from pokezero.s0_transfer_roster import (
     FP, H2H, SCHEMA, Shard, canonical, cell_key, digest, expected_cells, read_terminals,
     terminal_writer, write_json,
@@ -70,7 +70,30 @@ def fake_fused(root, replica, policy, key, *, mount_alias=False, compact=False):
 
 def test_compact_fused_milestone_at_one_million_of_five(tmp_path):
     policy = run.EvaluationProtocol(digest("synthetic protocol"), 1_000_000, "deferred", digest("synthetic route"))
-    fake_fused(tmp_path / "replica", 0, policy, b"c" * 32, mount_alias=True, compact=True)
+    root = tmp_path / "replica"
+    _, ref, _ = fake_fused(root, 0, policy, b"c" * 32, mount_alias=True, compact=True)
+    state_path = root / "state.json"
+    state = json.loads(state_path.read_bytes())
+    original_digest = state["declaration_sha256"]
+    state.update(declaration_sha256=digest("successor"), adopted_prefix=dict(
+        rounds=100, previous_declaration_sha256=original_digest))
+    write_json(state_path, state)
+    fused_snapshots(dict(dispatch=asdict(ref), run=str(root)), 50, policy.route_declaration_sha256)
+
+
+def test_fused_writer_receipt_uses_replica_mount_and_retained_digest(tmp_path):
+    from pokezero.checkpoint_self_moves import _writer_receipt
+
+    root = tmp_path.resolve()
+    checkpoint = root / 'trained.pt'
+    checkpoint.write_bytes(b'checkpoint fixture')
+    receipt = _writer_receipt(checkpoint, checkpoint_sha256='a' * 64, metadata_sha256='b' * 64,
+                              self_moves=False)
+    retained = dict(receipt, path='/out/trained.pt.encoding.json')
+    proof = _fused_writer_proof(root, checkpoint, retained)
+    assert proof.checkpoint_sha256 == 'a' * 64
+    with pytest.raises(ValueError, match='writer receipt digest differs'):
+        _fused_writer_proof(root, checkpoint, dict(retained, sha256='c' * 64))
 
 
 def synthetic(root, n, key, *, mount_alias=False, second_key=None):

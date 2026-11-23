@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -6,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+from tempfile import TemporaryDirectory
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +36,33 @@ class PoolTests(unittest.TestCase):
 
     def run_fixture(self, records):
         return self.pack(io.StringIO("".join(json.dumps(r)+"\n" for r in records)), count=2, seed_start=100)
+
+    def test_campaign_adoption_checks_physical_roster_prefix(self):
+        import numpy as np
+        from gpu_engine.source_provenance import verify_constructor_pool_prefix
+
+        with TemporaryDirectory() as directory:
+            def write(name, stats):
+                path = Path(directory) / (name + '.npz')
+                metadata = dict(seed_start=100, team_count=len(stats), completed_teams=len(stats),
+                                vocabulary={'species': ['_none', 'snorlax']})
+                np.savez_compressed(path, stats=stats, seeds=np.arange(100, 100 + len(stats), dtype=np.uint32),
+                                    metadata_utf8=np.frombuffer(json.dumps(metadata).encode(), dtype=np.uint8))
+                return dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+
+            stats = np.arange(3 * 6 * 6, dtype=np.int32).reshape(3, 6, 6)
+            parent = write('parent', stats[:2])
+            successor = write('successor', stats)
+            verify_constructor_pool_prefix(parent, successor, 2, successor_teams=3)
+            with self.assertRaisesRegex(ValueError, 'does not cover the declared successor roster'):
+                verify_constructor_pool_prefix(parent, successor, 2, successor_teams=4)
+            with self.assertRaisesRegex(ValueError, 'does not cover the committed roster'):
+                verify_constructor_pool_prefix(parent, successor, 3)
+            stats[1, 0, 0] = -1
+            with self.assertRaisesRegex(ValueError, 'committed constructor bytes differ'):
+                verify_constructor_pool_prefix(parent, write('changed', stats), 2)
+            with self.assertRaisesRegex(ValueError, 'digest differs'):
+                verify_constructor_pool_prefix(parent, dict(successor, sha256='0' * 64), 2)
 
     def test_shapes_numeric_metadata_and_measured_move_frequencies(self):
         arrays, header = self.run_fixture(fixture())

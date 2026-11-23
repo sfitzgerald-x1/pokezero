@@ -615,7 +615,8 @@ def _check_request_binding(request, model_sha256, protocol_sha256, expected_run_
             or request.declaration_sha256!=expected_run_sha256 or request.snapshot.model_sha256!=model_sha256):
         raise ValueError('original frozen milestone snapshot/protocol/run binding required')
     if declaration is None:
-        declaration=json.loads((request.run_directory/'declaration.json').read_bytes())
+        from .v5_deferred_evaluation import read_evaluation_declaration
+        declaration=read_evaluation_declaration(request.run_directory, expected_run_sha256)
     if (run._sha(declaration)!=expected_run_sha256 or declaration['evaluation']['protocol_sha256']!=protocol_sha256
             or run._sha(declaration['model'])!=request.snapshot.model_sha256):
         raise ValueError('original accepted run declaration differs')
@@ -639,8 +640,9 @@ class EvaluationHook:
 
     def __call__(self,request):
         from . import v5_foulplay as fp
+        from .v5_deferred_evaluation import read_evaluation_declaration
         protocol,panels=_protocol(self.protocol,parse_configs=True,checkpoint=request.checkpoint_path);_check_request(request,protocol,self.protocol,self.expected_run_declaration_sha256)
-        declaration = json.loads((request.run_directory / 'declaration.json').read_bytes())
+        declaration = read_evaluation_declaration(request.run_directory, request.declaration_sha256)
         if protocol.get('interval_games', run.LEGACY_EVALUATION_INTERVAL_GAMES) != declaration['evaluation']['interval_games']:
             raise ValueError('panel cadence differs from the immutable training declaration')
         _capture_resolver(protocol).require_original_capture(protocol)

@@ -18,6 +18,7 @@ import re
 import os
 from types import MappingProxyType
 from typing import NamedTuple
+from zipfile import ZipFile
 
 from . import future_state as mapping
 
@@ -72,6 +73,72 @@ def load_constructor_pool(path):
     receipt=dict(schema="pokezero.constructor-pool.v1",pool_sha256=hashlib.sha256(payload).hexdigest(),
         metadata_sha256=mapping._metadata_sha(metadata),arrays=descriptions)
     return ConstructorPool(MappingProxyType(arrays),_json(metadata),_json(receipt),_sha(receipt))
+
+
+def verify_constructor_pool_prefix(original, successor, teams, *, successor_teams=None):
+    """Verify committed rows and successor capacity without loading either pool."""
+    import numpy as np
+
+    successor_teams = teams if successor_teams is None else successor_teams
+    if type(teams) is not int or teams <= 0 or type(successor_teams) is not int or successor_teams < teams:
+        raise ValueError('valid committed and successor roster sizes required')
+
+    def check_digest(stream, ref):
+        if hashlib.file_digest(stream, 'sha256').hexdigest() != ref['sha256']:
+            raise ValueError('constructor pool digest differs from its runtime binding')
+        stream.seek(0)
+
+    def file_identity(stream):
+        stat = os.fstat(stream.fileno())
+        return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+    def header(stream):
+        version = np.lib.format.read_magic(stream)
+        if version == (1, 0):
+            return np.lib.format.read_array_header_1_0(stream)
+        if version == (2, 0):
+            return np.lib.format.read_array_header_2_0(stream)
+        raise ValueError('unsupported constructor array format')
+
+    population_fields = {'team_count', 'completed_teams', 'move_slots', 'move_frequency',
+                         'target85_move_count', 'tensor_move_slots'}
+    with Path(original['path']).open('rb') as before, Path(successor['path']).open('rb') as after:
+        files = (before, after)
+        identities = tuple(file_identity(stream) for stream in files)
+        check_digest(before, original)
+        check_digest(after, successor)
+        with np.load(before, allow_pickle=False) as old, np.load(after, allow_pickle=False) as new:
+            metadata = [json.loads(pool['metadata_utf8'].tobytes()) for pool in (old, new)]
+            if any(doc['completed_teams'] < teams for doc in metadata):
+                raise ValueError('constructor pool does not cover the committed roster')
+            if metadata[1]['completed_teams'] < successor_teams:
+                raise ValueError('constructor pool does not cover the declared successor roster')
+            fixed = [{k: v for k, v in doc.items() if k not in population_fields} for doc in metadata]
+            if fixed[0] != fixed[1]:
+                raise ValueError('constructor pool static metadata differs across campaign adoption')
+        with ZipFile(before) as old, ZipFile(after) as new:
+            fields = set(old.namelist()) - {'metadata_utf8.npy'}
+            if set(old.namelist()) != set(new.namelist()) or not fields:
+                raise ValueError('constructor pool array inventory differs across campaign adoption')
+            for name in sorted(fields):
+                with old.open(name) as a, new.open(name) as b:
+                    old_shape, old_fortran, old_dtype = header(a)
+                    new_shape, new_fortran, new_dtype = header(b)
+                    if (not old_shape or not new_shape or old_shape[1:] != new_shape[1:]
+                            or min(old_shape[0], new_shape[0]) < teams or old_dtype != new_dtype
+                            or old_dtype.kind not in 'iu' or old_fortran or new_fortran):
+                        raise ValueError(f'constructor array layout differs for {name}')
+                    if new_shape[0] < successor_teams:
+                        raise ValueError(f'constructor array does not cover the declared successor roster: {name}')
+                    remaining = teams * math.prod(old_shape[1:]) * old_dtype.itemsize
+                    while remaining:
+                        size = min(remaining, 1 << 20)
+                        left, right = a.read(size), b.read(size)
+                        if len(left) != size or left != right:
+                            raise ValueError(f'committed constructor bytes differ for {name}')
+                        remaining -= size
+        if tuple(file_identity(stream) for stream in files) != identities:
+            raise ValueError('constructor pool changed while checking the committed roster')
 
 
 def _pool(pool,*,rehash=False):

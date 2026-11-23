@@ -131,11 +131,16 @@ class MilestoneDispatch:
     """The training-side interface. Call only after the round commits."""
 
     def __init__(self, root, policy, milestones, declaration_sha256, *, stop_key=None,
-                 report_observer_error=None):
+                 report_observer_error=None, prior_declarations=None):
         self.root = Path(root).resolve()
         self.policy = policy
         self.milestones = milestones
         self.declaration_sha256 = declaration_sha256
+        self.prior_declarations = dict(prior_declarations or {})
+        if self.prior_declarations.keys() - milestones.keys():
+            raise ValueError('historical declaration requires a registered milestone')
+        for digest in self.prior_declarations.values():
+            run.c._binding(digest)
         self.stop_key = None
         self.report_observer_error = report_observer_error
         self.last_error = None
@@ -155,7 +160,8 @@ class MilestoneDispatch:
         return _milestone_path(self.root, games)
 
     def _request(self, games, snapshot):
-        return run.EvaluationRequest(games, self.declaration_sha256, self.policy.protocol_sha256,
+        digest = self.prior_declarations.get(snapshot.iteration, self.declaration_sha256)
+        return run.EvaluationRequest(games, digest, self.policy.protocol_sha256,
             snapshot, self.root, self.root / snapshot.checkpoint, self.root / snapshot.archive)
 
     def request_missing(self, snapshot, *, full_checkpoint=None):
@@ -194,7 +200,7 @@ class MilestoneDispatch:
         try:
             # Only serialize committed artifact references. The evaluator checks
             # their bytes and the actual scientific protocol in its own process.
-            return publish_dispatch(request, None, self.declaration_sha256,
+            return publish_dispatch(request, None, request.declaration_sha256,
                                     route_declaration_sha256=self.policy.route_declaration_sha256,
                                     full_checkpoint=full_checkpoint)
         except (ValueError, OSError) as error:
@@ -203,7 +209,7 @@ class MilestoneDispatch:
                 # Reject stale stop signals even if the durable VOID write fails.
                 self._mismatched_games.add(games)
                 row = dict(schema=VOID, status='VOID', declared_games=games, iteration=snapshot.iteration,
-                    declaration_sha256=self.declaration_sha256, protocol_sha256=self.policy.protocol_sha256,
+                    declaration_sha256=request.declaration_sha256, protocol_sha256=self.policy.protocol_sha256,
                     existing_request_sha256=error.existing_sha256, proposed_request_sha256=error.proposed_sha256,
                     published_dispatch_sha256=error.published_sha256, diff=error.diff)
                 try:
@@ -229,13 +235,15 @@ class MilestoneDispatch:
             if (payload['schema'] != STOP or payload['verdict'] != 'FAIL'
                     or payload['route_schema'] != 's0.transfer.r2'
                     or payload['route_declaration_sha256'] != self.policy.route_declaration_sha256
-                    or payload['declaration_sha256'] != self.declaration_sha256
                     or payload['protocol_sha256'] != self.policy.protocol_sha256):
                 raise ValueError('stop scope or verdict differs')
             iteration = payload['iteration']
             games = self.milestones.get(iteration)
             if type(iteration) is not int or games is None or payload['declared_games'] != games:
                 raise ValueError('stop is not for a declared milestone')
+            accepted_declaration = self.prior_declarations.get(iteration, self.declaration_sha256)
+            if payload['declaration_sha256'] != accepted_declaration:
+                raise ValueError('stop declaration differs for this milestone')
             if iteration >= next_iteration:
                 return None
             path = self.path(games)
@@ -244,6 +252,7 @@ class MilestoneDispatch:
             request, digest = _small_document(path)
             if (digest != payload['dispatch_sha256'] or request['schema'] != MILESTONE
                     or request['request']['declared_games'] != games
+                    or request['request']['declaration_sha256'] != accepted_declaration
                     or request['request']['snapshot']['iteration'] != iteration):
                 raise ValueError('stop does not match the committed evaluation request')
             run.c._binding(payload['independent_verdict_sha256'])
@@ -464,6 +473,30 @@ def _restore(value):
     return request
 
 
+def evaluation_declaration_path(root, digest):
+    run.c._binding(digest)
+    return Path(root) / 'artifacts' / 'declarations' / f'{digest}.json'
+
+
+def read_evaluation_declaration(root, digest, *, fallback=None):
+    """Resolve an immutable declaration for this milestone, including pre-adoption looks."""
+    bound = evaluation_declaration_path(root, digest)
+    try:
+        blob = bound.read_bytes()
+    except FileNotFoundError:
+        path = Path(root) / 'declaration.json'
+        try:
+            blob = path.read_bytes()
+        except FileNotFoundError:
+            if fallback is None:
+                raise
+            blob = Path(fallback).read_bytes()
+    declaration = json.loads(blob)
+    if run._sha(declaration) != digest:
+        raise ValueError('original accepted run declaration differs')
+    return declaration
+
+
 def _restore_milestone(value, *, staged_run_root=None, original_root_visible=True):
     keys = ('schema', 'request', 'route_declaration_sha256', 'full_checkpoint')
     if 'published_unix' in value:
@@ -483,7 +516,7 @@ def _restore_milestone(value, *, staged_run_root=None, original_root_visible=Tru
         request = replace(request, run_directory=root, archive_path=root / request.snapshot.archive,
                           checkpoint_path=root / request.snapshot.checkpoint)
     require_live_milestone(request, published_root=original if original_root_visible else None)
-    declaration = json.loads((request.run_directory / 'declaration.json').read_bytes())
+    declaration = read_evaluation_declaration(request.run_directory, request.declaration_sha256)
     policy = declaration['evaluation']
     if (run._sha(declaration) != request.declaration_sha256
             or policy['protocol_sha256'] != request.protocol_sha256

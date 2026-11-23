@@ -130,21 +130,25 @@ def fused_snapshots(entry, cycles, route_sha):
     """Bind the published milestone to the committed fused state and original B."""
     from itertools import islice
     from . import v2_fused_state, v5_run
-    from .v5_deferred_evaluation import read_owned_milestone
+    from .v5_deferred_evaluation import read_evaluation_declaration, read_owned_milestone
     from .v5_evaluation import Artifact
 
     ref = Artifact(**entry["dispatch"])
     request = read_owned_milestone(ref)
     base = request.run_directory
     state = v2_fused_state.read_state(base, include_full_reports=False)
-    declaration = json.loads((base / "declaration.json").read_bytes())
+    declaration = read_evaluation_declaration(base, request.declaration_sha256)
+    prefix = state.get("adopted_prefix")
+    digest_for_iteration = state["declaration_sha256"]
+    if prefix is not None and request.snapshot.iteration < prefix["rounds"]:
+        digest_for_iteration = prefix["previous_declaration_sha256"]
     snapshots = state["snapshots"]
     reports = state["reports"][:cycles]
     if (base != Path(entry["run"]).resolve() or request.declared_games != cycles * 20_000
             or request.snapshot.iteration != cycles - 1
             or declaration["evaluation"]["route_declaration_sha256"] != route_sha or not route_sha
             or digest(declaration) != request.declaration_sha256
-            or state["declaration_sha256"] != request.declaration_sha256
+            or digest_for_iteration != request.declaration_sha256
             or [s["iteration"] for s in snapshots[:cycles + 1]] != list(range(-1, cycles))
             or [r["iteration"] for r in reports] != list(range(cycles))
             or any(r["games"] != 20_000 for r in reports)
@@ -153,6 +157,15 @@ def fused_snapshots(entry, cycles, route_sha):
         raise ValueError("dispatch does not match committed fused milestone")
     return (base, declaration, v5_run.Snapshot(**snapshots[0]), request.snapshot,
             state["checkpoint_encoding_receipts"])
+
+
+def _fused_writer_proof(owner, checkpoint, reference):
+    from .checkpoint_self_moves import off_from_receipt
+
+    receipt = Path(str(checkpoint) + '.encoding.json').resolve()
+    if not receipt.is_relative_to(owner):
+        raise ValueError("actor writer receipt must belong to the training run")
+    return off_from_receipt(dict(reference, path=str(receipt)))
 
 
 def production_actors(root, spec):
@@ -185,23 +198,23 @@ def production_actors(root, spec):
             raise ValueError("fused encoder configuration differs")
         actors = {}
         for role, snap, owner in (("B", first, reference), ("T", trained, base)):
+            checkpoint = (owner / snap.checkpoint).resolve()
+            archive = (owner / snap.archive).resolve()
+            if not checkpoint.is_relative_to(owner) or not archive.is_relative_to(owner):
+                raise ValueError("actor artifacts must belong to the training run")
             if role == "B":
                 checked, self_moves, _ = checkpoint_self_moves.run_checkpoint(
                     owner, snap.checkpoint, snap.checkpoint_sha256, iteration=-1,
                     expected_snapshot=snap, require_snapshot=True)
             else:
                 checked = checkpoint_self_moves.checked_checkpoint(
-                    owner / snap.checkpoint, expected_checkpoint_sha256=snap.checkpoint_sha256)
-                proof = None if spec["self_moves"] else checkpoint_self_moves.off_from_receipt(
-                    receipts[snap.checkpoint_sha256])
+                    checkpoint, expected_checkpoint_sha256=snap.checkpoint_sha256)
+                proof = None if spec["self_moves"] else _fused_writer_proof(
+                    owner, checkpoint, receipts[snap.checkpoint_sha256])
                 self_moves = checkpoint_self_moves.resolve_self_moves(
                     checked, expected_self_moves=spec["self_moves"], off_provenance=proof)
             if self_moves != spec["self_moves"]:
                 raise ValueError("baseline/target input convention differs")
-            checkpoint = (owner / snap.checkpoint).resolve()
-            archive = (owner / snap.archive).resolve()
-            if not archive.is_relative_to(owner):
-                raise ValueError("actor archive must belong to the training run")
             model = checked.metadata["model"]
             if digest(model) != snap.model_sha256:
                 raise ValueError("checkpoint model differs from its published snapshot")
