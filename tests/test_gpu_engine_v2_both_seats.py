@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import timedelta
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -13,7 +14,7 @@ from unittest.mock import patch
 import jax.numpy as jnp
 import numpy as np
 
-from gpu_engine import v2_collector as collector, v2_fused as fused, v5_device_rollout as rollout
+from gpu_engine import transition, v2_collector as collector, v2_fused as fused, v5_device_rollout as rollout, v5_model
 from pokezero import v2_distributed as distributed, v2_trainer as trainer, v5_run as runs
 from pokezero.v5_loss import V5LossConfig
 from tests import test_gpu_engine_v2_collector as fixture
@@ -56,7 +57,17 @@ def collect(*, both=False, flip=False):
     with patch.object(runs, 'assignment', assign), patch.object(rollout, 'actor_bank_from_assignments', bind):
         roster, kinds, _ = fused.construct(context, backend, 0, current, (old,), ordinal)
     loss = V5LossConfig()
-    with fixture.seams():
+
+    def seat_values(params, inputs, config, *, compute_dtype):
+        output = fixture.forward(params, inputs, config, compute_dtype=compute_dtype)
+        side = inputs['numeric_features'][:, 0, 0, 3]
+        return output._replace(value=jnp.clip(output.value + .125 * side, -.99, .99))
+
+    def seat_masks(state, tables):
+        return fixture.action_mask(state, tables).at[:, 0, 8].set(False).at[:, 1, 7].set(False)
+
+    with (fixture.seams(), patch.object(v5_model, 'forward', seat_values),
+          patch.object(transition, 'action_mask', seat_masks)):
         refill = collector.RefillCollector(SimpleNamespace(struggle=jnp.int32(2)), SimpleNamespace(belief=None),
             model, labels, roster, lanes=6, min_lanes=2, max_requests=fixture.MAX_REQUESTS,
             chunk_steps=fixture.CHUNK, rows_per_game=16 if both else 8)
@@ -129,6 +140,13 @@ class BothSeatsTests(unittest.TestCase):
         self.assertEqual(set(map(tuple, both.keys)), set(expected))
         projections = {id(round_): round_.store.to_numpy() for round_ in (original, flipped)}
         columns = both.store.to_numpy()
+        indices = {tuple(key): i for i, key in enumerate(both.keys)}
+        paired = [(i, indices[(stream, frame, 1)]) for (stream, frame, owner), i in indices.items()
+                  if owner == 0 and (stream, frame, 1) in indices]
+        self.assertTrue(paired)
+        for i, j in paired:
+            self.assertNotEqual(columns['value_estimates'][i], columns['value_estimates'][j])
+            self.assertFalse(np.array_equal(columns['legal_action_mask'][i], columns['legal_action_mask'][j]))
         for i, key in enumerate(both.keys):
             match, idx = expected[tuple(key)]
             for name, value in columns.items():
@@ -153,7 +171,10 @@ class BothSeatsTests(unittest.TestCase):
             mp.spawn(exchange_rank, args=(directory,), nprocs=2)
             seen = [index for rank in range(2) for index in json.loads((path / f'{rank}.json').read_text())]
         self.assertEqual(sorted(seen), list(range(len(both.keys))))
-        print(json.dumps(dict(off=row_digest(original), on=row_digest(both),
+        off = row_digest(original)
+        if bound := os.environ.get('V2_BOUND_FIXTURE'):
+            self.assertEqual(off, json.loads(bound))
+        print(json.dumps(dict(off=off, on=row_digest(both),
             completed_selfplay=complete, kinds=both.kinds, exchanged=len(seen)), sort_keys=True))
 
     def test_cgroup_only_memory_budget(self):
