@@ -75,7 +75,7 @@ class ActorBank:
             raise ValueError('explicit per-game/per-seat learner mask required')
 
 
-def actor_bank_from_assignments(bindings,actor_archives,*,current_archive,assignments):
+def actor_bank_from_assignments(bindings,actor_archives,*,current_archive,assignments,train_both_seats=False):
     """Consume the ORIGINAL planner output without sampling/reordering it.
 
     The historical probability and 32-snapshot retention remain decisions of
@@ -90,8 +90,12 @@ def actor_bank_from_assignments(bindings,actor_archives,*,current_archive,assign
         if type(side)is not int or side not in (0,1) or opponent not in lookup:
             raise ValueError('original learner seat/opponent archive missing from bank')
         pair=[lookup[opponent],lookup[opponent]];pair[side]=lookup[current_archive]
-        indices.append(tuple(pair));learners.append((side==0,side==1));streams.append(row['stream_id'])
-    return ActorBank(bindings,archives,tuple(streams),tuple(indices),tuple(learners),_sha(rows))
+        both=train_both_seats and row['opponent_kind']=='SELFPLAY'
+        if both and opponent != current_archive:
+            raise ValueError('SELFPLAY must use the current actor for both seats')
+        indices.append(tuple(pair));learners.append((both or side==0,both or side==1));streams.append(row['stream_id'])
+    digest = _sha(dict(assignments=rows, learner_mask=learners)) if train_both_seats else _sha(rows)
+    return ActorBank(bindings,archives,tuple(streams),tuple(indices),tuple(learners),digest)
 
 class Labels(NamedTuple):
     move:object # engine move ID -> full original semantic class, -1 unknown

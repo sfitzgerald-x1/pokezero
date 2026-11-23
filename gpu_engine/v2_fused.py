@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import resource
 import time
 import uuid
 
@@ -135,7 +136,8 @@ def construct(context, backend, iteration, current, past, ordinal, *, shard=None
         required = tuple(dict.fromkeys([current.archive_sha256, *(a['opponent']['archive_sha256'] for a in recorded)]))
         bindings = rollout.Bindings(plan.model.category_vocabulary_sha256, plan.model.label_vocabulary, prepared.source_sha256,
             (current.archive_sha256,) * 2, (True, True), backend.declaration_sha256)
-        bank = rollout.actor_bank_from_assignments(bindings, required, current_archive=current.archive_sha256, assignments=recorded)
+        bank = rollout.actor_bank_from_assignments(bindings, required, current_archive=current.archive_sha256,
+            assignments=recorded, train_both_seats=getattr(plan, 'train_both_seats', False))
         # Construct the original full block BEFORE slicing. Reconstructing a
         # smaller batch would change shape/index-dependent constructor RNG.
         carry = jax.block_until_ready(backend._construct(batch))
@@ -151,7 +153,32 @@ def construct(context, backend, iteration, current, past, ordinal, *, shard=None
 _AUDIT_GATHER_ROWS = 4096
 
 
-def audit(store, blocks, out):
+def host_memory(cgroup=Path('/sys/fs/cgroup'), proc=Path('/proc/self/cgroup')):
+    """Read the worker's cgroup v2 budget, including any finite ancestor limit."""
+    if not proc.is_file() or not cgroup.is_dir():
+        return {}
+    relative = next((line[3:] for line in proc.read_text().splitlines() if line.startswith('0::')), '')
+    group = cgroup / relative.lstrip('/')
+    candidates = (group, *group.parents) if group.is_dir() else (cgroup,)
+    groups = [path for path in candidates if path.is_relative_to(cgroup)]
+
+    def counter(path, name):
+        file = path / name
+        value = file.read_text().strip() if file.is_file() else ''
+        return int(value) if value.isdecimal() else None
+
+    bounded = [(limit, counter(path, 'memory.current')) for path in groups
+               if (limit := counter(path, 'memory.max')) is not None]
+    result = dict(cgroup_peak_bytes=counter(groups[0], 'memory.peak'))
+    if bounded:
+        result['cgroup_limit_bytes'] = min(limit for limit, _ in bounded)
+        available = [limit - current for limit, current in bounded if current is not None]
+        if available:
+            result['cgroup_available_bytes'] = min(available)
+    return result
+
+
+def audit(store, blocks, out, *, host_workers=None):
     """Compressed host copy of the audited blocks' rows (keys, targets and inputs)."""
     if not blocks:
         return []
@@ -164,6 +191,13 @@ def audit(store, blocks, out):
     written = []
     for index, lo, hi in blocks:
         rows = np.flatnonzero((streams >= lo) & (streams <= hi))
+        if host_workers is not None:
+            row_bytes = sum(value.dtype.itemsize * np.prod(value.shape[1:], dtype=np.int64)
+                            for value in store.arrays.values())
+            available = host_memory().get('cgroup_available_bytes')
+            # Keep room for concurrent rank copies and the compression workspace.
+            if available is not None and host_workers * 2 * len(rows) * row_bytes > available:
+                raise MemoryError('audited replay rows exceed available worker cgroup memory')
         arrays = {name: np.empty((len(rows), *value.shape[1:]), dtype=value.dtype)
                   for name, value in store.arrays.items()}
         for begin in range(0, len(rows), _AUDIT_GATHER_ROWS):
@@ -338,7 +372,7 @@ def argument_parser():
         help='tick: collection order; file (default for new runs): the file pipeline cache order (block, frame, row, owner). '
              'A resumed run keeps the order recorded in its state.json')
     parser.add_argument('--check-interval', type=int, default=64)
-    parser.add_argument('--recipe', choices=('R5', 'R2', 'R1'), default=None,
+    parser.add_argument('--recipe', choices=('R5', 'R2', 'R2x1', 'R1'), default=None,
         help='explicit batch/epochs/LR package from the validated R5 reference; records the effective plan hash')
     parser.add_argument('--profile', choices=('v2-production',),
         help='select the V2 production defaults (freeze the Python heap after warmup)')
@@ -541,6 +575,7 @@ def main(argv=None, *, distribution=None):
     from pokezero import checkpoint_self_moves as encoding
     from gpu_engine.v5_device_backend import RuntimeBackend
     context = prepare(args);plan = context['plan']
+    both_seats = getattr(plan, 'train_both_seats', False)
     initial_train = plan.train
     if args.recipe is not None:
         from pokezero.v2_distributed import recipe_train
@@ -823,6 +858,7 @@ def main(argv=None, *, distribution=None):
         else:
             collector = v2c.RefillCollector(context['prepared'].engine_tables, context['prepared'].observation_tables, plan.model,
                 backend.labels, roster, lanes=args.lanes, max_requests=plan.max_requests,
+                rows_per_game=v2c.DEFAULT_ROWS_PER_GAME * (2 if both_seats else 1),
                 layout_counts=v2c.expected_counts(roster.groups, roster.games, plan.historical_fraction))
             compile_timings = collector.compile(tree, threads=args.compile_threads);reused = False
             collectors.clear();collectors[key] = collector
@@ -835,7 +871,8 @@ def main(argv=None, *, distribution=None):
                 ids = [g.stream_id for g in batch.games];audited.append((base + k, min(ids), max(ids)))
         audit_out = out / 'audit' if distribution is None else out / 'audit' / f'rank-{distribution.rank}'
         audit_out.mkdir(parents=True, exist_ok=True)
-        audit_records = audit(rows, audited, audit_out);mark('audit')
+        audit_options = dict(host_workers=1 if distribution is None else distribution.world_size) if both_seats else {}
+        audit_records = audit(rows, audited, audit_out, **audit_options);mark('audit')
         records = v2c.game_records(result);same = None
         if reference_ends:
             from gpu_engine.v5_device_rollout import STATUS
@@ -868,6 +905,12 @@ def main(argv=None, *, distribution=None):
             rows.arrays.clear()  # DLPack tensors own the buffers through exchange.
             batches = [tuple(g.stream_id for g in b.games) for b in plan.iterations[iteration]]
             store = distribute_store(store, row_keys, batches, runtime)
+        collection = None
+        if both_seats:
+            collection = dict(capacity_per_rank=collector.row_capacity())
+            if distribution is not None:
+                layout = store.distributed_layout
+                collection.update(exchange_rows=sum(layout.counts), exchange_digest=layout.digest)
         mark('handoff_validate')
         window = runs.learning_rate_window(plan, iteration)
         if parent is not None:
@@ -908,6 +951,9 @@ def main(argv=None, *, distribution=None):
                 **training_summary(updates)),
             collector={k: v for k, v in stats.items() if isinstance(v, (int, float, str))},
             audit=audit_records, games_matching_reference=same, snapshot=asdict(snapshot))
+        if collection is not None:
+            collection.update(host_memory(), peak_rank_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
+            report['both_seat_collection'] = collection
         if lr_start is not None:
             report['training']['lr_start'] = train_report['lr_start']
         if runtime.v2_config.campaign is not None:
