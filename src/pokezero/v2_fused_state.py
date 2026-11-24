@@ -218,3 +218,12 @@ def read_state(out, *, include_full_reports=True, pointer_data=None):
         if stream.tell() != end or snapshots[-1] != ledger['latest_snapshot']:
             raise ValueError('fused state pointer differs from the report prefix')
     return dict(state, snapshots=snapshots, reports=reports, checkpoint_encoding_receipts=receipts)
+
+
+def verify_material_resume(state, bounds, manifest_sha):
+    completed = state['round_ledger']['completed_rounds']
+    start, stop = bounds
+    if not start <= completed <= stop:
+        raise ValueError('committed pointer is outside the bound segment')
+    if completed > start and state.get('material_sha256') != manifest_sha:
+        raise ValueError('a segment restart requires its original material manifest')

@@ -5,7 +5,12 @@ from dataclasses import asdict, replace
 import hashlib
 import json
 from pathlib import Path
+import sys
 
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from gpu_engine import v2_material_contract as material
 from pokezero.v2_fused_state import campaign_batch_addresses
 from pokezero.v5_phasec import (
     CAMPAIGN_COOLDOWN_GAMES_BY_PARENT,
@@ -85,13 +90,35 @@ def build_declarations(parent, raw_parent, pool_sha256):
     return main, children, frontiers['team_start']
 
 
+def material_windows(main, children, stops):
+    windows = []
+
+    def add(document, start, stop):
+        windows.append(dict(rounds=[start, stop], rows=material.round_rows(document['iterations'], start, stop)))
+
+    remaining = sorted(children)
+    start = COMMITTED_ROUNDS
+    for stop in stops:
+        add(main, start, stop)
+        start = stop
+        while remaining and remaining[0] <= stop * CAMPAIGN_GAMES_PER_ROUND:
+            child = children[remaining.pop(0)]
+            add(child, 0, len(child['iterations']))
+    if remaining:
+        raise ValueError('a cooldown parent is beyond the main-line horizon')
+    return windows
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--parent', type=Path, required=True, help='original effective declaration')
     parser.add_argument('--parent-sha256', required=True)
     parser.add_argument('--raw-parent', type=Path, required=True, help='original Phase C launch declaration')
     parser.add_argument('--raw-parent-sha256', required=True)
-    parser.add_argument('--pool-sha256', required=True, help='physical combined constructor pool digest')
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--pool-sha256', help='physical combined constructor pool digest')
+    mode.add_argument('--material-template', type=Path, help='physical shard plan without the round windows')
+    parser.add_argument('--protected-inventories', type=Path, help='release-approved protected inventory references')
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
     parent = json.loads(args.parent.read_bytes())
@@ -101,14 +128,36 @@ def main():
     if hashlib.sha256(raw).hexdigest() != args.raw_parent_sha256:
         parser.error('original Phase C declaration digest differs')
     raw_parent = json.loads(raw)
-    if len(args.pool_sha256) != 64 or any(c not in '0123456789abcdef' for c in args.pool_sha256):
+    pool_sha = args.pool_sha256 or '0' * 64
+    if len(pool_sha) != 64 or any(c not in '0123456789abcdef' for c in pool_sha):
         parser.error('pool digest must be a lowercase SHA-256')
 
-    successor, children, rows = build_declarations(parent, raw_parent, args.pool_sha256)
+    successor, children, rows = build_declarations(parent, raw_parent, pool_sha)
+    if args.material_template:
+        from scripts.supervise_v2_campaign import material_bytes
+
+        if args.protected_inventories is None:
+            parser.error('--material-template requires --protected-inventories')
+        plan = json.loads(args.material_template.read_bytes())
+        if {'windows', 'preserved_team_rows', 'protected_seeds', 'protected_seed_inventories'} & plan.keys():
+            parser.error('reserved rows, round windows and protected seeds are derived from bound inputs')
+        plan['preserved_team_rows'] = address_frontiers(parent['iterations'][:RESERVED_ROUNDS])['team_start']
+        plan['windows'] = material_windows(successor, children, MAIN_STOPS)
+        plan['protected_seed_inventories'] = json.loads(args.protected_inventories.read_bytes())
+        plan['protected_seeds'] = material.protected_ranges(plan['protected_seed_inventories'], material_bytes)
+        material.validate_plan(plan)
+        if material.shard_end(plan['shards'][-1]) != rows:
+            parser.error('the material plan must cover the full declared pool')
+        plan_data = material.encode(plan)
+        pool_sha = material.digest(plan_data)
+        for document in (successor, *children.values()):
+            document['pool_sha256'] = pool_sha
     args.out.mkdir()
+    if args.material_template:
+        (args.out / 'material.json').write_bytes(plan_data)
     manifest = {
         'parent_declaration_sha256': args.parent_sha256,
-        'pool_sha256': args.pool_sha256,
+        'pool_sha256': pool_sha,
         'required_team_rows': rows,
         'main': {'path': 'main.json', 'sha256': _sha(successor),
                  'effective_sha256': _sha(dict(successor, train=parent['train'])), 'stops': MAIN_STOPS},

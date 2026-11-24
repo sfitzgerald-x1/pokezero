@@ -53,6 +53,7 @@ def journal(run):
 
 def prepare(args):
     from pokezero import v5_worker as worker, v5_run as runs, v5_contract as contract, v5_device_smoke as smoke
+    material = None
     if args.config:
         blob = Path(args.config).read_bytes();config = json.loads(blob)
         runtime = worker._record(config['runtime']);labels = contract.LabelVocabulary(**worker._record(config['labels']))
@@ -64,8 +65,12 @@ def prepare(args):
         inputs = worker.Inputs(plan, profile, json.dumps(runtime), json.dumps(vocabulary), json.dumps(gender), runs._sha(plan.manifest()))
         declared = dict(config_sha256=hashlib.sha256(blob).hexdigest())
     else:
+        if args.material is not None:
+            from gpu_engine.v2_material_contract import load_segment
+            material = load_segment(args.material, args.max_iterations, args.segment_start[0])
+        options = {} if material is None else {'material': material}
         inputs = worker.load_inputs(declaration=args.declaration, expected_declaration_sha256=args.declaration_sha256,
-            runtime=args.runtime, expected_runtime_sha256=args.runtime_sha256, arm=args.plan_arm, enable_v5=True)
+            runtime=args.runtime, expected_runtime_sha256=args.runtime_sha256, arm=args.plan_arm, enable_v5=True, **options)
         plan = inputs.plan;runtime = inputs.runtime;gender = inputs.gender_policy
         declared = dict(declaration_sha256=args.declaration_sha256, runtime_sha256=args.runtime_sha256, plan_arm=args.plan_arm)
     try:worker._probe(runtime)
@@ -73,8 +78,19 @@ def prepare(args):
         import jax
         log('PROBE_DIFFERS', error=str(error))
         jax.config.update('jax_enable_x64', False);jax.config.update('jax_default_matmul_precision', 'highest')
-    begin = time.perf_counter();prepared, pool, _, _ = worker.prepare_device_runtime(inputs)
-    return dict(declared=declared, plan=plan, prepared=prepared, pool=pool, gender=gender,
+    options = {}
+    if material is not None:
+        from gpu_engine.v2_material_contract import round_rows
+        _, _, segment = material
+        window = segment['window']
+        document = plan.manifest()
+        if not plan.compact or round_rows(document['iterations'], *window['rounds']) != window['rows']:
+            raise ValueError('segment material does not cover the training declaration')
+        options['material_pool'] = segment['pool']
+    begin = time.perf_counter();prepared, pool, _, _ = worker.prepare_device_runtime(inputs, **options)
+    if material is not None and pool.metadata()['completed_teams'] != segment['team_rows']:
+        raise ValueError('segment material has an incorrect constructor row count')
+    return dict(declared=declared, plan=plan, prepared=prepared, pool=pool, gender=gender, material=material,
         preparation_seconds=time.perf_counter() - begin)
 
 
@@ -362,6 +378,8 @@ def argument_parser():
         help='bind a supervised Job to its admitted pointer (0 - for a fresh segment)')
     parser.add_argument('--adopted-milestone-sha256s', nargs=2, metavar=('SHA256_1M', 'SHA256_2M'),
         help='original dispatch digests required for supervised 2M adoption')
+    parser.add_argument('--material', nargs=5, metavar=('PLAN', 'PLAN_SHA', 'INDEX', 'MANIFEST', 'MANIFEST_SHA'),
+        help='bind the supervised segment to its immutable address plan and material manifest')
     parser.add_argument('--lanes', type=int, default=2048)
     parser.add_argument('--mode', default='cudagraphs')
     parser.add_argument('--native-embedding-backward', action='store_true',
@@ -436,6 +454,8 @@ def parse_args(argv=None):
     if args.adopted_milestone_sha256s and (not args.adopt_2m_prefix_runtime or not all(
             re.fullmatch(r'[a-f0-9]{64}', digest) for digest in args.adopted_milestone_sha256s)):
         parser.error('--adopted-milestone-sha256s requires 2M adoption and two original digests')
+    if args.material is not None and (args.config or args.segment_start is None or args.max_iterations is None):
+        parser.error('--material requires a supervised declaration and finite segment boundaries')
     return args
 
 
@@ -539,7 +559,7 @@ def cooldown_parent(root, checkpoint_sha256, model_sha256, lr_start_policy, cool
                 campaign=campaign, proof=proof, row_order=state['row_order'])
 
 
-def adopt_2m_prefix(out, args, saved, plan):
+def adopt_2m_prefix(out, args, saved, plan, material=None):
     """Authorize one in-place declaration transition while keeping the committed state intact."""
     from gpu_engine.source_provenance import verify_constructor_pool_prefix
     from pokezero import v5_worker as worker
@@ -554,6 +574,7 @@ def adopt_2m_prefix(out, args, saved, plan):
     # S0a cooled children already used rounds 101–120 of the original bank.
     reserved = [ranges(batch) for round_ in original['iterations'][:S0_RESERVED_ROUNDS] for batch in round_]
     frontier = [max(start + size for start, size in column) for column in zip(*reserved, strict=True)]
+    frontier_before_extension = frontier[2]
     for round_ in successor['iterations'][100:]:
         for batch in round_:
             for index, (start, size) in enumerate(ranges(batch)):
@@ -571,7 +592,8 @@ def adopt_2m_prefix(out, args, saved, plan):
     if fixed[0] != fixed[1]:
         raise ValueError('campaign adoption changes the original training runtime contract')
     pools = [item['constructor_pool'] for item in (previous_runtime, new_runtime)]
-    if [pool['sha256'] for pool in pools] != [original['pool_sha256'], successor['pool_sha256']]:
+    expected = successor['pool_sha256'] if material is None else original['pool_sha256']
+    if [pool['sha256'] for pool in pools] != [original['pool_sha256'], expected]:
         raise ValueError('campaign adoption constructor pool binding differs')
 
     gender_contracts = []
@@ -587,7 +609,13 @@ def adopt_2m_prefix(out, args, saved, plan):
     team_end = last_prefix['team_start'] + 2 * last_prefix['game_count']
     last_successor = successor['iterations'][-1][-1]['games']
     successor_end = last_successor['team_start'] + 2 * last_successor['game_count']
-    verify_constructor_pool_prefix(*pools, team_end, successor_teams=successor_end)
+    if material is None:
+        verify_constructor_pool_prefix(*pools, team_end, successor_teams=successor_end)
+    else:
+        _, address_plan, _ = material
+        if pools[0] != pools[1] or address_plan['preserved_team_rows'] != frontier_before_extension:
+            raise ValueError('stream adoption requires every reserved constructor row from the original pool')
+        worker._record(pools[0], json_value=False)
     return dict(rounds=100, previous_total_games=5_000_000, previous_declaration_sha256=previous_digest,
                 previous_runtime_sha256=previous_runtime_ref['sha256'])
 
@@ -624,6 +652,7 @@ def main(argv=None, *, distribution=None):
     from pokezero import checkpoint_self_moves as encoding
     from gpu_engine.v5_device_backend import RuntimeBackend
     context = prepare(args);plan = context['plan']
+    material = context.get('material')
     both_seats = getattr(plan, 'train_both_seats', False)
     initial_train = plan.train
     if args.recipe is not None:
@@ -760,12 +789,15 @@ def main(argv=None, *, distribution=None):
     if adopting:
         if not compact or not deferred or adopted_prefix is not None:
             raise ValueError('2M prefix adoption requires an original compact deferred campaign')
-        adopted_prefix = _rank_zero(distribution, 'verify committed 2M prefix', lambda: adopt_2m_prefix(out, args, saved, plan))
+        adopted_prefix = _rank_zero(distribution, 'verify committed 2M prefix', lambda: adopt_2m_prefix(out, args, saved, plan, material))
     elif args.adopt_2m_prefix_runtime and adopted_prefix is None:
         raise ValueError('2M prefix adoption needs a different successor declaration')
     committed_bytes = 0 if saved is None or not compact else saved['round_ledger']['committed_bytes']
     if saved is not None:
         def resume_inputs():
+            if material is not None:
+                bounds = material[2]['window']['rounds']
+                v2_fused_state.verify_material_resume(saved, bounds, args.material[-1])
             if not adopting and saved.get('declaration_sha256') != declaration_sha256:
                 raise ValueError('original fused run declaration binding required')
             if saved.get('lr_start') != lr_start_policy:
@@ -872,7 +904,10 @@ def main(argv=None, *, distribution=None):
             snapshot = next(s for s in (*inherited_history, *snapshots) if s.archive_sha256 == digest)
             params[digest] = load_actor(plan, snapshot, roots[digest])
         return params[digest]
-    backend = RuntimeBackend(context['prepared'], context['pool'], gender_policy=context['gender']);backend.check_plan(plan)
+    address = None if material is None else (material[0], material[2]['row_offset'])
+    backend = RuntimeBackend(context['prepared'], context['pool'], gender_policy=context['gender'],
+                             material_address=address)
+    backend.check_plan(plan)
     ordinal = None if compact else {g.stream_id: i for i, g in enumerate(plan.games)}
     collectors = {}
     reference_ends = {e['payload']['stream_id']: e['payload'] for e in events if e['kind'] == 'GAME_END'}
@@ -1055,6 +1090,8 @@ def main(argv=None, *, distribution=None):
                 state['distribution'] = distribution.contract
             if args.segment_start is not None:
                 state['segment_job'] = segment_owner
+            if material is not None:
+                state['material_sha256'] = args.material[-1]
             end = committed_bytes
             guard = v2_fused_state.commit_guard(out, committed_bytes, iteration) if compact else nullcontext()
             with guard:

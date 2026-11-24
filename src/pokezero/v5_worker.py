@@ -117,7 +117,7 @@ def _plan(document,profile,arm,category_vocabulary):
     return result
 
 
-def _runtime_metadata(runtime_document,*,expected_pool_sha256):
+def _runtime_metadata(runtime_document,*,expected_pool_sha256, verify_pool_file=True):
     """Shared original artifact validation, without a training Plan."""
     _keys(runtime_document,('schema','source_commit','control_inventory','category_vocabulary','constructor_pool',
         'gender_policy','showdown','versions','memory_policy','precision_policy'))
@@ -127,7 +127,8 @@ def _runtime_metadata(runtime_document,*,expected_pool_sha256):
     inventory=runtime_document['control_inventory'];_record(inventory)
     profile=phase.ChampionProfile.read(inventory['path'],expected_sha256=inventory['sha256'])
     vocabulary=_record(runtime_document['category_vocabulary'])
-    _record(runtime_document['constructor_pool'],json_value=False)
+    if verify_pool_file:
+        _record(runtime_document['constructor_pool'],json_value=False)
     if runtime_document['constructor_pool']['sha256']!=expected_pool_sha256:
         raise ValueError('original declared constructor pool differs')
     gender=None if runtime_document['gender_policy'] is None else _record(runtime_document['gender_policy'])
@@ -167,12 +168,27 @@ def _declared_plan(document,profile,arm,category_vocabulary):
     return plan
 
 
-def load_inputs(*,declaration,expected_declaration_sha256,runtime,expected_runtime_sha256,arm,enable_v5=False):
+def load_inputs(*,declaration,expected_declaration_sha256,runtime,expected_runtime_sha256,arm,enable_v5=False,material=None):
     """Hash/read only; no source compiler, engine constructor or model allocation."""
     if enable_v5 is not True:raise ValueError('explicit v5 worker enablement required before artifact access')
     declaration_document=_record(dict(path=str(declaration),sha256=expected_declaration_sha256))
     runtime_document=_record(dict(path=str(runtime),sha256=expected_runtime_sha256))
-    profile,vocabulary,gender,resolved=_runtime_metadata(runtime_document,expected_pool_sha256=declaration_document['pool_sha256'])
+    pool_sha = declaration_document['pool_sha256']
+    if material is not None:
+        plan_sha, base, segment = material
+        if (pool_sha != plan_sha or runtime_document['constructor_pool'] != base['parent_pool']
+                or runtime_document['gender_policy'] != base['gender_policy']
+                or runtime_document['showdown'] != base['showdown']):
+            raise ValueError('the declared runtime differs from the material plan')
+        pool_sha = base['parent_pool']['sha256']
+    profile,vocabulary,gender,resolved=_runtime_metadata(
+        runtime_document, expected_pool_sha256=pool_sha, verify_pool_file=material is None)
+    if material is not None:
+        segment_gender = _record(segment['gender_policy'])
+        from gpu_engine.v2_material_contract import gender_semantics
+        if gender_semantics(gender, pool_sha) != gender_semantics(segment_gender, segment['pool']['sha256']):
+            raise ValueError('segment changes the original gender assignment policy')
+        gender = segment_gender
     plan=_declared_plan(declaration_document,profile,arm,resolved)
     uses_gender=any(b.gender_seed is not None for iteration in plan.iterations for b in iteration)
     if uses_gender!=(gender is not None):raise ValueError('explicit gender policy must match declared gender recipe')
@@ -247,7 +263,7 @@ def prepare_runtime(inputs):
 SELF_MOVES_DEVICE_ONLY='a self_moves plan collects on the device route only (prepare_device_runtime); the Python routes are not threaded'
 
 
-def prepare_device_runtime(inputs):
+def prepare_device_runtime(inputs, *, material_pool=None):
     """Static device preparation only; no retained-FULL driver or actor load."""
     from .category_vocab import CategoryVocabulary
     from .dex import load_showdown_dex_cached
@@ -263,8 +279,10 @@ def prepare_device_runtime(inputs):
     if source.metadata.source_hash!=contract.belief_set_source_hash:raise ValueError('original public belief source differs')
     catalog=v4_encoder.compile_encoder(public_belief.compile_source(source),dex,vocabulary,
         checkpoint_sha256=contract.checkpoint_sha256,feature_masks=contract.encoder_masks())
-    pool=source_provenance.load_constructor_pool(runtime['constructor_pool']['path']);metadata=pool.metadata()
-    if (source_provenance._pool(pool,rehash=True)['pool_sha256']!=inputs.plan.pool_sha256
+    pool_ref = runtime['constructor_pool'] if material_pool is None else material_pool
+    expected = inputs.plan.pool_sha256 if material_pool is None else pool_ref['sha256']
+    pool=source_provenance.load_constructor_pool(pool_ref['path']);metadata=pool.metadata()
+    if (source_provenance._pool(pool,rehash=True)['pool_sha256']!=expected
             or metadata['compiled_tree']['sha256']!=show['compiled_tree_sha256']):
         raise ValueError('original constructor source binding differs')
     prepared=v5_device_backend.prepare(catalog,source,pool,source_commit=runtime['source_commit'])

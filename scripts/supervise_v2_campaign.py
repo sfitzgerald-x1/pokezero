@@ -7,10 +7,16 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import secrets
 import shlex
 import subprocess
 import sys
 import time
+
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from gpu_engine import v2_material_contract as material
 
 
 ADMISSION_SECONDS = 6 * 3600
@@ -56,6 +62,43 @@ def shared_file(root, relative, *, line=None):
     output = shared_text(root, relative, line=line)
     return json.loads(output) if output.strip() else None
 
+
+
+def material_bytes(path):
+    result = run([*BASE, 'exec', 'eigen-stage-0', '-c', 'stage', '--', 'sh', '-c',
+                  'if test -f "$1"; then printf "+\\n"; cat "$1"; fi', 'sh', path])
+    if not result:
+        raise FileNotFoundError(path)
+    prefix, data = result.split('\n', 1)
+    if prefix != '+':
+        raise ValueError('invalid shared artifact read')
+    return data.encode()
+
+
+def verify_material_files(document):
+    verify_material_refs(material.material_artifacts(document))
+
+
+def verify_material_refs(refs):
+    if any(any(char in ref['path'] for char in '\r\n\\') for ref in refs):
+        raise ValueError('invalid shared artifact filename')
+    checks = ''.join(f"{ref['sha256']}  {ref['path']}\n" for ref in refs)
+    result = subprocess.run(
+        [*BASE[:-1], 'exec', '-i', 'eigen-stage-0', '-c', 'stage', '--', 'sha256sum', '--check', '--quiet', '-'],
+        input=checks, text=True, capture_output=True, timeout=900,
+    )
+    if result.returncode:
+        detail = (result.stdout + result.stderr).strip()
+        if any(message in detail for message in ('FAILED', 'No such file')):
+            raise ValueError(f'material artifact could not be verified: {detail[:400]}')
+        raise RuntimeError(f'material checksum command exited {result.returncode}: {detail[:400]}')
+
+
+def missing_material(paths):
+    output = run([*BASE, 'exec', 'eigen-stage-0', '-c', 'stage', '--', 'sh', '-c',
+                  'for p do if ! test -f "$p"; then printf "%s\\n" "$p"; fi; done',
+                  'sh', *map(str, paths)])
+    return set(output.splitlines())
 
 def verify_initial_root(output, text, state, restore):
     if (completed_rounds(state) != 100
@@ -194,6 +237,11 @@ def build_launch(packet, segment, attempt, parent_checkpoint):
         '--profile', 'v2-production', '--campaign-anneal', '--lr-start', 'sqrt',
         '--lr-warmup-updates', '24000', '--freeze-gc-after-warmup', '--audit-every', '50',
     ]
+    if 'material' in attempt:
+        plan = packet['material']['plan']
+        ref = attempt['material']
+        entry.extend(['--material', plan['path'], plan['sha256'], str(attempt['segment']),
+                      ref['path'], ref['sha256']])
     if main:
         if not resume:
             raise ValueError('the main campaign must start from the adopted 2M parent')
@@ -243,6 +291,142 @@ class Supervisor:
             self.ledger = dict(release_binding=binding, status='RUNNING', segment=0,
                                consecutive_failures=0, reserved_gpu_seconds=0, attempts=[])
 
+    def material_plan(self):
+        if not hasattr(self, '_material_plan'):
+            ref = self.packet['material']['plan']
+            self._material_plan = material.load_plan(ref, material_bytes)
+            if len(self._material_plan['windows']) != len(self.segments):
+                raise ValueError('material and supervisor segment counts differ')
+        return self._material_plan
+
+    def bind_segment(self, segment):
+        stream = self.packet['material']
+        plan = self.material_plan()
+        index = self.ledger['segment']
+        pins = self.ledger.setdefault('material_bindings', [])
+        previous = pins[index - 1]['sha256'] if index else None
+        try:
+            ref, doc = material.bound_manifest(plan, stream['plan']['sha256'], index, previous, material_bytes)
+            for bindings in (stream['ready'], pins):
+                if index < len(bindings) and ref != bindings[index]:
+                    raise ValueError('material differs from its admitted manifest')
+            if doc['window']['rounds'][1] != segment['stop']:
+                raise ValueError('material segment stop differs from the supervisor schedule')
+            material.require_verification(plan, stream['plan']['sha256'], index, ref, material_bytes)
+            verify_material_files(doc)
+        except (FileNotFoundError, ValueError, KeyError, TypeError) as error:
+            reason = error if not isinstance(error, FileNotFoundError) else f'missing {error.filename or error}'
+            self.wait_for_material(index, str(reason))
+            return None
+        if index == len(pins):
+            pins.append(ref)
+        self.ledger.pop('material_wait', None)
+        return ref
+
+    def wait_for_material(self, index, reason):
+        self.ledger['material_wait'] = dict(at=now(), segment=index, detail=reason[:480])
+        self.save()
+        print(f'WAITING FOR MATERIAL {index + 1}: {reason[:480]}', flush=True)
+
+    def fail_producer(self, active, reason):
+        self.ledger['producer_failure'] = dict(job=active['job'], start=active['start'],
+                                               stop=active['stop'], reason=reason)
+        self.save()
+
+    def advance_producer(self):
+        stream = self.packet['material']
+        plan = self.material_plan()
+        cfg = stream['producer']
+        active = self.ledger.get('producer')
+        if active is not None:
+            info = read_resource('job', active['job'], '--ignore-not-found')
+            if info is None:
+                elapsed = time.time() - epoch(active['submitted_at'])
+                failed_launch = active.get('launcher_exit', 0) != 0 and elapsed >= 120
+                if not active.get('terminal') and not failed_launch and elapsed < ADMISSION_SECONDS:
+                    return
+                if not active.get('terminal'):
+                    self.fail_producer(active, 'producer admission could not be reconciled')
+                del self.ledger['producer']
+                self.save()
+            else:
+                uid = info['metadata']['uid']
+                if active.get('uid', uid) != uid:
+                    raise ValueError('producer Job UID differs from the owned admission')
+                active['uid'] = uid
+                if not active.get('terminal'):
+                    conditions = {row['type'] for row in info.get('status', {}).get('conditions', ())
+                                  if row['status'] == 'True'}
+                    if not conditions & {'Complete', 'Failed'}:
+                        self.save()
+                        return
+                    active['terminal'] = 'Failed' if 'Failed' in conditions else 'Complete'
+                    if active['terminal'] == 'Failed':
+                        self.fail_producer(active, 'producer job failed')
+                    self.save()
+                run([*BASE, 'delete', 'job', active['job'], '--ignore-not-found', '--wait=false'])
+                return
+        index = self.ledger['segment']
+        final = Path(plan['root']) / 'z' / 'd.json'
+        stop = min(len(self.segments), index + cfg['lookahead'] + 1)
+        segments = {
+            i: (material.manifest_path(plan, i), material.verification_path(plan, i)) for i in range(index, stop)
+        }
+        paths = [path for pair in segments.values() for path in pair]
+        if stop == len(self.segments):
+            paths.append(final)
+        missing = missing_material(paths) if paths else set()
+        if not missing:
+            self.ledger.pop('producer_failure', None)
+            return
+        start = next((i for i, paths in segments.items() if missing.intersection(map(str, paths))),
+                     min(index, stop - 1))
+        failure = self.ledger.get('producer_failure')
+        if failure is not None:
+            if failure['start'] <= start < failure['stop']:
+                self.wait_for_material(index, f"{failure['reason']}. Publish the same window after checking its log")
+                return
+            self.ledger.pop('producer_failure')
+        verify_source(self.packet)
+        plan_ref = stream['plan']
+        name = f'v2m-{secrets.token_hex(5)}-cpu'
+        entry = ['-m', 'gpu_engine.v2_material', '--plan', plan_ref['path'], '--sha256', plan_ref['sha256'],
+                 '--start', str(start), '--stop', str(stop), '--workers', str(cfg['workers'])]
+        argv = [
+            sys.executable, self.packet['launcher']['path'], '--clone', self.packet['checkout'],
+            '--context', BASE[2], '--name', name, '--gpus', '0', '--cpu', str(cfg['cpu']),
+            '--memory', cfg['memory'], '--max-exec-seconds', str(cfg['max_exec_seconds']),
+            '--entry', shlex.join(entry),
+        ]
+        for node in cfg['nodes']:
+            argv.extend(('--only-node', node))
+        self.ledger['producer'] = dict(job=f'scott-{name}', start=start, stop=stop, submitted_at=now())
+        self.save()
+        with self.path.with_name(f'{self.path.stem}-{name}.log').open('x') as log:
+            result = subprocess.run(['timeout', '480', *argv], stdout=log, stderr=subprocess.STDOUT)
+        self.ledger['producer']['launcher_exit'] = result.returncode
+        self.save()
+
+    def material_complete(self):
+        if 'producer' in self.ledger:
+            return False
+        index = self.ledger['segment']
+        try:
+            path = Path(self.material_plan()['root']) / 'z' / 'd.json'
+            receipt = json.loads(material_bytes(str(path)))
+            if (receipt['plan_sha256'] != self.packet['material']['plan']['sha256']
+                    or receipt['ledger_sha256'] != self.ledger['material_bindings'][-1]['sha256']
+                    or receipt['team_rows'] != material.shard_end(self.material_plan()['shards'][-1])
+                    or not re.fullmatch('[0-9a-f]{64}', receipt['pool_sha256'])):
+                raise ValueError('final material digest differs from the admitted ledger')
+            verify_material_refs([dict(path=str(path.parent / 't.npz'), sha256=receipt['pool_sha256'])])
+        except (FileNotFoundError, ValueError, KeyError, TypeError) as error:
+            self.wait_for_material(index, str(error))
+            return False
+        self.ledger['material_result'] = receipt
+        self.ledger.pop('material_wait', None)
+        return True
+
     def save(self):
         partial = self.path.with_suffix('.partial')
         partial.write_text(json.dumps(self.ledger, indent=2) + '\n')
@@ -273,6 +457,11 @@ class Supervisor:
         self.stop('COMPLETE')
 
     def submit(self, segment):
+        binding = None
+        if 'material' in self.packet:
+            binding = self.bind_segment(segment)
+            if binding is None:
+                return
         remaining = self.budget - self.ledger['reserved_gpu_seconds']
         cap = min(segment['max_exec_seconds'], remaining // GPU_COUNT)
         if cap < segment['min_exec_seconds']:
@@ -298,6 +487,19 @@ class Supervisor:
         attempt = dict(number=len(self.ledger['attempts'])+1, segment=self.ledger['segment'],
                        before_round=before, before_state_sha256=state_sha256,
                        submitted_at=now(), cap_seconds=cap, status='SUBMITTING')
+        if binding is not None:
+            bounds = self.material_plan()['windows'][attempt['segment']]['rounds']
+            if not bounds[0] <= before <= bounds[1]:
+                raise ValueError('committed pointer is outside the admitted material segment')
+            if before > bounds[0]:
+                expected = binding['sha256']
+            else:
+                previous = next((i for i in range(attempt['segment'] - 1, -1, -1)
+                                 if self.segments[i]['output'] == segment['output']), None)
+                expected = None if previous is None else self.ledger['material_bindings'][previous]['sha256']
+            if expected is not None and doc.get('material_sha256') != expected:
+                raise ValueError('committed pointer does not match material admitted on this lineage')
+            attempt['material'] = binding
         name, argv = build_launch(self.packet, segment, attempt, parent_checkpoint)
         if read_resource('job', name, '--ignore-not-found') is not None:
             raise ValueError('a prior Job still owns this attempt name')
@@ -330,6 +532,8 @@ class Supervisor:
         if committed > attempt['before_round']:
             if state.get('segment_job') != f"{name}:{attempt['number']}":
                 raise ValueError('committed pointer advanced outside the owned Job')
+            if 'material' in self.packet and state.get('material_sha256') != attempt['material']['sha256']:
+                raise ValueError('committed pointer differs from the admitted material manifest')
         elif (committed, state_sha256) != (attempt['before_round'], attempt['before_state_sha256']):
             raise ValueError('committed pointer differs from the admitted state')
         if committed > attempt['before_round'] and 'first_commit' not in attempt:
@@ -385,17 +589,24 @@ class Supervisor:
         while self.ledger['status'] == 'RUNNING':
             try:
                 if self.ledger['segment'] == len(self.segments):
-                    self.finish()
-                    break
-                segment = self.segments[self.ledger['segment']]
-                attempts = self.ledger['attempts']
-                active = attempts[-1] if attempts and attempts[-1]['status'] != 'RELEASED' else None
-                if active is None:
-                    self.submit(segment)
-                elif active['status'] == 'RELEASING':
-                    self.release(active)
+                    if 'material' in self.packet:
+                        self.advance_producer()
+                    if self.ledger['status'] == 'RUNNING' and (
+                            'material' not in self.packet or self.material_complete()):
+                        self.finish()
+                        break
                 else:
-                    self.reconcile(segment, active)
+                    segment = self.segments[self.ledger['segment']]
+                    attempts = self.ledger['attempts']
+                    active = attempts[-1] if attempts and attempts[-1]['status'] != 'RELEASED' else None
+                    if active is None:
+                        self.submit(segment)
+                    elif active['status'] == 'RELEASING':
+                        self.release(active)
+                    else:
+                        self.reconcile(segment, active)
+                    if self.ledger['status'] == 'RUNNING' and 'material' in self.packet:
+                        self.advance_producer()
                 failures = 0
             except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
                 failures += 1
@@ -432,6 +643,13 @@ def main():
     for row in [packet['main'], *packet['children']]:
         if not EXEC_MARGIN_SECONDS < row['min_exec_seconds'] <= row['max_exec_seconds'] <= 6 * 86400:
             parser.error('segment execution deadline outside the launcher envelope')
+    if 'material' in packet:
+        cfg = packet['material']['producer']
+        memory = re.fullmatch(r'([1-9][0-9]*)(Mi|Gi)', cfg['memory'])
+        if (not 1 <= cfg['lookahead'] or not 1 <= cfg['workers'] <= cfg['cpu'] <= 16
+                or not 1 <= cfg['max_exec_seconds'] <= 7200 or not cfg['nodes']
+                or not memory or int(memory[1]) > (128 if memory[2] == 'Gi' else 131072)):
+            parser.error('invalid bounded CPU producer configuration')
     verify_source(packet)
     release_binding = hashlib.sha256(release_data).hexdigest()
     with ledger_path.with_suffix('.lock').open('a') as lock:

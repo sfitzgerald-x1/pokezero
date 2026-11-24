@@ -49,7 +49,7 @@ def prepare(catalog,source,pool,*,source_commit):
 class RuntimeBackend:
     """Device-mode backend for the unchanged v5_run.run callback contract."""
     def __init__(self,prepared,pool,*,gender_policy=None,chunk_steps=8,teacher=None,measure_runtime=False,cache_workers=0,
-            raw_retention_every=1,transient_raw_root=None,teacher_queue_chunks=0):
+            raw_retention_every=1,transient_raw_root=None,teacher_queue_chunks=0,material_address=None):
         if type(prepared)is not Prepared or type(chunk_steps)is not int or chunk_steps<=0:
             raise ValueError('prepared device runtime and finite chunk required')
         if type(measure_runtime)is not bool:raise ValueError('explicit runtime timing choice required')
@@ -67,6 +67,7 @@ class RuntimeBackend:
         self.cache_workers=cache_workers;self._cache_pool=None;self._cache_merger=None
         self.measure_runtime=measure_runtime;self._initializer_executables={}
         self.teacher=teacher
+        self.material_address = material_address
         self.prepared=prepared;self.pool=pool;self.gender_policy=gender_policy;self.chunk_steps=chunk_steps
         self.actors={};self._plan=None;self.labels=None;self.declaration_sha256=None;self.model_sha256=None
         self.initialize=jax.jit(lambda state:transition.initialize_with_public(state,prepared.engine_tables,
@@ -93,7 +94,9 @@ class RuntimeBackend:
             self.require_teacher()
             if self.teacher.plan!=plan:raise ValueError('same original D teacher Plan required')
         elif self.teacher is not None:raise ValueError('D teacher cannot label A/B treatment')
-        if self.prepared.pool_sha256!=plan.pool_sha256:raise ValueError('original declared constructor pool differs')
+        expected_pool = self.prepared.pool_sha256 if self.material_address is None else self.material_address[0]
+        if expected_pool != plan.pool_sha256:
+            raise ValueError('original declared constructor pool differs')
         # V2 self_moves: the plan's declaration is the prepared catalog's (prepare_device_runtime compiles it from the plan).
         if bool(getattr(getattr(self.prepared.catalog,'masks',None),'self_moves',False))!=bool(getattr(plan,'self_moves',False)):
             raise ValueError('prepared encoder self_moves differs from the plan declaration')
@@ -155,6 +158,8 @@ class RuntimeBackend:
 
     def _construct(self,batch):
         indices=np.asarray([game.team_indices for game in batch.games],np.int32)
+        if self.material_address is not None:
+            indices = indices - self.material_address[1]
         raw=transition.state_from_pool(self.pool.arrays,indices,seed=batch.constructor_seed)
         from .engine_request_source import _gender
         gender_initialization=None
