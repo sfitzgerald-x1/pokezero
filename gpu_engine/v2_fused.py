@@ -1063,6 +1063,10 @@ def main(argv=None, *, distribution=None):
     if route_stop is not None:
         summary.update(status='STOPPED', reason='S0_TRANSFER_FAIL', stop_request=route_stop)
     def write_report():
+        if args.segment_outcome and deferred and route_stop is None:
+            first_new = 1 if adopted_prefix is None else adopted_prefix['rounds'] + 1
+            dispatch.finish_committed_publications(snapshots[first_new:], report_error=lambda reason: log(
+                'EVALUATION_REQUEST_ERROR', reason=reason))
         if compact and reports:
             summary['iterations'] = v2_fused_state.read_state(out)['reports']
         write_json(out / 'report.json', summary)

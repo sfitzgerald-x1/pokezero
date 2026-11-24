@@ -99,6 +99,17 @@ def completed_rounds(doc):
     return count
 
 
+def verify_child_resume(state, previous_attempt):
+    if previous_attempt is None:
+        if state is not None:
+            raise ValueError('a child’s first admission requires an empty committed pointer')
+        return
+    committed = completed_rounds(state)
+    checkpoint = None if not committed else state['round_ledger']['latest_snapshot']['checkpoint_sha256']
+    if committed != previous_attempt['committed_round'] or checkpoint != previous_attempt['checkpoint_sha256']:
+        raise ValueError('child resume pointer differs from its prior owned attempt')
+
+
 def segment_order(main, children):
     """Run each cooldown after the first main stop that includes its parent."""
     remaining = sorted(children, key=lambda child: child['parent_round'])
@@ -252,6 +263,9 @@ class Supervisor:
             raise ValueError('committed pointer exceeds the segment stop')
         parent_checkpoint = None
         if 'parent_round' in segment:
+            prior = next((attempt for attempt in reversed(self.ledger['attempts'])
+                          if attempt['segment'] == self.ledger['segment']), None)
+            verify_child_resume(doc, prior)
             main_output = self.packet['main']['output']
             parent_round = segment['parent_round']
             if completed_rounds(shared_file(main_output, 'state.json')) < parent_round:
@@ -313,7 +327,9 @@ class Supervisor:
             self.stop('ADMISSION_UNRECONCILED')
             return
         # Persist the terminal reconciliation before deleting the confirmed Job.
-        attempt.update(status='RELEASING', outcome=outcome, committed_round=committed, ended_at=now())
+        checkpoint = None if not committed else state['round_ledger']['latest_snapshot']['checkpoint_sha256']
+        attempt.update(status='RELEASING', outcome=outcome, committed_round=committed,
+                       checkpoint_sha256=checkpoint, ended_at=now())
         self.save()
         self.release(attempt)
 

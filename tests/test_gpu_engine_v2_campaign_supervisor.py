@@ -1,10 +1,37 @@
 import shlex
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
-from scripts.supervise_v2_campaign import ADMISSION_SECONDS, build_launch, disposition, segment_order
+from pokezero.v5_deferred_evaluation import MilestoneDispatch
+from scripts.supervise_v2_campaign import ADMISSION_SECONDS, build_launch, disposition, segment_order, verify_child_resume
 
 
 class CampaignSupervisorTests(unittest.TestCase):
+    def test_child_resume_requires_a_ledger_owned_checkpoint(self):
+        state = dict(round_ledger=dict(completed_rounds=12, latest_snapshot=dict(
+            iteration=11, checkpoint_sha256='a'*64)))
+        verify_child_resume(None, None)
+        with self.assertRaisesRegex(ValueError, 'first admission'):
+            verify_child_resume(state, None)
+        attempt = dict(committed_round=12, checkpoint_sha256='a'*64)
+        verify_child_resume(state, attempt)
+        with self.assertRaisesRegex(ValueError, 'prior owned attempt'):
+            verify_child_resume(state, dict(attempt, checkpoint_sha256='b'*64))
+
+    def test_segment_requires_durable_milestone_publication_after_retry(self):
+        dispatch = MilestoneDispatch.__new__(MilestoneDispatch)
+        dispatch.milestones = {49: 1_000_000}
+        snapshot = SimpleNamespace(iteration=49)
+        report_error = Mock()
+        dispatch.publish_committed = Mock()
+        dispatch.request_missing = Mock(side_effect=(True, False))
+        dispatch.finish_committed_publications([snapshot], report_error=report_error)
+        dispatch.publish_committed.assert_called_once_with(snapshot, report_error=report_error)
+        dispatch.request_missing = Mock(return_value=True)
+        with self.assertRaisesRegex(ValueError, 'milestone 1000000 publication remains pending'):
+            dispatch.finish_committed_publications([snapshot], report_error=report_error)
+
     def test_main_stops_interleave_only_committed_cooldown_parents(self):
         main = {'output': 'v2a-012abc-gpu', 'stops': [1250, 2500, 3750, 5000]}
         late = {'output': 'v2a-111111-gpu', 'parent_round': 1350, 'stop': 150}
