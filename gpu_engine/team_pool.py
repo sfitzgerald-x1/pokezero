@@ -122,15 +122,22 @@ def main():
     parser.add_argument("--seed-start", type=int, default=650000000)
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
-    if args.out.exists():
+    result = generate(args.out, teams=args.teams, seed_start=args.seed_start, node=args.node,
+                      showdown_root=args.showdown_root, source_commit_label=args.source_commit_label)
+    print(json.dumps(result, sort_keys=True))
+
+
+def generate(out, *, teams, seed_start, node, showdown_root, source_commit_label):
+    """Generate and exclusively publish the original deterministic shard format."""
+    if out.exists():
         raise FileExistsError("refusing to overwrite an existing team pool")
-    if args.teams <= 0 or not 0 <= args.seed_start < args.seed_start + args.teams <= 2**32:
+    if teams <= 0 or not 0 <= seed_start < seed_start + teams <= 2**32:
         raise ValueError("positive count and unsigned 32-bit seed range required")
-    process = subprocess.Popen([args.node, str(Path(__file__).with_name("generate_teams.cjs")),
-        str(args.showdown_root), str(args.teams), str(args.seed_start), args.source_commit_label],
+    process = subprocess.Popen([node, str(Path(__file__).with_name("generate_teams.cjs")),
+        str(showdown_root), str(teams), str(seed_start), source_commit_label],
         stdout=subprocess.PIPE, text=True)
     try:
-        arrays, header = pack_stream(process.stdout, count=args.teams, seed_start=args.seed_start)
+        arrays, header = pack_stream(process.stdout, count=teams, seed_start=seed_start)
         code = process.wait(timeout=30)
         if code != 0:
             raise RuntimeError(f"Showdown team generator exited {code}")
@@ -142,24 +149,24 @@ def main():
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=10)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
+    out.parent.mkdir(parents=True, exist_ok=True)
     # Atomic and exclusive publication: never replace an existing dataset.
-    with tempfile.NamedTemporaryFile(dir=args.out.parent, suffix=".partial", delete=False) as output:
+    with tempfile.NamedTemporaryFile(dir=out.parent, suffix=".partial", delete=False) as output:
         temporary = Path(output.name)
         try:
             np.savez_compressed(output, **arrays)
             output.flush()
             os.fsync(output.fileno())
-            os.link(temporary, args.out)
+            os.link(temporary, out)
         finally:
             temporary.unlink(missing_ok=True)
-    with args.out.open("rb") as stream:
+    with out.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    print(json.dumps(dict(status="TEAM_POOL_COMPLETE", teams=args.teams,
-        seed_start=args.seed_start, sha256=digest, bytes=args.out.stat().st_size,
-        target85_move_count=header["target85_move_count"],
-        unique_moves=len(header["move_frequency"]), transition_implemented=False,
-        games_per_second=None), sort_keys=True))
+    return dict(status="TEAM_POOL_COMPLETE", teams=teams, seed_start=seed_start,
+                sha256=digest, bytes=out.stat().st_size,
+                target85_move_count=header["target85_move_count"],
+                unique_moves=len(header["move_frequency"]), transition_implemented=False,
+                games_per_second=None)
 
 
 if __name__ == "__main__":
