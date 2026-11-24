@@ -99,7 +99,8 @@ class DeviceTests(unittest.TestCase):
 
         moves = [move('first', 33, 'Fire', accuracy=80, recoil=True),
                  move('second', 120, 'Fire', accuracy=20, selfdestruct=True),
-                 move('third', 40, 'Normal', priority=1), move('fourth', 15, 'Fire', status=True)]
+                 move('third', 40, 'Normal', priority=1), move('fourth', 15, 'Fire', status=True),
+                 move('hiddenpower', 0, 'Normal'), move('hiddenpowerice', 70, 'Ice')]
         own = SpeciesInfo('firstmon', 'firstmon', ('Fire',), {})
         foe = SpeciesInfo('secondmon', 'secondmon', ('Ghost', 'Steel'), {})
         dex = ShowdownDex({m.id: m for m in moves}, {own.id: own, foe.id: foe},
@@ -107,11 +108,35 @@ class DeviceTests(unittest.TestCase):
         vocab = {'species': ['_none', own.id, foe.id], 'moves': ['_none', *(m.id for m in moves)]}
         tables = device.compile_tables(vocab, dex)
         hps = [6, 7, 8]
-        actual = device.scores(tables, jnp.tile(jnp.arange(1, 5), (3, 1)), jnp.ones(3, jnp.int32),
+        actual = device.scores(tables, jnp.tile(jnp.arange(1, len(moves) + 1), (3, 1)), jnp.ones(3, jnp.int32),
                                jnp.full(3, 2), jnp.asarray(hps), jnp.full(3, 20))
-        expected = [[_max_damage_estimate(dict(action_index=i, move_id=m.id), dex, own.types, foe.types, hp / 20)
-                     for i, m in enumerate(moves)] for hp in hps]
+        request_ids = [m.id for m in moves[:-1]] + ['hiddenpower']
+        expected = [[_max_damage_estimate(dict(action_index=i, move_id=move_id), dex, own.types, foe.types, hp / 20)
+                     for i, move_id in enumerate(request_ids)] for hp in hps]
         np.testing.assert_allclose(np.asarray(actual, dtype=np.float64) / 80000, expected, atol=1e-9, rtol=0)
+
+    def test_evaluate_refuses_relative_receipts_inside_training_root(self):
+        from contextlib import chdir
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+        from gpu_engine import v2_engine_eval_runner as runner
+        from pokezero import v5_deferred_evaluation as deferred
+
+        ref = SimpleNamespace(sha256='a' * 64)
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            training = root / 'training'
+            training.mkdir()
+            alias = root / 'alias'
+            alias.symlink_to(training, target_is_directory=True)
+            request = SimpleNamespace(run_directory=training)
+            with chdir(training), patch.object(deferred, 'read_owned_milestone', return_value=request):
+                for output in (Path('receipt.json'), Path('../alias/receipt.json')):
+                    with self.subTest(output=output):
+                        with self.assertRaisesRegex(ValueError, 'outside the immutable training root'):
+                            runner.evaluate(ref, ref, output, source_sha='b' * 40, batch_size=1)
+            self.assertFalse((training / 'receipt.json').exists())
 
 
 def verify_registered_starts(config):

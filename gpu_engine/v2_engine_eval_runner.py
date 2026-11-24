@@ -196,6 +196,7 @@ def evaluate(dispatch, config_ref, output, *, source_sha, batch_size, progress=N
     from . import v2_engine_eval_max_damage, v2_engine_evaluation_device as device
 
     start = time.perf_counter()
+    output = Path(output).resolve()
     binding = dict(dispatch_sha256=dispatch.sha256, config_sha256=config_ref.sha256,
                    engine_source_sha=source_sha, precision='float32', batch_size=batch_size)
     request = deferred.read_owned_milestone(dispatch)

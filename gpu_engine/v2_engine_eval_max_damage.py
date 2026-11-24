@@ -22,7 +22,10 @@ def compile_tables(vocabulary, dex):
     """Use the same static dex facts as the Showdown panel's policy."""
     species = [dex.species_info(name) for name in vocabulary['species']]
     types = [mon.types if mon is not None else () for mon in species]
-    moves = [dex.move_info(name) for name in vocabulary['moves']]
+    # The Showdown policy scores request IDs. All typed Hidden Power moves
+    # appear there as the generic move, even when the engine knows their type.
+    moves = [dex.move_info('hiddenpower' if name.startswith('hiddenpower') else name)
+             for name in vocabulary['moves']]
     move_types = {move.type for move in moves if move is not None}
     # Extra integer precision keeps genuine ties exact even after recoil and
     # self-KO adjustments. Gen 3 dual typing has denominators of at most four.
