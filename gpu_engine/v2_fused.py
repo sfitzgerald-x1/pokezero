@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import resource
 import time
 import uuid
@@ -357,6 +358,8 @@ def argument_parser():
     parser.add_argument('--max-iterations', type=int, default=None, help='stop after this many declared iterations')
     parser.add_argument('--segment-outcome', action='store_true',
         help='publish the durable final outcome for the supervised Job')
+    parser.add_argument('--segment-start', nargs=2, metavar=('ROUNDS', 'STATE_SHA256'),
+        help='bind a supervised Job to its admitted pointer (0 - for a fresh segment)')
     parser.add_argument('--lanes', type=int, default=2048)
     parser.add_argument('--mode', default='cudagraphs')
     parser.add_argument('--native-embedding-backward', action='store_true',
@@ -417,6 +420,14 @@ def parse_args(argv=None):
     if args.adopt_2m_prefix_runtime and (not args.require_resume or not args.campaign_anneal
                                         or args.cooldown_child or not args.declaration):
         parser.error('2M prefix adoption needs a required resume with a successor campaign declaration')
+    if args.segment_start is not None:
+        rounds, digest = args.segment_start
+        if not (args.segment_outcome and args.declaration and re.fullmatch(r'[0-9]{1,5}', rounds)):
+            parser.error('--segment-start requires a supervised declaration and a valid starting round')
+        rounds = int(rounds)
+        if (rounds == 0 and digest != '-') or (rounds > 0 and not re.fullmatch(r'[a-f0-9]{64}', digest)):
+            parser.error('--segment-start requires the admitted state SHA-256 or - for a fresh segment')
+        args.segment_start = (rounds, digest)
     return args
 
 
@@ -581,6 +592,11 @@ def main(argv=None, *, distribution=None):
     parent_root = Path(args.cooldown_child).resolve() if args.cooldown_child else None
     v2_fused_state.validate_output(out, parent_root)
     state_path = out / 'state.json'
+    segment_job = None
+    if args.segment_outcome:
+        segment_job = os.environ['V2_RUN_NAME']
+        if not segment_job or Path(segment_job).name != segment_job:
+            raise ValueError('supervised segment outcome requires a Job name')
     if args.require_resume and not state_path.is_file():
         raise ValueError('--require-resume needs a committed state.json in --out')
     if args.adopt_2m_prefix_runtime and distribution is None:
@@ -712,11 +728,17 @@ def main(argv=None, *, distribution=None):
         fallback_random=args.fallback_random, lr_start=lr_start, campaign=base_campaign)
     placement = {} if distribution is None else dict(process_group=distribution.process_group)
     def read_resume_manifest():
-        if not state_path.exists():
+        try:
+            pointer_data = state_path.read_bytes()
+        except FileNotFoundError:
             if args.require_resume:
                 raise ValueError('--require-resume needs a committed state.json in --out')
-            return None
-        return v2_fused_state.read_state(out, include_full_reports=False)
+            pointer_data = None
+        state = None if pointer_data is None else v2_fused_state.read_state(
+            out, include_full_reports=False, pointer_data=pointer_data)
+        if args.segment_start is not None:
+            v2_fused_state.verify_segment_start(state, pointer_data, args.segment_start, segment_job)
+        return state
 
     saved = _rank_zero(distribution, 'resume manifest', read_resume_manifest)
     if compact and saved is not None and 'round_ledger' not in saved:
@@ -1016,6 +1038,8 @@ def main(argv=None, *, distribution=None):
                 state['campaign_schedule'] = asdict(runtime.v2_config.campaign)
             if distribution is not None:
                 state['distribution'] = distribution.contract
+            if args.segment_start is not None:
+                state['segment_job'] = segment_job
             end = committed_bytes
             guard = v2_fused_state.commit_guard(out, committed_bytes, iteration) if compact else nullcontext()
             with guard:
@@ -1064,17 +1088,13 @@ def main(argv=None, *, distribution=None):
         summary.update(status='STOPPED', reason='S0_TRANSFER_FAIL', stop_request=route_stop)
     def write_report():
         if args.segment_outcome and deferred and route_stop is None:
-            first_new = 1 if adopted_prefix is None else adopted_prefix['rounds'] + 1
-            dispatch.finish_committed_publications(snapshots[first_new:], report_error=lambda reason: log(
+            dispatch.finish_committed_publications(snapshots[1:], report_error=lambda reason: log(
                 'EVALUATION_REQUEST_ERROR', reason=reason))
         if compact and reports:
             summary['iterations'] = v2_fused_state.read_state(out)['reports']
         write_json(out / 'report.json', summary)
         if args.segment_outcome:
-            name = os.environ['V2_RUN_NAME']
-            if not name or Path(name).name != name:
-                raise ValueError('supervised segment outcome requires a Job name')
-            write_json(out / f'segment-{name}.json', dict(
+            write_json(out / f'segment-{segment_job}.json', dict(
                 status='STOPPED' if route_stop is not None else 'COMPLETE',
                 completed_rounds=len(reports), requested_round=args.max_iterations,
                 declaration_sha256=declaration_sha256,

@@ -1,13 +1,37 @@
+import hashlib
+import json
 import shlex
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
+from gpu_engine.v2_fused import parse_args
+from pokezero.v2_fused_state import verify_segment_start
 from pokezero.v5_deferred_evaluation import MilestoneDispatch
 from scripts.supervise_v2_campaign import ADMISSION_SECONDS, build_launch, disposition, segment_order, verify_child_resume
 
 
 class CampaignSupervisorTests(unittest.TestCase):
+    def test_worker_start_accepts_only_admitted_or_same_job_progress(self):
+        job = 'v2a-012abc-gpu-r2'
+        first = (0, '-')
+        state = dict(round_ledger=dict(completed_rounds=12), segment_job='v2a-012abc-gpu')
+        pointer = json.dumps(state).encode()
+        retry = (12, hashlib.sha256(pointer).hexdigest())
+        check = 'startup pointer differs'
+        verify_segment_start(None, None, first, job)
+        verify_segment_start(state, pointer, retry, job)
+        with self.assertRaisesRegex(ValueError, check):
+            verify_segment_start(state, pointer, first, job)
+        with self.assertRaisesRegex(ValueError, check):
+            verify_segment_start(state, pointer + b'\n', retry, job)
+        with self.assertRaisesRegex(ValueError, check):
+            verify_segment_start(None, None, retry, job)
+        advanced = dict(state, round_ledger=dict(completed_rounds=13), segment_job=job)
+        verify_segment_start(advanced, json.dumps(advanced).encode(), retry, job)
+        with self.assertRaisesRegex(ValueError, check):
+            verify_segment_start(advanced, json.dumps(advanced).encode(), retry, 'v2a-012abc-gpu-r3')
+
     def test_child_resume_requires_a_ledger_owned_checkpoint(self):
         state = dict(round_ledger=dict(completed_rounds=12, latest_snapshot=dict(
             iteration=11, checkpoint_sha256='a'*64)))
@@ -68,18 +92,20 @@ class CampaignSupervisorTests(unittest.TestCase):
                       previous_runtime='/previous', runtime={'path': '/current', 'sha256': 'r'},
                       resilience={'path': '/support', 'phase_observer_sha256': 'p', 'signal_driver_sha256': 's'},
                       cpu=32, memory='896Gi', stop_key_reference='env=existing:key')
-        attempt = {'number': 2, 'before_round': 100, 'cap_seconds': 3600}
+        attempt = {'number': 2, 'before_round': 100, 'before_state_sha256': 'b'*64, 'cap_seconds': 3600}
         name, argv = build_launch(packet, main, attempt, None)
         self.assertEqual(name, 'scott-v2a-012abc-gpu-r2')
         self.assertEqual(argv[argv.index('--resume-run')+1], main['output'])
         entry = shlex.split(argv[-1])
         self.assertEqual(entry[entry.index('--adopt-2m-prefix-runtime')+1], '/previous')
+        self.assertEqual(parse_args([*entry[9:], '--require-resume']).segment_start, (100, 'b'*64))
 
         child = dict(main, output='v2a-111111-gpu', parent_round=450, stop=50)
-        name, argv = build_launch(packet, child, dict(attempt, before_round=0), 'a'*64)
+        name, argv = build_launch(packet, child, dict(attempt, before_round=0, before_state_sha256='-'), 'a'*64)
         self.assertEqual(name, 'scott-v2a-111111-gpu')
         self.assertNotIn('--require-fresh', argv)
         self.assertNotIn('--resume-run', argv)
         self.assertEqual(argv[argv.index('--resilient-support')+1], '/support')
         entry = shlex.split(argv[-1])
         self.assertEqual(entry[entry.index('--cooldown-parent-sha256')+1], 'a'*64)
+        self.assertEqual(parse_args(entry[9:]).segment_start, (0, '-'))

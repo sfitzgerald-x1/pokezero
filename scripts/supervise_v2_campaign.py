@@ -185,7 +185,7 @@ def build_launch(packet, segment, attempt, parent_checkpoint):
         '--runtime', runtime['path'], '--runtime-sha256', runtime['sha256'],
         '--plan-arm', 'B0', '--reference-run', packet['reference_run'],
         '--max-iterations', str(segment['stop']), '--lanes', '2048', '--row-order', 'file',
-        '--segment-outcome',
+        '--segment-outcome', '--segment-start', str(attempt['before_round']), attempt['before_state_sha256'],
         '--torch-memory-fraction', '.45', '--compile-threads', '4', '--recipe', 'R2x1', '--mode', 'cudagraphs',
         '--learner-precision', 'float32', '--native-embedding-backward', '--fallback-random',
         '--profile', 'v2-production', '--campaign-anneal', '--lr-start', 'sqrt',
@@ -198,8 +198,7 @@ def build_launch(packet, segment, attempt, parent_checkpoint):
     else:
         entry.extend(['--cooldown-child', f"{OUT_HOST}/{packet['main']['output']}",
                       '--cooldown-parent-sha256', parent_checkpoint])
-    # An initially fresh child can be readmitted in the same Job after committing.
-    # The supervisor checks the state before admission, rather than at every pod start.
+    # A replacement pod may resume a pointer advanced by this same Job.
     options = ['--resume-run', output] if resume else []
     argv = [
         sys.executable, packet['launcher']['path'], '--clone', packet['checkout'],
@@ -275,7 +274,8 @@ class Supervisor:
                 raise ValueError('cooldown parent is outside its committed round')
             parent_checkpoint = snapshot['checkpoint_sha256']
         attempt = dict(number=len(self.ledger['attempts'])+1, segment=self.ledger['segment'],
-                       before_round=before, submitted_at=now(), cap_seconds=cap, status='SUBMITTING')
+                       before_round=before, before_state_sha256=hashlib.sha256(raw_state.encode()).hexdigest() if before else '-',
+                       submitted_at=now(), cap_seconds=cap, status='SUBMITTING')
         name, argv = build_launch(self.packet, segment, attempt, parent_checkpoint)
         if read_resource('job', name, '--ignore-not-found') is not None:
             raise ValueError('a prior Job still owns this attempt name')
@@ -300,15 +300,20 @@ class Supervisor:
             if attempt.get('placement') != observed['queue']:
                 attempt['placement'] = observed['queue']
                 attempt.setdefault('queue_events', []).append(dict(at=now(), queue=observed['queue']))
-        state = shared_file(segment['output'], 'state.json')
+        raw_state = shared_text(segment['output'], 'state.json')
+        state = json.loads(raw_state) if raw_state.strip() else None
         committed = completed_rounds(state)
-        if committed < attempt['before_round']:
-            raise ValueError('committed pointer regressed below the attempt start')
+        name = attempt['job'].removeprefix('scott-')
+        if committed > attempt['before_round']:
+            if state.get('segment_job') != name:
+                raise ValueError('committed pointer advanced outside the owned Job')
+        elif (committed != attempt['before_round'] or committed
+              and hashlib.sha256(raw_state.encode()).hexdigest() != attempt['before_state_sha256']):
+            raise ValueError('committed pointer differs from the admitted state')
         if committed > attempt['before_round'] and 'first_commit' not in attempt:
             attempt['first_commit'] = dict(at=now(), round=committed)
         terminal_status = None
         if observed and not observed['live'] and (observed['complete'] or observed['failed']):
-            name = attempt['job'].removeprefix('scott-')
             receipt = shared_file(segment['output'], f'segment-{name}.json')
             if receipt is not None:
                 if (not committed or receipt['status'] not in ('STOPPED', 'COMPLETE')
