@@ -3,12 +3,13 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from gpu_engine import source_provenance
 from gpu_engine.team_pool import FIELDS
-from scripts.assemble_v2_campaign_pool import assemble, file_sha
+from scripts.assemble_v2_campaign_pool import assemble, file_sha, generate_gender_policy
 
 
 def make_shard(path, start, stop, row_start, *, value=1):
@@ -26,6 +27,31 @@ def make_shard(path, start, stop, row_start, *, value=1):
 
 
 class CampaignPoolTests(unittest.TestCase):
+    def test_pinned_gender_generator_receives_assembled_pool_digest(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            pool, node, target = root / 'p.npz', root / 'node', root / 'policy.json'
+            metadata = {'completed_teams': 2, 'compiled_tree': {'sha256': 'a'*64}}
+            np.savez_compressed(pool, metadata_utf8=np.frombuffer(json.dumps(metadata).encode(), dtype=np.uint8))
+            node.write_text('pinned bytes')
+            result = dict(path=str(pool), team_rows=2, sha256=file_sha(pool))
+            showdown = dict(node=dict(path=str(node), sha256=file_sha(node)),
+                            root='/showdown', commit='b'*40, compiled_tree_sha256='a'*64)
+
+            def generate(argv, *, stdout, check, timeout):
+                self.assertEqual(argv[0], str(node))
+                self.assertEqual(Path(argv[1]).name, 'gender_policy.cjs')
+                self.assertEqual(argv[2], '/showdown')
+                self.assertEqual(json.loads(Path(argv[3]).read_bytes()), dict(metadata, pool_sha256=result['sha256']))
+                self.assertEqual(argv[4], 'b'*40)
+                self.assertTrue(check)
+                self.assertGreater(timeout, 0)
+                stdout.write(json.dumps({'provenance': {'pool_sha256': result['sha256']}}).encode())
+
+            with patch('scripts.assemble_v2_campaign_pool.subprocess.run', side_effect=generate):
+                bound = generate_gender_policy(result, showdown, target)
+            self.assertEqual(bound, {'path': str(target), 'sha256': file_sha(target)})
+
     def test_streamed_loader_keeps_original_bytes_and_read_only_receipt(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'pool.npz'

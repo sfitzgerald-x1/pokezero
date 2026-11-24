@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
 
 import numpy as np
@@ -111,13 +112,44 @@ def assemble(manifest, output):
     return dict(path=str(output), sha256=digest, team_rows=rows, bytes=output.stat().st_size)
 
 
+def generate_gender_policy(pool_result, showdown, output):
+    output = Path(output)
+    node = showdown['node']
+    if file_sha(node['path']) != node['sha256']:
+        raise ValueError('Showdown Node binary differs from the bound runtime')
+    with np.load(pool_result['path'], allow_pickle=False) as archive:
+        metadata = json.loads(archive['metadata_utf8'].tobytes())
+    if metadata['completed_teams'] != pool_result['team_rows']:
+        raise ValueError('constructor metadata differs from the assembled pool receipt')
+    if metadata['compiled_tree']['sha256'] != showdown['compiled_tree_sha256']:
+        raise ValueError('constructor metadata differs from the pinned Showdown tree')
+    metadata['pool_sha256'] = pool_result['sha256']
+    program = Path(__file__).resolve().parents[1] / 'gpu_engine' / 'gender_policy.cjs'
+    with TemporaryDirectory(dir=output.parent) as directory:
+        spec = Path(directory) / 'pool.json'
+        spec.write_text(json.dumps(metadata, sort_keys=True))
+        temporary = Path(directory) / 'policy.json'
+        with temporary.open('xb') as stream:
+            subprocess.run([node['path'], str(program), showdown['root'], str(spec), showdown['commit']],
+                           stdout=stream, check=True, timeout=120)
+        policy = json.loads(temporary.read_bytes())
+        if policy['provenance']['pool_sha256'] != pool_result['sha256']:
+            raise ValueError('generated gender policy is bound to a different constructor pool')
+        policy_sha256 = file_sha(temporary)
+        os.link(temporary, output)
+    return dict(path=str(output), sha256=policy_sha256)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--gender-policy-out', type=Path)
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_bytes())
     result = assemble(manifest, args.out)
+    if args.gender_policy_out is not None:
+        result['gender_policy'] = generate_gender_policy(result, manifest['showdown'], args.gender_policy_out)
     peak = Path('/sys/fs/cgroup/memory.peak')
     if peak.exists():
         result['memory_peak_bytes'] = int(peak.read_text())
