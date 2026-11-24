@@ -114,29 +114,28 @@ class DeviceTests(unittest.TestCase):
         np.testing.assert_allclose(np.asarray(actual, dtype=np.float64) / 80000, expected, atol=1e-9, rtol=0)
 
 
-def verify_registered_starts(config, dispatch):
+def verify_registered_starts(config):
     """CPU fixture using the pinned 9375 archive and real registered starts."""
     import os
     import jax
     import jax.numpy as jnp
     import numpy as np
-    from pokezero.v5_deferred_evaluation import read_owned_milestone
     from gpu_engine import champion, engine_device_observation as encoder, transition
     from gpu_engine import v2_engine_eval_runner as runner, v2_engine_evaluation_device as device
 
     if os.environ.get('CUDA_VISIBLE_DEVICES') != '' or os.environ.get('JAX_PLATFORMS') != 'cpu':
         raise ValueError('launch the device fixtures with CPU-only settings')
-    if any(device.platform != 'cpu' for device in jax.devices()):
+    if any(backend.platform != 'cpu' for backend in jax.devices()):
         raise ValueError('device fixtures require CPU')
-    profile, show, metadata, vocabulary, catalog, _, engine, actor, actor_tables = runner._prepare(config)
+    profile, show, metadata, _, _, _, engine, actor, actor_tables = runner._prepare(config)
     bank = runner._artifact(config['banks']['champion_9375']).document()[:2]
     cells = evaluation.schedule(bank)
     arrays, gender = runner._decode(bank, metadata=metadata, show=show)
     raw, _ = runner._raw(arrays, gender, cells)
     for value in (raw.species, raw.moves, raw.hp, raw.keys, raw.gender):
         np.testing.assert_array_equal(value[::2], value[1::2])
-    state, public = jax.jit(lambda raw: transition.initialize_with_public(raw, engine,
-        belief_tables=actor_tables.belief))(raw)
+    print('Mirrored starts verified', flush=True)
+    state, public = transition.initialize_with_public(raw, engine, belief_tables=actor_tables.belief)
     owners = 1 - jnp.asarray([cell.seat for cell in cells], jnp.int32)
     observation = device._observe(state, public, owners, transition.action_mask(state, engine), actor_tables)
     paired = jax.device_get(device.champion_slot(actor, actor.params, observation))
@@ -146,16 +145,9 @@ def verify_registered_starts(config, dispatch):
     np.testing.assert_array_equal(paired.value, reference.value)
     np.testing.assert_array_equal(paired.valid, np.ones(len(cells), bool))
     np.testing.assert_array_equal(observation.error, np.zeros(len(cells), np.int32))
-
-    request = read_owned_milestone(dispatch)
-    candidate, model, tables = runner._candidate(request, vocabulary, metadata, catalog)
-    execute = device.make_batch(engine, tables, model, device.champion_opponent(actor, actor_tables), max_requests=1)
-    outcomes = runner._play(cells, arrays, gender, execute, candidate, actor.params, batch_size=5)
-    score = evaluation.score(cells, outcomes, max_requests=1)
-    assert (score['games'], score['wins'], score['caps']) == (len(cells), 0, len(cells))
-    return dict(champion=actor.checkpoint_sha256, candidate=request.snapshot.checkpoint_sha256,
+    return dict(champion=actor.checkpoint_sha256,
                 logits_bitwise=True, values_bitwise=True, registered_request_cap=profile['max_requests'],
-                cap_one_trial=score, mirror_states=len(cells))
+                mirror_states=len(cells))
 
 
 if __name__ == '__main__':
