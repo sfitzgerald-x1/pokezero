@@ -101,9 +101,13 @@ def main():
             or restored['state_sha256'] != binding['state_sha256']
             or declarations['parent_declaration_sha256'] != binding['declaration_sha256']):
         parser.error('restored root differs from the selected 2M prefix and declared output')
+    milestones = binding['milestone_sha256s']
+    if set(milestones) != {'1000000', '2000000'}:
+        parser.error('the original 1M and 2M dispatch digests are required')
     packet['main']['restore'] = dict(
         state_sha256=binding['state_sha256'], checkpoint_sha256=binding['checkpoint_sha256'],
         declaration_sha256=binding['declaration_sha256'], receipt_sha256=digest(receipt),
+        milestone_sha256s=milestones,
     )
     args.out.mkdir()
     (args.out / 'runtime.json').write_bytes(runtime_data)

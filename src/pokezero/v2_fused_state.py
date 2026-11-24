@@ -167,6 +167,18 @@ def verify_segment_start(state, pointer_data, start, job):
     raise ValueError('segment startup pointer differs from admission and was not advanced by this Job')
 
 
+def verify_adopted_dispatches(out, digests):
+    """Verify the exact historical requests used by any signed route stop."""
+    for games, digest in zip((1_000_000, 2_000_000), digests, strict=True):
+        path = out / 'artifacts' / 'cpu-panels' / str(games) / 'request.json'
+        try:
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        except FileNotFoundError as error:
+            raise ValueError(f'original {games} dispatch is missing') from error
+        if actual != digest:
+            raise ValueError(f'original {games} dispatch differs from its bound digest')
+
+
 def read_state(out, *, include_full_reports=True, pointer_data=None):
     """Read legacy state or reconstruct the committed prefix from a compact pointer."""
     out = Path(out)

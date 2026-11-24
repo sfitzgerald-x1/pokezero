@@ -8,14 +8,14 @@ from unittest.mock import Mock
 from gpu_engine.v2_fused import parse_args
 from pokezero.v2_fused_state import verify_segment_start
 from pokezero.v5_deferred_evaluation import MilestoneDispatch
-from scripts.supervise_v2_campaign import ADMISSION_SECONDS, build_launch, disposition, segment_order, verify_child_resume
+from scripts.supervise_v2_campaign import ADMISSION_SECONDS, build_launch, disposition, segment_order, verify_attempt_pointer
 
 
 class CampaignSupervisorTests(unittest.TestCase):
     def test_worker_start_accepts_only_admitted_or_same_job_progress(self):
-        job = 'v2a-012abc-gpu-r2'
+        job = 'v2a-012abc-gpu:2'
         first = (0, '-')
-        state = dict(round_ledger=dict(completed_rounds=12), segment_job='v2a-012abc-gpu')
+        state = dict(round_ledger=dict(completed_rounds=12), segment_job='v2a-012abc-gpu:1')
         pointer = json.dumps(state).encode()
         retry = (12, hashlib.sha256(pointer).hexdigest())
         check = 'startup pointer differs'
@@ -30,18 +30,21 @@ class CampaignSupervisorTests(unittest.TestCase):
         advanced = dict(state, round_ledger=dict(completed_rounds=13), segment_job=job)
         verify_segment_start(advanced, json.dumps(advanced).encode(), retry, job)
         with self.assertRaisesRegex(ValueError, check):
-            verify_segment_start(advanced, json.dumps(advanced).encode(), retry, 'v2a-012abc-gpu-r3')
+            verify_segment_start(advanced, json.dumps(advanced).encode(), retry, 'v2a-012abc-gpu:3')
 
-    def test_child_resume_requires_a_ledger_owned_checkpoint(self):
-        state = dict(round_ledger=dict(completed_rounds=12, latest_snapshot=dict(
-            iteration=11, checkpoint_sha256='a'*64)))
-        verify_child_resume(None, None)
+    def test_admission_rejects_a_foreign_child_or_a_rolled_back_main(self):
+        state = dict(round_ledger=dict(completed_rounds=150, latest_snapshot=dict(iteration=149)))
+        pointer = json.dumps(state)
+        digest = hashlib.sha256(pointer.encode()).hexdigest()
+        verify_attempt_pointer('output', '', None, None)
         with self.assertRaisesRegex(ValueError, 'first admission'):
-            verify_child_resume(state, None)
-        attempt = dict(committed_round=12, checkpoint_sha256='a'*64)
-        verify_child_resume(state, attempt)
+            verify_attempt_pointer('output', pointer, state, None)
+        attempt = dict(committed_round=150, state_sha256=digest)
+        self.assertEqual(verify_attempt_pointer('output', pointer, state, attempt), (150, digest))
         with self.assertRaisesRegex(ValueError, 'prior owned attempt'):
-            verify_child_resume(state, dict(attempt, checkpoint_sha256='b'*64))
+            verify_attempt_pointer('output', pointer + '\n', state, attempt)
+        with self.assertRaisesRegex(ValueError, 'prior owned attempt'):
+            verify_attempt_pointer('output', pointer, state, dict(attempt, committed_round=151), restore={})
 
     def test_segment_requires_durable_milestone_publication_after_retry(self):
         dispatch = MilestoneDispatch.__new__(MilestoneDispatch)
@@ -87,7 +90,8 @@ class CampaignSupervisorTests(unittest.TestCase):
         self.assertEqual(disposition(None, attempt, 100, 1250, at=ADMISSION_SECONDS), 'AMBIGUOUS')
 
     def test_main_adopts_and_child_reuses_its_exact_parent_checkpoint(self):
-        main = {'output': 'v2a-012abc-gpu', 'stop': 1250, 'declaration': {'path': '/out/i', 'sha256': 'd'}}
+        main = {'output': 'v2a-012abc-gpu', 'stop': 1250, 'declaration': {'path': '/out/i', 'sha256': 'd'},
+                'restore': {'milestone_sha256s': {'1000000': 'c'*64, '2000000': 'd'*64}}}
         packet = dict(main=main, launcher={'path': 'launch.py'}, checkout='/tree', reference_run='/reference',
                       previous_runtime='/previous', runtime={'path': '/current', 'sha256': 'r'},
                       resilience={'path': '/support', 'phase_observer_sha256': 'p', 'signal_driver_sha256': 's'},
@@ -98,7 +102,9 @@ class CampaignSupervisorTests(unittest.TestCase):
         self.assertEqual(argv[argv.index('--resume-run')+1], main['output'])
         entry = shlex.split(argv[-1])
         self.assertEqual(entry[entry.index('--adopt-2m-prefix-runtime')+1], '/previous')
-        self.assertEqual(parse_args([*entry[9:], '--require-resume']).segment_start, (100, 'b'*64))
+        options = parse_args([*entry[entry.index('--out'):], '--require-resume'])
+        self.assertEqual(options.segment_start, (100, 'b'*64, 2))
+        self.assertEqual(options.adopted_milestone_sha256s, ['c'*64, 'd'*64])
 
         child = dict(main, output='v2a-111111-gpu', parent_round=450, stop=50)
         name, argv = build_launch(packet, child, dict(attempt, before_round=0, before_state_sha256='-'), 'a'*64)
@@ -108,4 +114,4 @@ class CampaignSupervisorTests(unittest.TestCase):
         self.assertEqual(argv[argv.index('--resilient-support')+1], '/support')
         entry = shlex.split(argv[-1])
         self.assertEqual(entry[entry.index('--cooldown-parent-sha256')+1], 'a'*64)
-        self.assertEqual(parse_args(entry[9:]).segment_start, (0, '-'))
+        self.assertEqual(parse_args(entry[entry.index('--out'):]).segment_start, (0, '-', 2))

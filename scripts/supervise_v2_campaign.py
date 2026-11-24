@@ -99,15 +99,17 @@ def completed_rounds(doc):
     return count
 
 
-def verify_child_resume(state, previous_attempt):
-    if previous_attempt is None:
-        if state is not None:
-            raise ValueError('a child’s first admission requires an empty committed pointer')
-        return
+def verify_attempt_pointer(output, raw_state, state, previous_attempt, *, restore=None):
     committed = completed_rounds(state)
-    checkpoint = None if not committed else state['round_ledger']['latest_snapshot']['checkpoint_sha256']
-    if committed != previous_attempt['committed_round'] or checkpoint != previous_attempt['checkpoint_sha256']:
-        raise ValueError('child resume pointer differs from its prior owned attempt')
+    state_sha256 = '-' if state is None else hashlib.sha256(raw_state.encode()).hexdigest()
+    if previous_attempt is None:
+        if restore is not None:
+            verify_initial_root(output, raw_state, state, restore)
+        elif state is not None:
+            raise ValueError('a child’s first admission requires an empty committed pointer')
+    elif (committed, state_sha256) != (previous_attempt['committed_round'], previous_attempt['state_sha256']):
+        raise ValueError('segment resume pointer differs from its prior owned attempt')
+    return committed, state_sha256
 
 
 def segment_order(main, children):
@@ -186,6 +188,7 @@ def build_launch(packet, segment, attempt, parent_checkpoint):
         '--plan-arm', 'B0', '--reference-run', packet['reference_run'],
         '--max-iterations', str(segment['stop']), '--lanes', '2048', '--row-order', 'file',
         '--segment-outcome', '--segment-start', str(attempt['before_round']), attempt['before_state_sha256'],
+        str(attempt['number']),
         '--torch-memory-fraction', '.45', '--compile-threads', '4', '--recipe', 'R2x1', '--mode', 'cudagraphs',
         '--learner-precision', 'float32', '--native-embedding-backward', '--fallback-random',
         '--profile', 'v2-production', '--campaign-anneal', '--lr-start', 'sqrt',
@@ -194,7 +197,9 @@ def build_launch(packet, segment, attempt, parent_checkpoint):
     if main:
         if not resume:
             raise ValueError('the main campaign must start from the adopted 2M parent')
-        entry.extend(['--adopt-2m-prefix-runtime', packet['previous_runtime']])
+        milestones = segment['restore']['milestone_sha256s']
+        entry.extend(['--adopt-2m-prefix-runtime', packet['previous_runtime'],
+                      '--adopted-milestone-sha256s', milestones['1000000'], milestones['2000000']])
     else:
         entry.extend(['--cooldown-child', f"{OUT_HOST}/{packet['main']['output']}",
                       '--cooldown-parent-sha256', parent_checkpoint])
@@ -255,16 +260,14 @@ class Supervisor:
             return
         raw_state = shared_text(segment['output'], 'state.json')
         doc = json.loads(raw_state) if raw_state.strip() else None
-        before = completed_rounds(doc)
-        if not self.ledger['attempts'] or (self.ledger['segment'] == 0 and before == 100):
-            verify_initial_root(segment['output'], raw_state, doc, segment['restore'])
+        prior = next((attempt for attempt in reversed(self.ledger['attempts'])
+                      if attempt['output'] == segment['output']), None)
+        before, state_sha256 = verify_attempt_pointer(segment['output'], raw_state, doc, prior,
+                                                      restore=segment.get('restore'))
         if before > segment['stop']:
             raise ValueError('committed pointer exceeds the segment stop')
         parent_checkpoint = None
         if 'parent_round' in segment:
-            prior = next((attempt for attempt in reversed(self.ledger['attempts'])
-                          if attempt['segment'] == self.ledger['segment']), None)
-            verify_child_resume(doc, prior)
             main_output = self.packet['main']['output']
             parent_round = segment['parent_round']
             if completed_rounds(shared_file(main_output, 'state.json')) < parent_round:
@@ -274,7 +277,7 @@ class Supervisor:
                 raise ValueError('cooldown parent is outside its committed round')
             parent_checkpoint = snapshot['checkpoint_sha256']
         attempt = dict(number=len(self.ledger['attempts'])+1, segment=self.ledger['segment'],
-                       before_round=before, before_state_sha256=hashlib.sha256(raw_state.encode()).hexdigest() if before else '-',
+                       before_round=before, before_state_sha256=state_sha256,
                        submitted_at=now(), cap_seconds=cap, status='SUBMITTING')
         name, argv = build_launch(self.packet, segment, attempt, parent_checkpoint)
         if read_resource('job', name, '--ignore-not-found') is not None:
@@ -303,12 +306,12 @@ class Supervisor:
         raw_state = shared_text(segment['output'], 'state.json')
         state = json.loads(raw_state) if raw_state.strip() else None
         committed = completed_rounds(state)
+        state_sha256 = '-' if state is None else hashlib.sha256(raw_state.encode()).hexdigest()
         name = attempt['job'].removeprefix('scott-')
         if committed > attempt['before_round']:
-            if state.get('segment_job') != name:
+            if state.get('segment_job') != f"{name}:{attempt['number']}":
                 raise ValueError('committed pointer advanced outside the owned Job')
-        elif (committed != attempt['before_round'] or committed
-              and hashlib.sha256(raw_state.encode()).hexdigest() != attempt['before_state_sha256']):
+        elif (committed, state_sha256) != (attempt['before_round'], attempt['before_state_sha256']):
             raise ValueError('committed pointer differs from the admitted state')
         if committed > attempt['before_round'] and 'first_commit' not in attempt:
             attempt['first_commit'] = dict(at=now(), round=committed)
@@ -317,6 +320,7 @@ class Supervisor:
             receipt = shared_file(segment['output'], f'segment-{name}.json')
             if receipt is not None:
                 if (not committed or receipt['status'] not in ('STOPPED', 'COMPLETE')
+                        or receipt.get('attempt') != attempt['number']
                         or receipt['completed_rounds'] != committed
                         or receipt['requested_round'] != segment['stop']
                         or receipt['declaration_sha256'] != segment['declaration']['effective_sha256']
@@ -334,7 +338,7 @@ class Supervisor:
         # Persist the terminal reconciliation before deleting the confirmed Job.
         checkpoint = None if not committed else state['round_ledger']['latest_snapshot']['checkpoint_sha256']
         attempt.update(status='RELEASING', outcome=outcome, committed_round=committed,
-                       checkpoint_sha256=checkpoint, ended_at=now())
+                       checkpoint_sha256=checkpoint, state_sha256=state_sha256, ended_at=now())
         self.save()
         self.release(attempt)
 

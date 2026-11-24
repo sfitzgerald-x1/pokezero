@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from pokezero.v2_fused_state import REPORTS, SCHEMA, read_state
+from pokezero.v2_fused_state import REPORTS, SCHEMA, read_state, verify_adopted_dispatches
 from scripts.prepare_v2_campaign_root import prepare
 
 
@@ -60,6 +60,7 @@ class CampaignRootTests(unittest.TestCase):
             binding, prefix = fixture(root)
             result = prepare(root, dest, binding)
             self.assertEqual(result['committed_rounds'], 100)
+            self.assertEqual(result['output'], str(dest.resolve()))
             self.assertEqual(read_state(dest), read_state(root))
             self.assertEqual((dest / REPORTS).read_bytes(), prefix)
             self.assertTrue((root / REPORTS).read_bytes().endswith(b'UNCOMMITTED'))
@@ -69,6 +70,23 @@ class CampaignRootTests(unittest.TestCase):
                 self.assertEqual((dest / relative).read_bytes(), (root / relative).read_bytes())
             with self.assertRaises(FileExistsError):
                 prepare(root, dest, binding)
+
+    def test_adopted_dispatches_keep_the_original_signed_stop_binding(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / 'parent'
+            dest = root.with_name('successor')
+            binding, _ = fixture(root)
+            prepare(root, dest, binding)
+            digests = [binding['milestone_sha256s'][str(games)] for games in (1_000_000, 2_000_000)]
+            verify_adopted_dispatches(dest, digests)
+            request = dest / 'artifacts/cpu-panels/2000000/request.json'
+            request.unlink()
+            with self.assertRaisesRegex(ValueError, 'original 2000000 dispatch is missing'):
+                verify_adopted_dispatches(dest, digests)
+            self.assertFalse(request.exists())
+            request.write_bytes((root / request.relative_to(dest)).read_bytes() + b'\n')
+            with self.assertRaisesRegex(ValueError, 'original 2000000 dispatch differs'):
+                verify_adopted_dispatches(dest, digests)
 
     def test_wrong_actor_digest_cannot_publish_a_partial_root(self):
         with TemporaryDirectory() as directory:

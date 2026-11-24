@@ -120,7 +120,8 @@ def prepare(source, output, binding):
         if output.exists() or output.is_symlink():
             raise FileExistsError(output)
         staging.rename(output)
-    return dict(committed_rounds=100, state_sha256=binding['state_sha256'], report_sha256=report_digest)
+    return dict(output=str(output.resolve()), committed_rounds=100, state_sha256=binding['state_sha256'],
+                report_sha256=report_digest)
 
 
 def main():
