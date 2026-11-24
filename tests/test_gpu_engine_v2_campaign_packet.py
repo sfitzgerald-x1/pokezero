@@ -18,17 +18,20 @@ class CampaignPacketTests(unittest.TestCase):
             rebind_runtime(previous, old, dict(new, species=['changed']), pool, policy, 'f'*40)
 
     def test_packet_binds_absolute_declaration_paths_and_parent_round(self):
-        config = dict(checkout='/checkout', source_commit='a'*40, launcher={}, cpu=32, memory='896Gi',
+        config = dict(checkout='/checkout', source_commit='a'*40, launcher={}, resilience={}, cpu=32, memory='896Gi',
                       reference_run='/reference', stop_key_reference='existing:reference',
                       previous_runtime={'path': '/previous'}, main={'output': 'v2a-012abc-gpu'},
                       children=[{'parent_games': 13_500_000, 'output': 'v2a-765432-gpu'}])
         declarations = {
-            'main': {'path': 'main.json', 'sha256': 'd'*64, 'stops': [1250, 2500, 3750, 5000]},
-            'children': [{'parent_games': 13_500_000, 'path': 'fork.json', 'sha256': 'e'*64, 'stop': 75}],
+            'main': {'path': 'main.json', 'sha256': 'd'*64, 'effective_sha256': 'f'*64,
+                     'stops': [1250, 2500, 3750, 5000]},
+            'children': [{'parent_games': 13_500_000, 'path': 'fork.json', 'sha256': 'e'*64,
+                          'effective_sha256': 'a'*64, 'stop': 75}],
         }
         runtime = {'path': '/new-runtime', 'sha256': 'f'*64}
         packet = build_packet(config, declarations, Path('/bundle'), runtime)
-        self.assertEqual(packet['main']['declaration'], {'path': '/bundle/main.json', 'sha256': 'd'*64})
+        self.assertEqual(packet['main']['declaration'],
+                         {'path': '/bundle/main.json', 'sha256': 'd'*64, 'effective_sha256': 'f'*64})
         self.assertEqual(packet['children'][0]['parent_round'], 675)
         self.assertEqual(packet['children'][0]['stop'], 75)
         self.assertEqual(packet['runtime'], runtime)

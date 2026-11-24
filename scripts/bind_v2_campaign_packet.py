@@ -46,7 +46,8 @@ def build_packet(config, declarations, declarations_root, runtime_ref):
         relative = Path(row['path'])
         if relative.is_absolute() or len(relative.parts) != 1 or relative.name == '..':
             raise ValueError('expected a declaration filename in the sealed bundle')
-        return {'path': str(declarations_root / relative), 'sha256': row['sha256']}
+        return {'path': str(declarations_root / relative), 'sha256': row['sha256'],
+                'effective_sha256': row['effective_sha256']}
 
     main = dict(config['main'], stops=declarations['main']['stops'],
                 declaration=reference(declarations['main']))
@@ -57,7 +58,7 @@ def build_packet(config, declarations, declarations_root, runtime_ref):
             raise ValueError('cooldown parent is outside a committed round boundary')
         children.append(dict(child, parent_round=parent_games // CAMPAIGN_GAMES_PER_ROUND,
                              stop=row['stop'], declaration=reference(row)))
-    fields = ('checkout', 'source_commit', 'launcher', 'cpu', 'memory',
+    fields = ('checkout', 'source_commit', 'launcher', 'resilience', 'cpu', 'memory',
               'reference_run', 'stop_key_reference')
     return dict({key: config[key] for key in fields}, main=main, children=children,
                 previous_runtime=config['previous_runtime']['path'], runtime=runtime_ref)
@@ -71,6 +72,8 @@ def main():
     parser.add_argument('--declarations', type=Path, required=True, help='declaration manifest')
     parser.add_argument('--declarations-root', type=Path, required=True, help='shared path used by training ranks')
     parser.add_argument('--runtime-path', type=Path, required=True, help='shared runtime path used by training ranks')
+    parser.add_argument('--root-binding', type=Path, required=True)
+    parser.add_argument('--restore-result', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
     config = json.loads(args.config.read_bytes())
@@ -90,6 +93,18 @@ def main():
     runtime_data = _json(runtime).encode()
     runtime_ref = dict(path=str(args.runtime_path), sha256=digest(runtime_data))
     packet = build_packet(config, declarations, args.declarations_root, runtime_ref)
+    receipt = args.restore_result.read_bytes()
+    restored = json.loads(receipt)
+    binding = json.loads(args.root_binding.read_bytes())
+    if (restored['output'] != f"/shared/scott/v2p/{packet['main']['output']}"
+            or restored['committed_rounds'] != 100
+            or restored['state_sha256'] != binding['state_sha256']
+            or declarations['parent_declaration_sha256'] != binding['declaration_sha256']):
+        parser.error('restored root differs from the selected 2M prefix and declared output')
+    packet['main']['restore'] = dict(
+        state_sha256=binding['state_sha256'], checkpoint_sha256=binding['checkpoint_sha256'],
+        declaration_sha256=binding['declaration_sha256'], receipt_sha256=digest(receipt),
+    )
     args.out.mkdir()
     (args.out / 'runtime.json').write_bytes(runtime_data)
     (args.out / 'packet.json').write_text(_json(packet) + '\n')

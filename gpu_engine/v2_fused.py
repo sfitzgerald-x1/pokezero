@@ -355,6 +355,8 @@ def argument_parser():
     parser.add_argument('--arm', default='B', help='model shape for --config')
     parser.add_argument('--iterations', type=int, default=2, help='iterations for --config (1 or 2)')
     parser.add_argument('--max-iterations', type=int, default=None, help='stop after this many declared iterations')
+    parser.add_argument('--segment-outcome', action='store_true',
+        help='publish the durable final outcome for the supervised Job')
     parser.add_argument('--lanes', type=int, default=2048)
     parser.add_argument('--mode', default='cudagraphs')
     parser.add_argument('--native-embedding-backward', action='store_true',
@@ -1064,6 +1066,16 @@ def main(argv=None, *, distribution=None):
         if compact and reports:
             summary['iterations'] = v2_fused_state.read_state(out)['reports']
         write_json(out / 'report.json', summary)
+        if args.segment_outcome:
+            name = os.environ['V2_RUN_NAME']
+            if not name or Path(name).name != name:
+                raise ValueError('supervised segment outcome requires a Job name')
+            write_json(out / f'segment-{name}.json', dict(
+                status='STOPPED' if route_stop is not None else 'COMPLETE',
+                completed_rounds=len(reports), requested_round=args.max_iterations,
+                declaration_sha256=declaration_sha256,
+                checkpoint_sha256=snapshots[-1].checkpoint_sha256,
+            ), durable=True)
 
     _rank_zero(distribution, 'final report', write_report)
     log('DONE', wall_seconds=total, iterations=len(reports), games=games)

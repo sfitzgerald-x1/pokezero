@@ -21,7 +21,9 @@ class CampaignSupervisorTests(unittest.TestCase):
         self.assertIsNone(disposition(failed_with_writer, attempt, 120, 1250, at=at))
         failed = dict(observation, failed=True)
         self.assertEqual(disposition(failed, attempt, 120, 1250, at=at), 'RETRY')
-        self.assertEqual(disposition(failed, attempt, 1250, 1250, at=at), 'ADVANCE')
+        self.assertEqual(disposition(failed, attempt, 1250, 1250, at=at), 'RETRY')
+        self.assertEqual(disposition(failed, attempt, 1250, 1250, at=at, terminal_status='COMPLETE'), 'ADVANCE')
+        self.assertEqual(disposition(failed, attempt, 1250, 1250, at=at, terminal_status='STOPPED'), 'SIGNED_STOP')
         self.assertEqual(disposition(dict(observation, complete=True), attempt, 120, 1250, at=at),
                          'STOPPED_SHORT')
 
@@ -37,6 +39,7 @@ class CampaignSupervisorTests(unittest.TestCase):
         main = {'output': 'v2a-012abc-gpu', 'stop': 1250, 'declaration': {'path': '/out/i', 'sha256': 'd'}}
         packet = dict(main=main, launcher={'path': 'launch.py'}, checkout='/tree', reference_run='/reference',
                       previous_runtime='/previous', runtime={'path': '/current', 'sha256': 'r'},
+                      resilience={'path': '/support', 'phase_observer_sha256': 'p', 'signal_driver_sha256': 's'},
                       cpu=32, memory='896Gi', stop_key_reference='env=existing:key')
         attempt = {'number': 2, 'before_round': 100, 'cap_seconds': 3600}
         name, argv = build_launch(packet, main, attempt, None)
@@ -48,6 +51,8 @@ class CampaignSupervisorTests(unittest.TestCase):
         child = dict(main, output='v2a-111111-gpu', parent_round=450, stop=50)
         name, argv = build_launch(packet, child, dict(attempt, before_round=0), 'a'*64)
         self.assertEqual(name, 'scott-v2a-111111-gpu')
-        self.assertIn('--require-fresh', argv)
+        self.assertNotIn('--require-fresh', argv)
+        self.assertNotIn('--resume-run', argv)
+        self.assertEqual(argv[argv.index('--resilient-support')+1], '/support')
         entry = shlex.split(argv[-1])
         self.assertEqual(entry[entry.index('--cooldown-parent-sha256')+1], 'a'*64)

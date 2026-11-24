@@ -43,14 +43,50 @@ def read_resource(*args):
     return json.loads(output) if output.strip() else None
 
 
-def shared_file(root, relative, *, line=None):
+def shared_text(root, relative, *, line=None):
     path = f'{OUT_HOST}/{root}/{relative}'
     script = 'if test -s "$1"; then cat "$1"; fi'
     if line is not None:
         script = 'test -s "$1" && sed -n "$2{p;q;}" "$1"'
-    output = run([*BASE, 'exec', 'eigen-stage-0', '-c', 'stage', '--', 'sh', '-c',
-                  script, 'sh', path, str(line or 0)])
+    return run([*BASE, 'exec', 'eigen-stage-0', '-c', 'stage', '--', 'sh', '-c',
+                script, 'sh', path, str(line or 0)])
+
+
+def shared_file(root, relative, *, line=None):
+    output = shared_text(root, relative, line=line)
     return json.loads(output) if output.strip() else None
+
+
+def verify_initial_root(output, text, state, restore):
+    if (completed_rounds(state) != 100
+            or hashlib.sha256(text.encode()).hexdigest() != restore['state_sha256']
+            or state['declaration_sha256'] != restore['declaration_sha256']):
+        raise ValueError('production root differs from the bound 2M pointer')
+    snap = state['round_ledger']['latest_snapshot']
+    checkpoint = Path(snap['checkpoint'])
+    if (snap['checkpoint_sha256'] != restore['checkpoint_sha256']
+            or checkpoint.parent != Path('artifacts') or checkpoint.suffix != '.pt'):
+        raise ValueError('production root differs from the selected 2M checkpoint')
+    path = f'{OUT_HOST}/{output}/{checkpoint}'
+    digest = run([*BASE, 'exec', 'eigen-stage-0', '-c', 'stage', '--', 'sha256sum', path]).split()[0]
+    if digest != restore['checkpoint_sha256']:
+        raise ValueError('selected 2M checkpoint bytes differ at first admission')
+
+
+def verify_signed_release(data, signature, signers, packet_data, ledger_path):
+    result = subprocess.run(
+        ['ssh-keygen', '-Y', 'verify', '-f', str(signers), '-I', 'scott',
+         '-n', 'pokezero-100m', '-s', str(signature)],
+        input=data, capture_output=True, timeout=15,
+    )
+    if result.returncode:
+        raise ValueError('Scott’s release signature did not verify')
+    release = json.loads(data)
+    if (release['packet_sha256'] != hashlib.sha256(packet_data).hexdigest()
+            or type(release['gpu_seconds']) is not int or release['gpu_seconds'] <= 0
+            or str(ledger_path.resolve()) != release['ledger']):
+        raise ValueError('signed release differs from the packet, finite budget or canonical ledger')
+    return release
 
 
 def completed_rounds(doc):
@@ -103,7 +139,7 @@ def observe_job(name):
                 queue=queue)
 
 
-def disposition(observed, attempt, committed, stop, *, at):
+def disposition(observed, attempt, committed, stop, *, at, terminal_status=None):
     if observed is None:
         return 'AMBIGUOUS' if at - epoch(attempt['submitted_at']) >= ADMISSION_SECONDS else None
     if not attempt.get('ever_admitted') and not observed['admitted']:
@@ -111,8 +147,12 @@ def disposition(observed, attempt, committed, stop, *, at):
             return 'ADMISSION_EXPIRED'
     if observed['live'] or not (observed['complete'] or observed['failed']):
         return None
-    if committed == stop:
+    if terminal_status == 'STOPPED':
+        return 'SIGNED_STOP'
+    if committed == stop and terminal_status == 'COMPLETE':
         return 'ADVANCE'
+    if committed == stop:
+        return 'RETRY'
     if observed['complete'] or committed > stop:
         return 'STOPPED_SHORT'
     return 'RETRY'
@@ -125,6 +165,7 @@ def build_launch(packet, segment, attempt, parent_checkpoint):
     name = f"{output}-r{attempt['number']}" if resume else output
     runtime = packet['runtime']
     declaration = segment['declaration']
+    resilience = packet['resilience']
     worker_seconds = attempt['cap_seconds'] - EXEC_MARGIN_SECONDS
     entry = [
         '-m', 'gpu_engine.v2_distributed', '--ranks', '4', '--timeout-seconds', str(worker_seconds),
@@ -133,6 +174,7 @@ def build_launch(packet, segment, attempt, parent_checkpoint):
         '--runtime', runtime['path'], '--runtime-sha256', runtime['sha256'],
         '--plan-arm', 'B0', '--reference-run', packet['reference_run'],
         '--max-iterations', str(segment['stop']), '--lanes', '2048', '--row-order', 'file',
+        '--segment-outcome',
         '--torch-memory-fraction', '.45', '--compile-threads', '4', '--recipe', 'R2x1', '--mode', 'cudagraphs',
         '--learner-precision', 'float32', '--native-embedding-backward', '--fallback-random',
         '--profile', 'v2-production', '--campaign-anneal', '--lr-start', 'sqrt',
@@ -145,13 +187,18 @@ def build_launch(packet, segment, attempt, parent_checkpoint):
     else:
         entry.extend(['--cooldown-child', f"{OUT_HOST}/{packet['main']['output']}",
                       '--cooldown-parent-sha256', parent_checkpoint])
-    options = ['--resume-run', output] if resume else ['--require-fresh']
+    # An initially fresh child can be readmitted in the same Job after committing.
+    # The supervisor checks the state before admission, rather than at every pod start.
+    options = ['--resume-run', output] if resume else []
     argv = [
         sys.executable, packet['launcher']['path'], '--clone', packet['checkout'],
         '--context', 'potomac', '--name', name, '--gpus', '4',
         '--cpu', str(packet['cpu']), '--memory', packet['memory'],
         '--kueue', '--queue', 'medium', '--admission-hours', '6',
         '--max-exec-seconds', str(attempt['cap_seconds']), '--trace-jax-cache',
+        '--resilient-support', resilience['path'],
+        '--phase-observer-sha256', resilience['phase_observer_sha256'],
+        '--signal-driver-sha256', resilience['signal_driver_sha256'],
         '--secret-env', packet['stop_key_reference'], *options, '--entry', shlex.join(entry),
     ]
     return f'scott-{name}', argv
@@ -196,10 +243,13 @@ class Supervisor:
         if cap < segment['min_exec_seconds']:
             self.stop('GPU_BUDGET_EXHAUSTED')
             return
-        doc = shared_file(segment['output'], 'state.json')
+        raw_state = shared_text(segment['output'], 'state.json')
+        doc = json.loads(raw_state) if raw_state.strip() else None
         before = completed_rounds(doc)
-        if before >= segment['stop']:
-            raise ValueError('unexpected committed segment without a reconciled attempt')
+        if not self.ledger['attempts'] or (self.ledger['segment'] == 0 and before == 100):
+            verify_initial_root(segment['output'], raw_state, doc, segment['restore'])
+        if before > segment['stop']:
+            raise ValueError('committed pointer exceeds the segment stop')
         parent_checkpoint = None
         if 'parent_round' in segment:
             main_output = self.packet['main']['output']
@@ -236,12 +286,26 @@ class Supervisor:
             if attempt.get('placement') != observed['queue']:
                 attempt['placement'] = observed['queue']
                 attempt.setdefault('queue_events', []).append(dict(at=now(), queue=observed['queue']))
-        committed = completed_rounds(shared_file(segment['output'], 'state.json'))
+        state = shared_file(segment['output'], 'state.json')
+        committed = completed_rounds(state)
         if committed < attempt['before_round']:
             raise ValueError('committed pointer regressed below the attempt start')
         if committed > attempt['before_round'] and 'first_commit' not in attempt:
             attempt['first_commit'] = dict(at=now(), round=committed)
-        outcome = disposition(observed, attempt, committed, segment['stop'], at=time.time())
+        terminal_status = None
+        if observed and not observed['live'] and (observed['complete'] or observed['failed']):
+            name = attempt['job'].removeprefix('scott-')
+            receipt = shared_file(segment['output'], f'segment-{name}.json')
+            if receipt is not None:
+                if (not committed or receipt['status'] not in ('STOPPED', 'COMPLETE')
+                        or receipt['completed_rounds'] != committed
+                        or receipt['requested_round'] != segment['stop']
+                        or receipt['declaration_sha256'] != segment['declaration']['effective_sha256']
+                        or receipt['checkpoint_sha256'] != state['round_ledger']['latest_snapshot']['checkpoint_sha256']):
+                    raise ValueError('terminal segment receipt differs from the committed checkpoint or declared stop')
+                terminal_status = receipt['status']
+        outcome = disposition(observed, attempt, committed, segment['stop'], at=time.time(),
+                              terminal_status=terminal_status)
         self.save()
         if outcome is None:
             return
@@ -308,14 +372,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--packet', type=Path, required=True)
     parser.add_argument('--release', type=Path, required=True, help='Scott-approved packet digest and GPU-second budget')
+    parser.add_argument('--release-signature', type=Path, required=True, help='Scott’s detached SSH release signature')
     parser.add_argument('--ledger', type=Path, required=True)
     args = parser.parse_args()
     data = args.packet.read_bytes()
     packet = json.loads(data)
-    release = json.loads(args.release.read_bytes())
-    if (release['packet_sha256'] != hashlib.sha256(data).hexdigest()
-            or type(release['gpu_seconds']) is not int or release['gpu_seconds'] <= 0):
-        parser.error('release does not authorize this packet and finite GPU budget')
+    release_data = args.release.read_bytes()
+    signers = Path.home() / '.config' / 'pokezero' / '100m-release-allowed-signers'
+    ledger_path = args.ledger.resolve()
+    release = verify_signed_release(release_data, args.release_signature, signers, data, ledger_path)
     if not all(OPAQUE_GPU.fullmatch(row['output']) for row in [packet['main'], *packet['children']]):
         parser.error('expected opaque GPU output roots')
     if len({row['output'] for row in [packet['main'], *packet['children']]}) != 1 + len(packet['children']):
@@ -324,10 +389,10 @@ def main():
         if not EXEC_MARGIN_SECONDS < row['min_exec_seconds'] <= row['max_exec_seconds'] <= 6 * 86400:
             parser.error('segment execution deadline outside the launcher envelope')
     verify_source(packet)
-    release_binding = hashlib.sha256(args.release.read_bytes()).hexdigest()
-    with args.ledger.with_suffix('.lock').open('a') as lock:
+    release_binding = hashlib.sha256(release_data).hexdigest()
+    with ledger_path.with_suffix('.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return Supervisor(packet, args.ledger, release_binding, release['gpu_seconds']).work()
+        return Supervisor(packet, ledger_path, release_binding, release['gpu_seconds']).work()
 
 
 if __name__ == '__main__':

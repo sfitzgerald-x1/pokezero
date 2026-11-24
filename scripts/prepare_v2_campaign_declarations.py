@@ -1,7 +1,8 @@
 """Prepare the pinned 100M main declaration and its ten base cooldown declarations."""
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
+import hashlib
 import json
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from pokezero.v5_phasec import (
     campaign_iterations,
 )
 from pokezero.v5_run import _json, _sha, manifest_iteration_game_counts
+from pokezero.v5_training import TrainConfig, train_config_metadata
 
 
 COMMITTED_ROUNDS = 100
@@ -39,7 +41,7 @@ def allocate(run_id, rounds, start_round, frontiers, gender):
     ]
 
 
-def build_declarations(parent, pool_sha256):
+def build_declarations(parent, raw_parent, pool_sha256):
     prefix = parent['iterations']
     train = parent['train']
     if (
@@ -50,13 +52,19 @@ def build_declarations(parent, pool_sha256):
         or parent['evaluation']['execution'] != 'deferred'
     ):
         raise ValueError('expected the effective both-seat 5M declaration with the selected R2 recipe')
+    reference = TrainConfig(**raw_parent['train'])
+    expected = train_config_metadata(replace(reference, batch_size=2048, epochs=1, learning_rate=1.18e-4,
+                                             learning_rate_schedule='constant', precision='float32'))
+    if ((reference.batch_size, reference.epochs) != (512, 5)
+            or dict(raw_parent, train=expected) != parent):
+        raise ValueError('the original Phase C declaration must produce the bound effective recipe')
     reserved = prefix[:RESERVED_ROUNDS]
     if any(count != CAMPAIGN_GAMES_PER_ROUND for count in manifest_iteration_game_counts(
         dict(parent, iterations=reserved)
     )):
         raise ValueError('the 2M prefix and reserved S0 rounds must use 20,000 games per round')
 
-    template = dict(parent, pool_sha256=pool_sha256)
+    template = dict(raw_parent, pool_sha256=pool_sha256)
     gender = {key: reserved[-1][-1][key] for key in ('gender_seed', 'gender_domain')}
     frontiers = address_frontiers(reserved)
     extension = allocate(parent['run_id'], MAIN_STOPS[-1], COMMITTED_ROUNDS, frontiers, gender)
@@ -81,22 +89,29 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--parent', type=Path, required=True, help='original effective declaration')
     parser.add_argument('--parent-sha256', required=True)
+    parser.add_argument('--raw-parent', type=Path, required=True, help='original Phase C launch declaration')
+    parser.add_argument('--raw-parent-sha256', required=True)
     parser.add_argument('--pool-sha256', required=True, help='physical combined constructor pool digest')
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
     parent = json.loads(args.parent.read_bytes())
     if _sha(parent) != args.parent_sha256:
         parser.error('effective parent declaration digest differs')
+    raw = args.raw_parent.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != args.raw_parent_sha256:
+        parser.error('original Phase C declaration digest differs')
+    raw_parent = json.loads(raw)
     if len(args.pool_sha256) != 64 or any(c not in '0123456789abcdef' for c in args.pool_sha256):
         parser.error('pool digest must be a lowercase SHA-256')
 
-    successor, children, rows = build_declarations(parent, args.pool_sha256)
+    successor, children, rows = build_declarations(parent, raw_parent, args.pool_sha256)
     args.out.mkdir()
     manifest = {
         'parent_declaration_sha256': args.parent_sha256,
         'pool_sha256': args.pool_sha256,
         'required_team_rows': rows,
-        'main': {'path': 'main.json', 'sha256': _sha(successor), 'stops': MAIN_STOPS},
+        'main': {'path': 'main.json', 'sha256': _sha(successor),
+                 'effective_sha256': _sha(dict(successor, train=parent['train'])), 'stops': MAIN_STOPS},
         'children': [],
     }
     (args.out / 'main.json').write_text(_json(successor))
@@ -105,6 +120,7 @@ def main():
         (args.out / path).write_text(_json(child))
         manifest['children'].append({
             'path': path, 'sha256': _sha(child), 'parent_games': parent_games,
+            'effective_sha256': _sha(dict(child, train=parent['train'])),
             'stop': len(child['iterations']),
         })
     (args.out / 'manifest.json').write_text(_json(manifest) + '\n')

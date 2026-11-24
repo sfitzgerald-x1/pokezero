@@ -4,6 +4,7 @@ import unittest
 from pokezero.v2_fused_state import SCHEMA, campaign_batch_addresses, verify_campaign_prefix
 from pokezero.v5_phasec import CAMPAIGN_COOLDOWN_GAMES_BY_PARENT, campaign_iterations
 from pokezero.v5_run import _sha, manifest_iteration_game_counts
+from pokezero.v5_training import TrainConfig, train_config_metadata
 from scripts.prepare_v2_campaign_declarations import build_declarations
 
 
@@ -16,12 +17,15 @@ class CampaignReleaseDeclarationsTests(unittest.TestCase):
         )
         parent = {
             'run_id': 'arm-a', 'pool_sha256': 'a' * 64, 'train_both_seats': True, 'max_requests': 1024,
-            'train': {'batch_size': 2048, 'epochs': 1, 'learning_rate': 1.18e-4},
+            'train': train_config_metadata(TrainConfig(seed=0,batch_size=2048,epochs=1,learning_rate=1.18e-4)),
             'evaluation': {'execution': 'deferred', 'interval_games': 1_000_000},
             'iterations': [[asdict(batch) for batch in round_] for round_ in iterations],
         }
-        main, forks, required_team_rows = build_declarations(parent, 'b' * 64)
-        verify_campaign_prefix(parent, main, {
+        raw = dict(parent, train=train_config_metadata(TrainConfig(seed=0,batch_size=512,epochs=5,
+            learning_rate=5.9e-5, learning_rate_schedule='mit-thesis', precision='bfloat16')))
+        main, forks, required_team_rows = build_declarations(parent, raw, 'b' * 64)
+        self.assertEqual(main['train'], raw['train'])
+        verify_campaign_prefix(parent, dict(main, train=parent['train']), {
             'round_ledger': {'completed_rounds': 100, 'schema': SCHEMA},
             'declaration_sha256': _sha(parent),
         })
@@ -33,6 +37,7 @@ class CampaignReleaseDeclarationsTests(unittest.TestCase):
         frontier = tuple(start + size for start, size in campaign_batch_addresses(last_reserved_batch))
         segments = [main['iterations'][100:]]
         for parent_games, child in forks.items():
+            self.assertEqual(child['train'], raw['train'])
             expected_games = CAMPAIGN_COOLDOWN_GAMES_BY_PARENT[parent_games]
             self.assertEqual(sum(manifest_iteration_game_counts(child)), expected_games)
             self.assertEqual(child['evaluation']['interval_games'], expected_games)
