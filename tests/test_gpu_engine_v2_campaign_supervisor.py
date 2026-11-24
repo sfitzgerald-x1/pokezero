@@ -1,14 +1,18 @@
 import hashlib
 import json
+from pathlib import Path
 import shlex
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from gpu_engine.v2_fused import parse_args
 from pokezero.v2_fused_state import verify_segment_start
 from pokezero.v5_deferred_evaluation import MilestoneDispatch
-from scripts.supervise_v2_campaign import ADMISSION_SECONDS, build_launch, disposition, segment_order, verify_attempt_pointer
+from scripts.supervise_v2_campaign import (
+    ADMISSION_SECONDS, Supervisor, build_launch, disposition, segment_order, verify_attempt_pointer,
+)
 
 
 class CampaignSupervisorTests(unittest.TestCase):
@@ -65,6 +69,44 @@ class CampaignSupervisorTests(unittest.TestCase):
         early = {'output': 'v2a-222222-gpu', 'parent_round': 450, 'stop': 50}
         order = segment_order(main, [late, early])
         self.assertEqual([item['stop'] for item in order], [1250, 50, 2500, 150, 3750, 5000])
+
+    def test_cooldown_admission_and_completion_reject_rolled_back_outputs(self):
+        main = dict(output='v2a-012abc-gpu', stops=[5000])
+        child = dict(output='v2a-111111-gpu', parent_round=4050, stop=450,
+                     min_exec_seconds=600, max_exec_seconds=3600)
+
+        def pointer(rounds):
+            return json.dumps(dict(round_ledger=dict(completed_rounds=rounds,
+                                                     latest_snapshot=dict(iteration=rounds - 1))))
+
+        def attempt(output, rounds):
+            return dict(output=output, status='RELEASED', outcome='ADVANCE', committed_round=rounds,
+                        state_sha256=hashlib.sha256(pointer(rounds).encode()).hexdigest())
+
+        raw = {main['output']: pointer(4050), child['output']: ''}
+        module = 'scripts.supervise_v2_campaign'
+        with TemporaryDirectory() as directory, patch(f'{module}.shared_text', side_effect=lambda root, _: raw[root]), \
+                patch(f'{module}.shared_file') as report:
+            supervisor = Supervisor(dict(main=main, children=[child]), Path(directory) / 'ledger.json', 'bound', 14400)
+            supervisor.ledger.update(segment=1, attempts=[attempt(main['output'], 5000)])
+            with self.assertRaisesRegex(ValueError, 'prior owned attempt'):
+                supervisor.submit(child)
+            report.assert_not_called()
+
+            supervisor.ledger['attempts'].append(attempt(child['output'], 450))
+            supervisor.ledger['segment'] = 2
+            raw[child['output']] = pointer(450)
+            with self.assertRaisesRegex(ValueError, 'prior owned attempt'):
+                supervisor.finish()
+            self.assertEqual(supervisor.ledger['status'], 'RUNNING')
+
+            raw[main['output']] = pointer(5000)
+            raw[child['output']] += '\n'
+            with self.assertRaisesRegex(ValueError, 'prior owned attempt'):
+                supervisor.finish()
+            raw[child['output']] = pointer(450)
+            self.assertEqual(supervisor.work(), 0)
+            self.assertEqual(supervisor.ledger['status'], 'COMPLETE')
 
     def test_requeue_does_not_retry_and_terminal_requires_no_writer(self):
         attempt = {'submitted_at': '1970-01-01T00:00:00Z', 'ever_admitted': True}

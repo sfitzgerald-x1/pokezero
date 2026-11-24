@@ -252,6 +252,26 @@ class Supervisor:
         self.ledger.update(status=outcome, finished_at=now())
         self.save()
 
+    def latest_attempt(self, output):
+        return next((attempt for attempt in reversed(self.ledger['attempts'])
+                     if attempt['output'] == output), None)
+
+    def reconciled_rounds(self, output):
+        attempt = self.latest_attempt(output)
+        if attempt is None or (attempt['status'], attempt['outcome']) != ('RELEASED', 'ADVANCE'):
+            raise ValueError('segment output has no completed, released attempt')
+        raw_state = shared_text(output, 'state.json')
+        state = json.loads(raw_state) if raw_state.strip() else None
+        rounds, _ = verify_attempt_pointer(output, raw_state, state, attempt)
+        return rounds
+
+    def finish(self):
+        stops = {segment['output']: segment['stop'] for segment in self.segments}
+        for output, stop in stops.items():
+            if self.reconciled_rounds(output) != stop:
+                raise ValueError('completed segment output differs from the declared stop')
+        self.stop('COMPLETE')
+
     def submit(self, segment):
         remaining = self.budget - self.ledger['reserved_gpu_seconds']
         cap = min(segment['max_exec_seconds'], remaining // GPU_COUNT)
@@ -260,8 +280,7 @@ class Supervisor:
             return
         raw_state = shared_text(segment['output'], 'state.json')
         doc = json.loads(raw_state) if raw_state.strip() else None
-        prior = next((attempt for attempt in reversed(self.ledger['attempts'])
-                      if attempt['output'] == segment['output']), None)
+        prior = self.latest_attempt(segment['output'])
         before, state_sha256 = verify_attempt_pointer(segment['output'], raw_state, doc, prior,
                                                       restore=segment.get('restore'))
         if before > segment['stop']:
@@ -270,7 +289,7 @@ class Supervisor:
         if 'parent_round' in segment:
             main_output = self.packet['main']['output']
             parent_round = segment['parent_round']
-            if completed_rounds(shared_file(main_output, 'state.json')) < parent_round:
+            if self.reconciled_rounds(main_output) < parent_round:
                 raise ValueError('cooldown parent has not committed')
             snapshot = shared_file(main_output, 'reports.jsonl', line=parent_round)['report']['snapshot']
             if snapshot['iteration'] != parent_round - 1:
@@ -364,13 +383,13 @@ class Supervisor:
     def work(self):
         failures = 0
         while self.ledger['status'] == 'RUNNING':
-            if self.ledger['segment'] == len(self.segments):
-                self.stop('COMPLETE')
-                break
-            segment = self.segments[self.ledger['segment']]
-            attempts = self.ledger['attempts']
-            active = attempts[-1] if attempts and attempts[-1]['status'] != 'RELEASED' else None
             try:
+                if self.ledger['segment'] == len(self.segments):
+                    self.finish()
+                    break
+                segment = self.segments[self.ledger['segment']]
+                attempts = self.ledger['attempts']
+                active = attempts[-1] if attempts and attempts[-1]['status'] != 'RELEASED' else None
                 if active is None:
                     self.submit(segment)
                 elif active['status'] == 'RELEASING':
