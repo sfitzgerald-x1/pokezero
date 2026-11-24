@@ -96,6 +96,8 @@ def _plan(document,profile,arm,category_vocabulary):
     extras={}
     if 'historical_anchor_slots' in document:
         extras['historical_anchor_slots']=document['historical_anchor_slots']
+    if 'train_both_seats' in document:
+        extras['train_both_seats']=document['train_both_seats']
     if 'evaluation' in document:
         if not hasattr(run,'EvaluationProtocol'):raise run.MissingDependency('reviewed milestone source is not integrated')
         evaluation = document['evaluation']

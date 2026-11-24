@@ -95,6 +95,20 @@ class WorkerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'crosses'):
                 self.load(record(root / 'crossing-plan.json', wrong), runtime, contract)
 
+    def test_both_seats_is_bound_only_when_enabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe, contract, original, runtime, _ = self.fixture(root)
+            self.assertNotIn('train_both_seats', recipe.manifest())
+            self.assertFalse(self.load(original, runtime, contract).plan.train_both_seats)
+            enabled = replace(recipe, train_both_seats=True)
+            document = record(root / 'both.json', enabled.manifest())
+            self.assertEqual(self.load(document, runtime, contract).plan, enabled)
+            with self.assertRaisesRegex(ValueError, 'requires the fused V2 runner'):
+                run.run(enabled, root, backend=NS(), enable_v5=True)
+            with self.assertRaisesRegex(ValueError, 'bool train_both_seats'):
+                replace(recipe, train_both_seats=1)
+
     def test_five_million_compact_games_round_trip_without_materializing_games(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -152,10 +152,37 @@ def append_round(out, committed_bytes, report, encoding_receipt):
     return committed_bytes + len(data)
 
 
-def read_state(out, *, include_full_reports=True):
+def verify_segment_start(state, pointer_data, start, job):
+    """Accept the admitted pointer or later progress committed by this Job."""
+    round_count, expected_digest = start
+    if state is None and round_count == 0:
+        return
+    if state is not None:
+        committed = state.get('round_ledger', {}).get('completed_rounds')
+        if type(committed) is int and committed > 0:
+            if committed == round_count and hashlib.sha256(pointer_data).hexdigest() == expected_digest:
+                return
+            if committed > round_count and state.get('segment_job') == job:
+                return
+    raise ValueError('segment startup pointer differs from admission and was not advanced by this Job')
+
+
+def verify_adopted_dispatches(out, digests):
+    """Verify the exact historical requests used by any signed route stop."""
+    for games, digest in zip((1_000_000, 2_000_000), digests, strict=True):
+        path = out / 'artifacts' / 'cpu-panels' / str(games) / 'request.json'
+        try:
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        except FileNotFoundError as error:
+            raise ValueError(f'original {games} dispatch is missing') from error
+        if actual != digest:
+            raise ValueError(f'original {games} dispatch differs from its bound digest')
+
+
+def read_state(out, *, include_full_reports=True, pointer_data=None):
     """Read legacy state or reconstruct the committed prefix from a compact pointer."""
     out = Path(out)
-    state = json.loads((out / 'state.json').read_bytes())
+    state = json.loads((out / 'state.json').read_bytes() if pointer_data is None else pointer_data)
     if type(state) is not dict:
         raise ValueError('fused resume manifest must be a JSON object')
     if 'round_ledger' not in state:

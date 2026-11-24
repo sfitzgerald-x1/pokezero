@@ -122,25 +122,29 @@ CAMPAIGN_ROUNDS = frozenset({250, 5000} | {
 
 
 def campaign_iterations(run_id, rounds, *, stream_start, team_start, identity_seed_start, constructor_seed_start,
-                        sampling_seed_start, gender_seed, gender_domain, gender_root_start):
-    """Declare a fixed bank from externally allocated ranges."""
+                        sampling_seed_start, gender_seed, gender_domain, gender_root_start, start_round=0):
+    """Declare a fixed bank from externally allocated ranges, starting at an absolute round."""
     if type(rounds) is not int or rounds not in CAMPAIGN_ROUNDS:
         raise ValueError('campaign needs a supported main-line or cooldown horizon')
+    if type(start_round) is not int or not 0 <= start_round < rounds:
+        raise ValueError('campaign start round must precede its declared horizon')
     for value in (stream_start, team_start, identity_seed_start, constructor_seed_start,
                   sampling_seed_start, gender_seed, gender_domain, gender_root_start):
         runs._seed(value)
     batch_rows = 2048
     iterations = []
     block = 0
-    for iteration in range(rounds):
+    first_ordinal = start_round * CAMPAIGN_GAMES_PER_ROUND
+    for iteration in range(start_round, rounds):
         start = iteration * CAMPAIGN_GAMES_PER_ROUND
         stop = start + CAMPAIGN_GAMES_PER_ROUND
         batches = []
         for offset in range(start, stop, batch_rows):
-            games = runs.GameRange(run_id, offset, min(batch_rows, stop - offset), stream_start + offset,
-                                  identity_seed_start + offset, team_start + 2 * offset)
+            relative = offset - first_ordinal
+            games = runs.GameRange(run_id, offset, min(batch_rows, stop - offset), stream_start + relative,
+                                  identity_seed_start + relative, team_start + 2 * relative)
             batches.append(runs.CampaignBatch(games, constructor_seed_start + block, sampling_seed_start + block,
-                                              gender_seed, gender_domain, gender_root_start + offset))
+                                              gender_seed, gender_domain, gender_root_start + relative))
             block += 1
         iterations.append(tuple(batches))
     return tuple(iterations)

@@ -9,7 +9,6 @@ from dataclasses import asdict, dataclass
 import hashlib
 import importlib
 import importlib.metadata
-import io
 import json
 import math
 from pathlib import Path
@@ -35,6 +34,11 @@ def _hex(value, length):
     return type(value) is str and re.fullmatch(f"[a-f0-9]{{{length}}}", value) is not None
 
 
+def _file_identity(stream):
+    stat = os.fstat(stream.fileno())
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
 @dataclass(frozen=True)
 class ConstructorPool:
     arrays: object
@@ -47,30 +51,33 @@ class ConstructorPool:
 
 
 def load_constructor_pool(path):
-    """Load one byte snapshot, retaining Nature/EVs and read-only constructor arrays."""
+    """Load a pinned NPZ one array at a time into immutable storage."""
     import numpy as np
+    arrays = {}
+    descriptions = {}
     with Path(path).open("rb") as stream:
-        before=os.fstat(stream.fileno());payload=stream.read();after=os.fstat(stream.fileno())
-    identity=lambda s:(s.st_dev,s.st_ino,s.st_size,s.st_mtime_ns)
-    if identity(before)!=identity(after) or len(payload)!=after.st_size:
-        raise ValueError("CONSTRUCTOR_POOL_CHANGED_DURING_READ")
-    with np.load(io.BytesIO(payload),allow_pickle=False) as archive:
-        metadata=json.loads(archive["metadata_utf8"].tobytes())
-        fields=(*_POOL_STATE_FIELDS,"nature","evs")
-        if not set(fields)<=set(archive.files):raise ValueError("POOL_CONSTRUCTOR_FIELDS_MISSING")
-        arrays={name:archive[name] for name in fields}
-        for name in ("gender","happiness"):
-            if name in archive.files:arrays[name]=archive[name]
-    descriptions={}
-    for name,array in arrays.items():
-        if array.dtype.kind not in "iu":raise ValueError("INTEGER_CONSTRUCTOR_POOL_REQUIRED: "+name)
-        # A flag on an owning ndarray can be reversed. An immutable bytes
-        # backing prevents resetting writeable even through its base view.
-        array=np.frombuffer(array.tobytes(),dtype=array.dtype).reshape(array.shape)
-        arrays[name]=array
-        descriptions[name]=dict(shape=list(array.shape),dtype=str(array.dtype),
-            sha256=hashlib.sha256(array.tobytes()).hexdigest())
-    receipt=dict(schema="pokezero.constructor-pool.v1",pool_sha256=hashlib.sha256(payload).hexdigest(),
+        identity = _file_identity(stream)
+        pool_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+        stream.seek(0)
+        with np.load(stream, allow_pickle=False) as archive:
+            metadata = json.loads(archive["metadata_utf8"].tobytes())
+            fields = (*_POOL_STATE_FIELDS, "nature", "evs")
+            if not set(fields) <= set(archive.files):
+                raise ValueError("POOL_CONSTRUCTOR_FIELDS_MISSING")
+            fields += tuple(name for name in ("gender", "happiness") if name in archive.files)
+            for name in fields:
+                array = archive[name]
+                if array.dtype.kind not in "iu":
+                    raise ValueError("INTEGER_CONSTRUCTOR_POOL_REQUIRED: " + name)
+                # Immutable bytes prevent callers from resetting the writeable flag.
+                raw = array.tobytes()
+                array = np.frombuffer(raw, dtype=array.dtype).reshape(array.shape)
+                arrays[name] = array
+                descriptions[name] = dict(shape=list(array.shape), dtype=str(array.dtype),
+                                          sha256=hashlib.sha256(raw).hexdigest())
+        if _file_identity(stream) != identity:
+            raise ValueError("CONSTRUCTOR_POOL_CHANGED_DURING_READ")
+    receipt=dict(schema="pokezero.constructor-pool.v1",pool_sha256=pool_sha256,
         metadata_sha256=mapping._metadata_sha(metadata),arrays=descriptions)
     return ConstructorPool(MappingProxyType(arrays),_json(metadata),_json(receipt),_sha(receipt))
 
@@ -88,10 +95,6 @@ def verify_constructor_pool_prefix(original, successor, teams, *, successor_team
             raise ValueError('constructor pool digest differs from its runtime binding')
         stream.seek(0)
 
-    def file_identity(stream):
-        stat = os.fstat(stream.fileno())
-        return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
-
     def header(stream):
         version = np.lib.format.read_magic(stream)
         if version == (1, 0):
@@ -104,7 +107,7 @@ def verify_constructor_pool_prefix(original, successor, teams, *, successor_team
                          'target85_move_count', 'tensor_move_slots'}
     with Path(original['path']).open('rb') as before, Path(successor['path']).open('rb') as after:
         files = (before, after)
-        identities = tuple(file_identity(stream) for stream in files)
+        identities = tuple(_file_identity(stream) for stream in files)
         check_digest(before, original)
         check_digest(after, successor)
         with np.load(before, allow_pickle=False) as old, np.load(after, allow_pickle=False) as new:
@@ -137,7 +140,7 @@ def verify_constructor_pool_prefix(original, successor, teams, *, successor_team
                         if len(left) != size or left != right:
                             raise ValueError(f'committed constructor bytes differ for {name}')
                         remaining -= size
-        if tuple(file_identity(stream) for stream in files) != identities:
+        if tuple(_file_identity(stream) for stream in files) != identities:
             raise ValueError('constructor pool changed while checking the committed roster')
 
 
@@ -151,8 +154,10 @@ def _pool(pool,*,rehash=False):
         description=receipt["arrays"][name]
         if array.flags.writeable or list(array.shape)!=description["shape"] or str(array.dtype)!=description["dtype"]:
             raise ValueError("CONSTRUCTOR_POOL_STORAGE_CHANGED")
-        if rehash and hashlib.sha256(array.tobytes()).hexdigest()!=description["sha256"]:
-            raise ValueError("CONSTRUCTOR_POOL_CONTENT_CHANGED")
+        if rehash:
+            content = array if array.flags.c_contiguous else array.tobytes()
+            if hashlib.sha256(content).hexdigest() != description["sha256"]:
+                raise ValueError("CONSTRUCTOR_POOL_CONTENT_CHANGED")
     return receipt
 
 

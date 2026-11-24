@@ -27,6 +27,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import resource
 import time
 import uuid
 
@@ -137,7 +139,8 @@ def construct(context, backend, iteration, current, past, ordinal, *, shard=None
         required = tuple(dict.fromkeys([current.archive_sha256, *(a['opponent']['archive_sha256'] for a in recorded)]))
         bindings = rollout.Bindings(plan.model.category_vocabulary_sha256, plan.model.label_vocabulary, prepared.source_sha256,
             (current.archive_sha256,) * 2, (True, True), backend.declaration_sha256)
-        bank = rollout.actor_bank_from_assignments(bindings, required, current_archive=current.archive_sha256, assignments=recorded)
+        bank = rollout.actor_bank_from_assignments(bindings, required, current_archive=current.archive_sha256,
+            assignments=recorded, train_both_seats=getattr(plan, 'train_both_seats', False))
         # Construct the original full block BEFORE slicing. Reconstructing a
         # smaller batch would change shape/index-dependent constructor RNG.
         carry = jax.block_until_ready(backend._construct(batch))
@@ -153,7 +156,32 @@ def construct(context, backend, iteration, current, past, ordinal, *, shard=None
 _AUDIT_GATHER_ROWS = 4096
 
 
-def audit(store, blocks, out):
+def host_memory(cgroup=Path('/sys/fs/cgroup'), proc=Path('/proc/self/cgroup')):
+    """Read the worker's cgroup v2 budget, including any finite ancestor limit."""
+    if not proc.is_file() or not cgroup.is_dir():
+        return {}
+    relative = next((line[3:] for line in proc.read_text().splitlines() if line.startswith('0::')), '')
+    group = cgroup / relative.lstrip('/')
+    candidates = (group, *group.parents) if group.is_dir() else (cgroup,)
+    groups = [path for path in candidates if path.is_relative_to(cgroup)]
+
+    def counter(path, name):
+        file = path / name
+        value = file.read_text().strip() if file.is_file() else ''
+        return int(value) if value.isdecimal() else None
+
+    bounded = [(limit, counter(path, 'memory.current')) for path in groups
+               if (limit := counter(path, 'memory.max')) is not None]
+    result = dict(cgroup_peak_bytes=counter(groups[0], 'memory.peak'))
+    if bounded:
+        result['cgroup_limit_bytes'] = min(limit for limit, _ in bounded)
+        available = [limit - current for limit, current in bounded if current is not None]
+        if available:
+            result['cgroup_available_bytes'] = min(available)
+    return result
+
+
+def audit(store, blocks, out, *, host_workers=None):
     """Compressed host copy of the audited blocks' rows (keys, targets and inputs)."""
     if not blocks:
         return []
@@ -166,6 +194,13 @@ def audit(store, blocks, out):
     written = []
     for index, lo, hi in blocks:
         rows = np.flatnonzero((streams >= lo) & (streams <= hi))
+        if host_workers is not None:
+            row_bytes = sum(value.dtype.itemsize * np.prod(value.shape[1:], dtype=np.int64)
+                            for value in store.arrays.values())
+            available = host_memory().get('cgroup_available_bytes')
+            # Keep room for concurrent rank copies and the compression workspace.
+            if available is not None and host_workers * 2 * len(rows) * row_bytes > available:
+                raise MemoryError('audited replay rows exceed available worker cgroup memory')
         arrays = {name: np.empty((len(rows), *value.shape[1:]), dtype=value.dtype)
                   for name, value in store.arrays.items()}
         for begin in range(0, len(rows), _AUDIT_GATHER_ROWS):
@@ -321,6 +356,12 @@ def argument_parser():
     parser.add_argument('--arm', default='B', help='model shape for --config')
     parser.add_argument('--iterations', type=int, default=2, help='iterations for --config (1 or 2)')
     parser.add_argument('--max-iterations', type=int, default=None, help='stop after this many declared iterations')
+    parser.add_argument('--segment-outcome', action='store_true',
+        help='publish the durable final outcome for the supervised Job')
+    parser.add_argument('--segment-start', nargs=3, metavar=('ROUNDS', 'STATE_SHA256', 'ATTEMPT'),
+        help='bind a supervised Job to its admitted pointer (0 - for a fresh segment)')
+    parser.add_argument('--adopted-milestone-sha256s', nargs=2, metavar=('SHA256_1M', 'SHA256_2M'),
+        help='original dispatch digests required for supervised 2M adoption')
     parser.add_argument('--lanes', type=int, default=2048)
     parser.add_argument('--mode', default='cudagraphs')
     parser.add_argument('--native-embedding-backward', action='store_true',
@@ -342,7 +383,7 @@ def argument_parser():
         help='tick: collection order; file (default for new runs): the file pipeline cache order (block, frame, row, owner). '
              'A resumed run keeps the order recorded in its state.json')
     parser.add_argument('--check-interval', type=int, default=64)
-    parser.add_argument('--recipe', choices=('R5', 'R2', 'R1'), default=None,
+    parser.add_argument('--recipe', choices=('R5', 'R2', 'R2x1', 'R1'), default=None,
         help='explicit batch/epochs/LR package from the validated R5 reference; records the effective plan hash')
     parser.add_argument('--profile', choices=('v2-production',),
         help='select the V2 production defaults (freeze the Python heap after warmup)')
@@ -381,6 +422,20 @@ def parse_args(argv=None):
     if args.adopt_2m_prefix_runtime and (not args.require_resume or not args.campaign_anneal
                                         or args.cooldown_child or not args.declaration):
         parser.error('2M prefix adoption needs a required resume with a successor campaign declaration')
+    if args.segment_start is not None:
+        rounds, digest, attempt = args.segment_start
+        if (not args.segment_outcome or not args.declaration or not re.fullmatch(r'[0-9]{1,5}', rounds)
+                or not re.fullmatch(r'[1-9][0-9]{0,8}', attempt)):
+            parser.error('--segment-start requires a supervised declaration, starting round and positive attempt')
+        rounds = int(rounds)
+        if (rounds == 0 and digest != '-') or (rounds > 0 and not re.fullmatch(r'[a-f0-9]{64}', digest)):
+            parser.error('--segment-start requires the admitted state SHA-256 or - for a fresh segment')
+        args.segment_start = (rounds, digest, int(attempt))
+    if args.segment_start and args.adopt_2m_prefix_runtime and not args.adopted_milestone_sha256s:
+        parser.error('supervised adoption requires the original 1M and 2M dispatch digests')
+    if args.adopted_milestone_sha256s and (not args.adopt_2m_prefix_runtime or not all(
+            re.fullmatch(r'[a-f0-9]{64}', digest) for digest in args.adopted_milestone_sha256s)):
+        parser.error('--adopted-milestone-sha256s requires 2M adoption and two original digests')
     return args
 
 
@@ -545,6 +600,14 @@ def main(argv=None, *, distribution=None):
     parent_root = Path(args.cooldown_child).resolve() if args.cooldown_child else None
     v2_fused_state.validate_output(out, parent_root)
     state_path = out / 'state.json'
+    segment_job = None
+    if args.segment_outcome:
+        segment_job = os.environ['V2_RUN_NAME']
+        if not segment_job or Path(segment_job).name != segment_job:
+            raise ValueError('supervised segment outcome requires a Job name')
+    if args.segment_start is not None:
+        start_round, start_digest, attempt = args.segment_start
+        segment_owner = f'{segment_job}:{attempt}'
     if args.require_resume and not state_path.is_file():
         raise ValueError('--require-resume needs a committed state.json in --out')
     if args.adopt_2m_prefix_runtime and distribution is None:
@@ -561,6 +624,7 @@ def main(argv=None, *, distribution=None):
     from pokezero import checkpoint_self_moves as encoding
     from gpu_engine.v5_device_backend import RuntimeBackend
     context = prepare(args);plan = context['plan']
+    both_seats = getattr(plan, 'train_both_seats', False)
     initial_train = plan.train
     if args.recipe is not None:
         from pokezero.v2_distributed import recipe_train
@@ -675,11 +739,17 @@ def main(argv=None, *, distribution=None):
         fallback_random=args.fallback_random, lr_start=lr_start, campaign=base_campaign)
     placement = {} if distribution is None else dict(process_group=distribution.process_group)
     def read_resume_manifest():
-        if not state_path.exists():
+        try:
+            pointer_data = state_path.read_bytes()
+        except FileNotFoundError:
             if args.require_resume:
                 raise ValueError('--require-resume needs a committed state.json in --out')
-            return None
-        return v2_fused_state.read_state(out, include_full_reports=False)
+            pointer_data = None
+        state = None if pointer_data is None else v2_fused_state.read_state(
+            out, include_full_reports=False, pointer_data=pointer_data)
+        if args.segment_start is not None:
+            v2_fused_state.verify_segment_start(state, pointer_data, (start_round, start_digest), segment_owner)
+        return state
 
     saved = _rank_zero(distribution, 'resume manifest', read_resume_manifest)
     if compact and saved is not None and 'round_ledger' not in saved:
@@ -811,9 +881,13 @@ def main(argv=None, *, distribution=None):
         dispatch.publish_committed(snapshot, report_error=lambda reason: log(
             'EVALUATION_REQUEST_ERROR', iteration=snapshot.iteration, reason=reason))
 
+    historical_digests = args.adopted_milestone_sha256s
+    historical_rounds = adopted_prefix['rounds'] if historical_digests else 0
     if deferred and saved is not None:
         def recover_evaluations():
-            for snapshot in snapshots[1:]:
+            if historical_digests:
+                v2_fused_state.verify_adopted_dispatches(out, historical_digests)
+            for snapshot in snapshots[1 + historical_rounds:]:
                 if snapshot.iteration in dispatch.milestones and dispatch.request_missing(snapshot):
                     publish_evaluation(snapshot)
             retain_full_checkpoints(out, [
@@ -854,6 +928,7 @@ def main(argv=None, *, distribution=None):
         else:
             collector = v2c.RefillCollector(context['prepared'].engine_tables, context['prepared'].observation_tables, plan.model,
                 backend.labels, roster, lanes=args.lanes, max_requests=plan.max_requests,
+                rows_per_game=v2c.DEFAULT_ROWS_PER_GAME * (2 if both_seats else 1),
                 layout_counts=v2c.expected_counts(roster.groups, roster.games, plan.historical_fraction))
             compile_timings = collector.compile(tree, threads=args.compile_threads);reused = False
             collectors.clear();collectors[key] = collector
@@ -866,7 +941,8 @@ def main(argv=None, *, distribution=None):
                 ids = [g.stream_id for g in batch.games];audited.append((base + k, min(ids), max(ids)))
         audit_out = out / 'audit' if distribution is None else out / 'audit' / f'rank-{distribution.rank}'
         audit_out.mkdir(parents=True, exist_ok=True)
-        audit_records = audit(rows, audited, audit_out);mark('audit')
+        audit_options = dict(host_workers=1 if distribution is None else distribution.world_size) if both_seats else {}
+        audit_records = audit(rows, audited, audit_out, **audit_options);mark('audit')
         records = v2c.game_records(result);same = None
         if reference_ends:
             from gpu_engine.v5_device_rollout import STATUS
@@ -899,6 +975,12 @@ def main(argv=None, *, distribution=None):
             rows.arrays.clear()  # DLPack tensors own the buffers through exchange.
             batches = [tuple(g.stream_id for g in b.games) for b in plan.iterations[iteration]]
             store = distribute_store(store, row_keys, batches, runtime)
+        collection = None
+        if both_seats:
+            collection = dict(capacity_per_rank=collector.row_capacity())
+            if distribution is not None:
+                layout = store.distributed_layout
+                collection.update(exchange_rows=sum(layout.counts), exchange_digest=layout.digest)
         mark('handoff_validate')
         window = runs.learning_rate_window(plan, iteration)
         if parent is not None:
@@ -939,6 +1021,9 @@ def main(argv=None, *, distribution=None):
                 **training_summary(updates)),
             collector={k: v for k, v in stats.items() if isinstance(v, (int, float, str))},
             audit=audit_records, games_matching_reference=same, snapshot=asdict(snapshot))
+        if collection is not None:
+            collection.update(host_memory(), peak_rank_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
+            report['both_seat_collection'] = collection
         if lr_start is not None:
             report['training']['lr_start'] = train_report['lr_start']
         if runtime.v2_config.campaign is not None:
@@ -968,6 +1053,8 @@ def main(argv=None, *, distribution=None):
                 state['campaign_schedule'] = asdict(runtime.v2_config.campaign)
             if distribution is not None:
                 state['distribution'] = distribution.contract
+            if args.segment_start is not None:
+                state['segment_job'] = segment_owner
             end = committed_bytes
             guard = v2_fused_state.commit_guard(out, committed_bytes, iteration) if compact else nullcontext()
             with guard:
@@ -1015,9 +1102,22 @@ def main(argv=None, *, distribution=None):
     if route_stop is not None:
         summary.update(status='STOPPED', reason='S0_TRANSFER_FAIL', stop_request=route_stop)
     def write_report():
+        if args.segment_outcome and deferred and route_stop is None:
+            dispatch.finish_committed_publications(snapshots[1 + historical_rounds:], report_error=lambda reason: log(
+                'EVALUATION_REQUEST_ERROR', reason=reason))
+            if historical_digests:
+                v2_fused_state.verify_adopted_dispatches(out, historical_digests)
         if compact and reports:
             summary['iterations'] = v2_fused_state.read_state(out)['reports']
         write_json(out / 'report.json', summary)
+        if args.segment_outcome:
+            write_json(out / f'segment-{segment_job}.json', dict(
+                status='STOPPED' if route_stop is not None else 'COMPLETE',
+                attempt=None if args.segment_start is None else attempt,
+                completed_rounds=len(reports), requested_round=args.max_iterations,
+                declaration_sha256=declaration_sha256,
+                checkpoint_sha256=snapshots[-1].checkpoint_sha256,
+            ), durable=True)
 
     _rank_zero(distribution, 'final report', write_report)
     log('DONE', wall_seconds=total, iterations=len(reports), games=games)

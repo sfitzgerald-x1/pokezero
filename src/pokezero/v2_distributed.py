@@ -16,9 +16,9 @@ from . import v2_trainer as v2
 
 def recipe_train(reference, recipe):
     """Explicit S0 recipe package; preserve every other direct-reference control."""
-    recipes = dict(R5=(512, 5), R2=(2048, 2), R1=(4096, 1))
+    recipes = dict(R5=(512, 5), R2=(2048, 2), R2x1=(2048, 1), R1=(4096, 1))
     if recipe not in recipes or reference.batch_size != 512 or reference.epochs != 5:
-        raise ValueError('R5/512x5 reference and explicit R5/R2/R1 recipe required')
+        raise ValueError('R5/512x5 reference and explicit R5/R2/R2x1/R1 recipe required')
     batch, epochs = recipes[recipe]
     return replace(reference, batch_size=batch, epochs=epochs,
         learning_rate=reference.learning_rate * batch / 512)

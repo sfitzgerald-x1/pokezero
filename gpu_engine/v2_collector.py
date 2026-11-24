@@ -494,11 +494,14 @@ class RunResult:
     frames: list = field(default_factory=list)  # emit_frames only: [(Frames, level)] per chunk
 
 
+DEFAULT_ROWS_PER_GAME = 128
+
+
 class RefillCollector:
     """Prepared once per roster layout; compiled kernels are reused per level."""
 
     def __init__(self, engine_tables, observation_tables, model_config, labels, roster, *, lanes,
-            max_requests=4096, chunk_steps=8, shrink_factor=4, min_lanes=128, rows_per_game=128,
+            max_requests=4096, chunk_steps=8, shrink_factor=4, min_lanes=128, rows_per_game=DEFAULT_ROWS_PER_GAME,
             emit_frames=False, donate=True, layout_counts=None):
         bindings = roster.bindings
         if type(model_config) is not V5ModelConfig or type(bindings) is not rollout.Bindings:

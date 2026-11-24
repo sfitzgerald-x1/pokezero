@@ -195,6 +195,15 @@ class MilestoneDispatch:
             self.pending.pop(games, None)
             return self._publish(games, snapshot, full_checkpoint, report_error)
 
+    def finish_committed_publications(self, snapshots, *, report_error):
+        """A supervised segment ends only after its committed requests are durable."""
+        for snapshot in snapshots:
+            if snapshot.iteration not in self.milestones or not self.request_missing(snapshot):
+                continue
+            self.publish_committed(snapshot, report_error=report_error)
+            if self.request_missing(snapshot):
+                raise ValueError(f'milestone {self.milestones[snapshot.iteration]} publication remains pending')
+
     def _publish(self, games, snapshot, full_checkpoint, report_error):
         request = self._request(games, snapshot)
         try:
