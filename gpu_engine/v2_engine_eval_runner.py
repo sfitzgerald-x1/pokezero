@@ -2,6 +2,7 @@
 
 import argparse
 from dataclasses import asdict, replace
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -134,7 +135,7 @@ def _candidate(request, vocab, metadata, compile_catalog):
     return candidate, model_config, tables
 
 
-def _play(cells, arrays, gender_policy, execute, candidate, opponent, batch_size):
+def _play(cells, arrays, gender_policy, execute, candidate, opponent, batch_size, *, progress=None):
     import jax
     import jax.numpy as jnp
     from .v5_device_rollout import CAPPED, COMPLETE
@@ -152,6 +153,8 @@ def _play(cells, arrays, gender_policy, execute, candidate, opponent, batch_size
                 raise ValueError(f'engine refused seed {cell.seed} on seat {cell.seat}')
             capped = bool(state_code == CAPPED)
             outcomes.append(Terminal(cell.seed, cell.seat, int(frames), capped, None if capped else int(winner)))
+        if progress is not None:
+            progress(len(outcomes))
     return outcomes
 
 
@@ -187,7 +190,7 @@ def _existing(path, binding):
     return receipt
 
 
-def evaluate(dispatch, config_ref, output, *, source_sha, batch_size):
+def evaluate(dispatch, config_ref, output, *, source_sha, batch_size, progress=None):
     import jax
     from pokezero import v5_deferred_evaluation as deferred
     from . import v2_engine_eval_max_damage, v2_engine_evaluation_device as device
@@ -220,9 +223,12 @@ def evaluate(dispatch, config_ref, output, *, source_sha, batch_size):
         if len(bank) != PANEL_PAIRS[name]:
             raise ValueError(f'wrong registered pair count for {name}')
         cells = schedule(bank)
+        notify = None if progress is None else partial(progress, name, len(cells))
+        if notify is not None:
+            notify(0)
         arrays, gender_policy = _decode(bank, metadata=metadata, show=show)
         execute = device.make_batch(engine, candidate_tables, model_config, opponent, max_requests=cap)
-        outcomes = _play(cells, arrays, gender_policy, execute, candidate, weights, batch_size)
+        outcomes = _play(cells, arrays, gender_policy, execute, candidate, weights, batch_size, progress=notify)
         stats = score(cells, outcomes, max_requests=cap, interim=name == 'champion_9375')
         elapsed = time.perf_counter() - panel_start
         panels[name] = dict(stats, wall_seconds=elapsed, games_per_second=stats['games'] / elapsed,
