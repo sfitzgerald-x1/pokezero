@@ -5,6 +5,10 @@ from dataclasses import asdict, replace
 import hashlib
 import json
 from pathlib import Path
+import sys
+
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from gpu_engine import v2_material_contract as material
 from pokezero.v2_fused_state import campaign_batch_addresses

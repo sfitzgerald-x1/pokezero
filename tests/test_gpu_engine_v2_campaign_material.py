@@ -2,8 +2,11 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
 from types import SimpleNamespace
@@ -271,6 +274,58 @@ class CampaignMaterialTests(unittest.TestCase):
         wait.assert_called_once_with(supervisor.TICK_SECONDS)
         reconciled.assert_called_once_with(controller.packet['main']['output'])
         self.assertEqual(controller.ledger['status'], 'COMPLETE')
+
+    def test_terminal_checkpoint_requires_the_admitted_material_digest(self):
+        controller, pointer = self.controller()
+        segment = controller.segments[0]
+        manifest_sha = 'a' * 64
+        checkpoint_sha = 'c' * 64
+        effective_sha = 'd' * 64
+        segment['declaration']['effective_sha256'] = effective_sha
+        attempt = dict(job='scott-v2a-012abc-gpu-r1', number=1, before_round=100, status='SUBMITTED',
+                       cap_seconds=3600, material={'sha256': manifest_sha})
+        controller.ledger['attempts'].append(attempt)
+        pointer['segment_job'] = 'v2a-012abc-gpu-r1:1'
+        pointer['round_ledger'].update(completed_rounds=102, latest_snapshot={
+            'iteration': 101, 'checkpoint_sha256': checkpoint_sha,
+        })
+        receipt = dict(status='COMPLETE', attempt=1, completed_rounds=102, requested_round=102,
+                       declaration_sha256=effective_sha, checkpoint_sha256=checkpoint_sha)
+        observed = dict(uid='fixture', admitted=True, live=False, complete=True, failed=False, queue=[])
+        with patch.object(supervisor, 'observe_job', return_value=observed), patch.object(
+            supervisor, 'shared_text', side_effect=lambda *_: json.dumps(pointer)
+        ), patch.object(supervisor, 'shared_file', return_value=receipt), patch.object(
+            supervisor, 'read_resource', return_value=None
+        ):
+            with self.assertRaisesRegex(ValueError, 'admitted material manifest'):
+                controller.reconcile(segment, attempt)
+            pointer['material_sha256'] = '0' * 64
+            with self.assertRaisesRegex(ValueError, 'admitted material manifest'):
+                controller.reconcile(segment, attempt)
+            self.assertEqual(attempt['status'], 'SUBMITTED')
+            self.assertNotIn('state_sha256', attempt)
+            self.assertEqual(controller.ledger['segment'], 0)
+            pointer['material_sha256'] = manifest_sha
+            controller.reconcile(segment, attempt)
+        self.assertEqual(attempt['status'], 'RELEASED')
+        self.assertEqual(attempt['outcome'], 'ADVANCE')
+        self.assertEqual(attempt['state_sha256'], hashlib.sha256(json.dumps(pointer).encode()).hexdigest())
+        self.assertEqual(controller.ledger['segment'], 1)
+
+    def test_full_roster_scripts_support_direct_invocation(self):
+        root = Path(__file__).resolve().parents[1]
+        for script, option in (
+            ('prepare_v2_campaign_declarations.py', '--pool-sha256'),
+            ('bind_v2_campaign_packet.py', '--pool-result'),
+        ):
+            with self.subTest(script=script):
+                result = subprocess.run(
+                    [sys.executable, str(root / 'scripts' / script), '--help'],
+                    cwd=self.root, env={**os.environ, 'PYTHONPATH': str(root / 'src')},
+                    capture_output=True, text=True, timeout=15,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(option, result.stdout)
 
     def test_e_full_packet_matches_release_serialization(self):
         config = {key: key for key in ('checkout', 'source_commit', 'launcher', 'resilience', 'cpu', 'memory',

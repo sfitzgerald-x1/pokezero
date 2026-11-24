@@ -532,6 +532,8 @@ class Supervisor:
         if committed > attempt['before_round']:
             if state.get('segment_job') != f"{name}:{attempt['number']}":
                 raise ValueError('committed pointer advanced outside the owned Job')
+            if 'material' in self.packet and state.get('material_sha256') != attempt['material']['sha256']:
+                raise ValueError('committed pointer differs from the admitted material manifest')
         elif (committed, state_sha256) != (attempt['before_round'], attempt['before_state_sha256']):
             raise ValueError('committed pointer differs from the admitted state')
         if committed > attempt['before_round'] and 'first_commit' not in attempt:
