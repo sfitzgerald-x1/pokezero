@@ -1,0 +1,365 @@
+{
+ "fix": "maybe_trapped_614_0",
+ "code": "OWN_TRAP_STATE_UNAVAILABLE",
+ "ordinal": 614,
+ "decision_index": 0,
+ "battle_id": "battle-gen3randombattle-controlled-2103400102",
+ "owner": "p1",
+ "prefix_sha256": "975b333ed060873f04ce6aed5bb764492cf5c021be33091e70468386925bee90",
+ "line_count": 24,
+ "main": {
+  "built": 0,
+  "error": "Refusal:OWN_TRAP_STATE_UNAVAILABLE",
+  "refusals": {}
+ },
+ "patched": {
+  "built": 16,
+  "error": null,
+  "refusals": {}
+ },
+ "checks": {
+  "per_world": [
+   {
+    "world": 0,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 1,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 2,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 3,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 4,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 5,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 6,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 7,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 8,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 9,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 10,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 11,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 12,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 13,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 14,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   {
+    "world": 15,
+    "foe": "dugtrio",
+    "foe_ability": "arenatrap",
+    "own": "kingdra",
+    "own_types": [
+     "water",
+     "dragon"
+    ],
+    "own_trapped_flag": false,
+    "own_trap_source": -1,
+    "own_switch_lanes": [
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   }
+  ]
+ },
+ "request": {
+  "schema": "pokezero.phase-d.shared-gpu-search.v1",
+  "request_id": "battle-gen3randombattle-controlled-2103400102:0",
+  "battle_id": "battle-gen3randombattle-controlled-2103400102",
+  "owner": "p1",
+  "stream_id": 1,
+  "decision_index": 0,
+  "generation": 2,
+  "prefix_sha256": "975b333ed060873f04ce6aed5bb764492cf5c021be33091e70468386925bee90",
+  "lines": [
+   "|t:|1794409633",
+   "|gametype|singles",
+   "|player|p1|PokeZeroBot||",
+   "|player|p2|FoulPlayBot||",
+   "|gen|3",
+   "|tier|[Gen 3] Random Battle",
+   "|rule|HP Percentage Mod: HP is shown in percentages",
+   "|rule|Beat Up Nicknames Mod: Beat Up will not reveal any party members",
+   "|rule|Endless Battle Clause: Forcing endless battles is banned",
+   "|rule|Sleep Clause Mod: Limit one foe put to sleep",
+   "|rule|Switch Priority Clause Mod: Faster Pok\u00e9mon switch first",
+   "|rule|Species Clause: Limit one of each Pok\u00e9mon",
+   "|rule|OHKO Clause: OHKO moves are banned",
+   "|rule|Evasion Items Clause: Evasion items are banned",
+   "|rule|Evasion Moves Clause: Evasion moves are banned",
+   "|",
+   "|t:|1794409633",
+   "|teamsize|p1|6",
+   "|teamsize|p2|6",
+   "|start",
+   "|switch|p1a: Kingdra|Kingdra, L81, F|254/254",
+   "|switch|p2a: Dugtrio|Dugtrio, L78, M|100/100",
+   "|turn|1",
+   "|request|{\"active\":[{\"moves\":[{\"move\":\"Rain Dance\",\"id\":\"raindance\",\"pp\":8,\"maxpp\":8,\"target\":\"all\",\"disabled\":false},{\"move\":\"Surf\",\"id\":\"surf\",\"pp\":24,\"maxpp\":24,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}],\"maybeTrapped\":true}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Kingdra\",\"details\":\"Kingdra, L81, F\",\"condition\":\"254/254\",\"active\":true,\"stats\":{\"atk\":158,\"def\":201,\"spa\":201,\"spd\":201,\"spe\":184},\"moves\":[\"raindance\",\"surf\",\"icebeam\",\"substitute\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Luvdisc\",\"details\":\"Luvdisc, M\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":65,\"def\":167,\"spa\":137,\"spd\":187,\"spe\":251},\"moves\":[\"protect\",\"surf\",\"substitute\",\"toxic\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Hitmonchan\",\"details\":\"Hitmonchan, L87, M\",\"condition\":\"229/229\",\"active\":false,\"stats\":{\"atk\":232,\"def\":186,\"spa\":111,\"spd\":240,\"spe\":182},\"moves\":[\"skyuppercut\",\"rockslide\",\"hiddenpowerghost\",\"machpunch\"],\"baseAbility\":\"keeneye\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Lugia\",\"details\":\"Lugia, L70\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":131,\"def\":223,\"spa\":167,\"spd\":257,\"spe\":195},\"moves\":[\"psychic\",\"recover\",\"substitute\",\"toxic\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Hariyama\",\"details\":\"Hariyama, L83, M\",\"condition\":\"375/375\",\"active\":false,\"stats\":{\"atk\":247,\"def\":146,\"spa\":114,\"spd\":146,\"spe\":131},\"moves\":[\"earthquake\",\"knockoff\",\"crosschop\",\"hiddenpowerghost\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Zapdos\",\"details\":\"Zapdos, L74\",\"condition\":\"255/255\",\"active\":false,\"stats\":{\"atk\":139,\"def\":168,\"spa\":228,\"spd\":176,\"spe\":191},\"moves\":[\"substitute\",\"thunderbolt\",\"hiddenpowerice\",\"toxic\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+  ],
+  "own_request_line": "|request|{\"active\":[{\"moves\":[{\"move\":\"Rain Dance\",\"id\":\"raindance\",\"pp\":8,\"maxpp\":8,\"target\":\"all\",\"disabled\":false},{\"move\":\"Surf\",\"id\":\"surf\",\"pp\":24,\"maxpp\":24,\"target\":\"allAdjacentFoes\",\"disabled\":false},{\"move\":\"Ice Beam\",\"id\":\"icebeam\",\"pp\":16,\"maxpp\":16,\"target\":\"normal\",\"disabled\":false},{\"move\":\"Substitute\",\"id\":\"substitute\",\"pp\":16,\"maxpp\":16,\"target\":\"self\",\"disabled\":false}],\"maybeTrapped\":true}],\"side\":{\"name\":\"PokeZeroBot\",\"id\":\"p1\",\"pokemon\":[{\"ident\":\"p1: Kingdra\",\"details\":\"Kingdra, L81, F\",\"condition\":\"254/254\",\"active\":true,\"stats\":{\"atk\":158,\"def\":201,\"spa\":201,\"spd\":201,\"spe\":184},\"moves\":[\"raindance\",\"surf\",\"icebeam\",\"substitute\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Luvdisc\",\"details\":\"Luvdisc, M\",\"condition\":\"248/248\",\"active\":false,\"stats\":{\"atk\":65,\"def\":167,\"spa\":137,\"spd\":187,\"spe\":251},\"moves\":[\"protect\",\"surf\",\"substitute\",\"toxic\"],\"baseAbility\":\"swiftswim\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Hitmonchan\",\"details\":\"Hitmonchan, L87, M\",\"condition\":\"229/229\",\"active\":false,\"stats\":{\"atk\":232,\"def\":186,\"spa\":111,\"spd\":240,\"spe\":182},\"moves\":[\"skyuppercut\",\"rockslide\",\"hiddenpowerghost\",\"machpunch\"],\"baseAbility\":\"keeneye\",\"item\":\"choiceband\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Lugia\",\"details\":\"Lugia, L70\",\"condition\":\"264/264\",\"active\":false,\"stats\":{\"atk\":131,\"def\":223,\"spa\":167,\"spd\":257,\"spe\":195},\"moves\":[\"psychic\",\"recover\",\"substitute\",\"toxic\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Hariyama\",\"details\":\"Hariyama, L83, M\",\"condition\":\"375/375\",\"active\":false,\"stats\":{\"atk\":247,\"def\":146,\"spa\":114,\"spd\":146,\"spe\":131},\"moves\":[\"earthquake\",\"knockoff\",\"crosschop\",\"hiddenpowerghost\"],\"baseAbility\":\"thickfat\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"},{\"ident\":\"p1: Zapdos\",\"details\":\"Zapdos, L74\",\"condition\":\"255/255\",\"active\":false,\"stats\":{\"atk\":139,\"def\":168,\"spa\":228,\"spd\":176,\"spe\":191},\"moves\":[\"substitute\",\"thunderbolt\",\"hiddenpowerice\",\"toxic\"],\"baseAbility\":\"pressure\",\"item\":\"leftovers\",\"pokeball\":\"pokeball\"}]}}"
+ }
+}
