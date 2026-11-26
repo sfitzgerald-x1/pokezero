@@ -19,7 +19,9 @@ jobs:
   cpu-extended-shards:
     name: CPU extended component shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Successful shards since 2026-11-02 took at most 95 min (p95 89).
+    # If a shard nears this cap, split it or move tests; do not raise it.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -122,11 +124,13 @@ jobs:
           name: cpu-extended-memory-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: ${{ steps.components.outputs.memory_report_dir }}
           if-no-files-found: error
+          retention-days: 14
 
   cpu-components-extended:
     if: ${{ always() }}
     needs: cpu-extended-shards
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Require every extended component shard to pass
         env:
