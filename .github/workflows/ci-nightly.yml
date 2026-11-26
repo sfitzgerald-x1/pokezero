@@ -14,6 +14,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       sha: ${{ steps.source.outputs.sha }}
+      run: ${{ steps.decide.outputs.run }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -21,32 +22,61 @@ jobs:
           persist-credentials: false
       - id: source
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      # A scheduled night with no new integration commit would repeat the
+      # previous night's jobs on the same source (about 1,300 runner-minutes).
+      # Each tested pair of nightly definition (main) and integration commit
+      # leaves a tiny cache marker (see mark-tested). Manual dispatch and
+      # "Re-run all jobs" (run_attempt > 1) always run.
+      - id: tested
+        if: github.event_name == 'schedule' && github.run_attempt == '1'
+        uses: actions/cache/restore@v5
+        with:
+          path: .nightly-tested
+          key: nightly-tested-${{ github.sha }}-${{ steps.source.outputs.sha }}
+          lookup-only: true
+      - id: decide
+        env:
+          TESTED: ${{ steps.tested.outputs.cache-hit }}
+          SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          if [ "$TESTED" = true ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Integration $SHA already had a nightly run; skipping. Dispatch manually to force." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-python@v6
+        if: steps.decide.outputs.run == 'true'
         with:
           python-version: '3.13'
       - name: Check sharding and memory-monitor behavior
+        if: steps.decide.outputs.run == 'true'
         run: python -m unittest tests.test_gpu_component_shards tests.test_component_memory_check -v
 
   light:
     needs: source
+    if: needs.source.outputs.run == 'true'
     uses: sfitzgerald-x1/pokezero/.github/workflows/gpu-engine-components.yml@scott/v2-engine-accel-20261104
     with:
       source: ${{ needs.source.outputs.sha }}
 
   extended:
     needs: source
+    if: needs.source.outputs.run == 'true'
     uses: sfitzgerald-x1/pokezero/.github/workflows/gpu-engine-components-extended.yml@scott/v2-engine-accel-20261104
     with:
       source: ${{ needs.source.outputs.sha }}
 
   depthn:
     needs: source
+    if: needs.source.outputs.run == 'true'
     uses: sfitzgerald-x1/pokezero/.github/workflows/depthn-light.yml@scott/v2-engine-accel-20261104
     with:
       source: ${{ needs.source.outputs.sha }}
 
   learner-and-adapters:
     needs: source
+    if: needs.source.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -108,3 +138,17 @@ jobs:
           tests.test_v5_model_types
           tests.test_v5_training
           tests.test_v5_training_diagnostics
+
+  mark-tested:
+    needs: [source, light, extended, depthn, learner-and-adapters]
+    if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.run == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          SHA: ${{ needs.source.outputs.sha }}
+        run: echo "$SHA" > .nightly-tested
+      - uses: actions/cache/save@v5
+        with:
+          path: .nightly-tested
+          key: nightly-tested-${{ github.sha }}-${{ needs.source.outputs.sha }}
