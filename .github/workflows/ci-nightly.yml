@@ -24,15 +24,15 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       # A scheduled night with no new integration commit would repeat the
       # previous night's jobs on the same source (about 1,300 runner-minutes).
-      # Each tested commit leaves a tiny cache marker (see mark-tested).
-      # Manual dispatch always runs. Markers unused for 7 days are evicted,
-      # so an unchanged tip is still re-run about weekly.
+      # Each tested pair of nightly definition (main) and integration commit
+      # leaves a tiny cache marker (see mark-tested). Manual dispatch and
+      # "Re-run all jobs" (run_attempt > 1) always run.
       - id: tested
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule' && github.run_attempt == '1'
         uses: actions/cache/restore@v5
         with:
           path: .nightly-tested
-          key: nightly-tested-${{ steps.source.outputs.sha }}
+          key: nightly-tested-${{ github.sha }}-${{ steps.source.outputs.sha }}
           lookup-only: true
       - id: decide
         env:
@@ -141,7 +141,7 @@ jobs:
 
   mark-tested:
     needs: [source, light, extended, depthn, learner-and-adapters]
-    if: ${{ !cancelled() && needs.source.outputs.run == 'true' }}
+    if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -151,4 +151,4 @@ jobs:
       - uses: actions/cache/save@v5
         with:
           path: .nightly-tested
-          key: nightly-tested-${{ needs.source.outputs.sha }}
+          key: nightly-tested-${{ github.sha }}-${{ needs.source.outputs.sha }}
