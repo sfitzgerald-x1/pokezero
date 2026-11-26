@@ -17,7 +17,7 @@
 ## Where tests belong
 
 - **Premerge** runs fast, deterministic guards for the live path. Eligible surfaces are V2 collection, learning and encoding, DepthN search and serving, and the Showdown and Foul Play adapters. Keep the approved workflow and lane list in [the allowlist](../.github/ci-premerge-allowlist.json). A new PR workflow or lane requires a deliberate policy change with the allowlist updated in the same PR.
-- **Nightly** is the default for new tests. Put slow or compile-heavy checks, memory checks, real wall-clock budgets, citation or source-line checks, artifact or report consistency, and historical certification here when they still provide value.
+- **Nightly** is the default for new tests. Put slow or compile-heavy checks, memory checks, real wall-clock budgets, citation or source-line checks, artifact or report consistency, and historical certification here when they still provide value. Nightly tier shards have a **150-minute timeout** and DepthN light has 25 minutes. Split a shard or move tests when one nears its cap; do not raise it. Memory-report artifacts are kept for 14 days.
 - **Manual** covers affected native build and differential qualification, heavy environment-specific tests, and extended qualification for a scored bind. Before an S0, 100M, or scored screen bind, run extended against the exact source commit. This gate keeps the public-world regression that escaped in #1967.
 
 Once the main-branch workflow is registered, set `BIND_COMMIT` to the exact bind commit and dispatch pre-bind extended.

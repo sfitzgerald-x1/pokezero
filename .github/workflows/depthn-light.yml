@@ -20,7 +20,8 @@ jobs:
   depthn-light:
     name: DepthN light tests
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Successful runs since 2026-11-02 took at most 13 min (p95 8).
+    timeout-minutes: 25
     env:
       JAX_PLATFORMS: cpu
       PYTHONPATH: src:.
@@ -89,3 +90,4 @@ jobs:
           name: depthn-memory-attempt-${{ github.run_attempt }}
           path: ${{ steps.depthn.outputs.memory_report_dir }}
           if-no-files-found: error
+          retention-days: 14
