@@ -129,6 +129,34 @@ def j_zero_err():
 MODULES = dict(identity=_identity, chance=_chance, negative_control=_negative_control, observe=_observe, step=_step)
 GENERATED = {'observe', 'step'}
 
+# Parametrized modules, 'prefix:argument' (e.g. 'phase:F', 'chain:gen-A-E+hand-FG', 'hook:observe@all').
+# Each provider lives in its own file and is imported lazily: 'module:function', where
+# function(argument, context) returns (jax_fn, cuda_fn) like a GENERATED module. A bare name in
+# PROVIDERS (no ':argument') is passed argument ''.
+PROVIDERS = {
+    'phase': 'gpu_engine.v2e_phases:diff_phase',
+    'chain': 'gpu_engine.v2e_phases:diff_chain',
+    'tap_identity': 'gpu_engine.v2e_phases:diff_tap_identity',
+    'hook': 'gpu_engine.v2e_hook_taps:diff_hook',
+}
+
+
+def resolve(name):
+    """(factory, takes_context) for a module name: a MODULES key or a PROVIDERS 'prefix[:argument]'."""
+    if name in MODULES:return MODULES[name], name in GENERATED
+    prefix, _, argument = name.partition(':')
+    if prefix not in PROVIDERS:raise KeyError(f'unknown module {name!r}: not in MODULES and no provider for {prefix!r}')
+    import importlib
+    module, _, function = PROVIDERS[prefix].partition(':')
+    provider = getattr(importlib.import_module(module), function)
+    return (lambda context: provider(argument, context)), True
+
+
+def module_name(name):
+    """argparse type: refuses names resolve() can't place, without importing a provider."""
+    if name in MODULES or name.partition(':')[0] in PROVIDERS:return name
+    raise argparse.ArgumentTypeError(f'unknown module {name!r} (MODULES: {sorted(MODULES)}; providers: {sorted(PROVIDERS)})')
+
 
 # ---------------------------------------------------------------------------
 
@@ -140,7 +168,12 @@ def load_shard(path):
 
 def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=16, lanes=0):
     import jax
-    jax_fn, cuda_fn = MODULES[module](dict(context, template=template)) if module in GENERATED else MODULES[module]()
+    factory, takes_context = resolve(module)
+    jax_fn, cuda_fn = factory(dict(context, template=template)) if takes_context else factory()
+    # A provider may describe itself (`info`) and accumulate per-shard statistics from the reference outputs
+    # (`accumulate(want, lanes)` / `summary()`), e.g. the hook: module's exercised lane-steps per call site.
+    info = getattr(cuda_fn, 'info', None) or getattr(jax_fn, 'info', None)
+    accumulate = getattr(jax_fn, 'accumulate', None);summary = getattr(jax_fn, 'summary', None)
     treedef = jax.tree.structure(template)
     jitted = {}
     def call(fn_name, fn, *args):
@@ -148,6 +181,9 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
         if key not in jitted:jitted[key] = jax.jit(lambda s, a, t: fn(s, a, t, context))
         return jitted[key](*args)
     totals = {};compared = 0;differing = 0;first = None;begin = time.perf_counter()
+    # One jitted comparison per output structure and lane count: a hook: module returns thousands of leaves, which eager
+    # per-leaf comparisons would dispatch one by one.
+    compare = jax.jit(lane_differences)
     def prefetched(paths):
         # Bounded read-ahead: at most `workers` shards in flight.
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -161,7 +197,8 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
             if lanes:leaves = [x[:lanes] for x in leaves]   # e.g. an odd lane count, to exercise lane-count-dependent addressing
             state, actions, trackers = jax.tree.unflatten(treedef, [jax.numpy.asarray(x) for x in leaves])
             want = call('jax', jax_fn, state, actions, trackers);got = call('cuda', cuda_fn, state, actions, trackers)
-            diffs = lane_differences(want, got);n = state.hp.shape[0];compared += n
+            diffs = jax.device_get(compare(want, got));n = state.hp.shape[0];compared += n   # one transfer for every leaf
+            if accumulate is not None:accumulate(want, n)
             any_lane = np.zeros(n, bool)
             for name, d in diffs.items():
                 d = np.asarray(d);totals[name] = totals.get(name, 0) + int(d.sum());any_lane |= d if d.shape == any_lane.shape else d.any()
@@ -170,17 +207,19 @@ def run(module, shard_paths, template, context, *, out, workers=8, repro_lanes=1
                 lane = int(np.flatnonzero(any_lane)[0]);leaf = next(n for n, d in diffs.items() if np.asarray(d).reshape(-1)[min(lane, np.asarray(d).size - 1)])
                 first = dict(shard=str(path), tick=tick, lane=lane, leaf=leaf)
                 rows = np.flatnonzero(any_lane)[:repro_lanes]
-                np.savez_compressed(Path(out) / f'repro-{module}.npz', lanes=rows, **{f'l{i:03d}': x[rows] for i, x in enumerate(leaves)})
+                np.savez_compressed(Path(out) / f"repro-{module.replace(':', '_').replace('@', '_').replace('+', '_')}.npz", lanes=rows, **{f'l{i:03d}': x[rows] for i, x in enumerate(leaves)})
                 log('FIRST_DIFFERENCE', module=module, **first)
     seconds = time.perf_counter() - begin
-    return dict(module=module, shards=len(shard_paths), lane_steps=compared, lane_steps_differing=differing,
+    result = dict(module=module, shards=len(shard_paths), lane_steps=compared, lane_steps_differing=differing,
         equal=compared > 0 and bool(totals) and differing == 0, differing_by_leaf={k: v for k, v in totals.items() if v}, output_leaves=len(totals),
-        first_difference=first, seconds=seconds)
+        first_difference=first, seconds=seconds, provider=info)
+    if summary is not None:result.update(summary())
+    return result
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('modules', nargs='+', choices=tuple(MODULES))
+    parser.add_argument('modules', nargs='+', type=module_name, help='MODULES names, or provider forms such as phase:F, chain:<spec>, tap_identity, hook:<name>@<line|all>')
     parser.add_argument('--config', required=True)
     parser.add_argument('--reference-run', required=True)
     parser.add_argument('--shards', required=True, help='directory of capture shards')
@@ -190,7 +229,12 @@ def main(argv=None):
     parser.add_argument('--build-dir', default=None)
     parser.add_argument('--mode', default=None, choices=('warp', 'thread'), help='generator backend (default per module)')
     parser.add_argument('--lanes', type=int, default=0, help='replay only the first N lanes of each shard (0: all)')
+    parser.add_argument('--hooks-selftest', default=None, choices=('oracle', 'negative', 'negative-untouched'),
+        help='hook: modules only: stand the harness self-test in for CUDA_HOOKS (refused when any CUDA hook is registered); recorded in diff.json')
     args = parser.parse_args(argv)
+    if args.hooks_selftest:
+        from gpu_engine import v2e_hooks
+        v2e_hooks.selftest(args.hooks_selftest, source='--hooks-selftest')
     if args.lanes < 0:parser.error('--lanes must be positive (or 0 for all lanes)')
     out = Path(args.out);out.mkdir(parents=True, exist_ok=True)
     import jax

@@ -1,4 +1,5 @@
 """CUDA engine harness, capture and trace-substitution invariants (CPU only)."""
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -94,6 +95,38 @@ class CaptureSinkTest(unittest.TestCase):
             self.assertEqual(files, ['shard-000000.npz'])
             with np.load(Path(d) / files[0]) as z:np.testing.assert_array_equal(z['l000'], np.arange(6).reshape(2, 3))
             with self.assertRaises(SystemExit):Sink(d, every=1, skip=0, limit=0)
+
+
+
+class ProviderResolutionTest(unittest.TestCase):
+    def test_parametrized_names_reach_their_provider_with_the_argument(self):
+        import types
+        from gpu_engine import v2e_diff
+        seen = []
+        fake = types.ModuleType('gpu_engine._v2e_fake_provider')
+        fake.diff = lambda argument, context: seen.append((argument, context)) or ('jax', 'cuda')
+        sys.modules[fake.__name__] = fake;v2e_diff.PROVIDERS['fake'] = f'{fake.__name__}:diff'
+        try:
+            factory, takes_context = v2e_diff.resolve('fake:F@all')
+            self.assertTrue(takes_context)
+            self.assertEqual(factory({'k': 1}), ('jax', 'cuda'))
+            self.assertEqual(seen, [('F@all', {'k': 1})])
+            self.assertEqual(v2e_diff.resolve('fake')[0]({})[0], 'jax');self.assertEqual(seen[-1][0], '')
+        finally:
+            del v2e_diff.PROVIDERS['fake'];del sys.modules[fake.__name__]
+
+    def test_plain_modules_keep_their_calling_convention(self):
+        from gpu_engine import v2e_diff
+        self.assertEqual(v2e_diff.resolve('identity'), (v2e_diff.MODULES['identity'], False))
+        self.assertEqual(v2e_diff.resolve('step'), (v2e_diff.MODULES['step'], True))
+
+    def test_unknown_names_are_refused_at_parse_time_without_imports(self):
+        import argparse
+        from gpu_engine import v2e_diff
+        self.assertEqual(v2e_diff.module_name('phase:F'), 'phase:F')
+        self.assertEqual(v2e_diff.module_name('hook:observe@all'), 'hook:observe@all')
+        with self.assertRaises(argparse.ArgumentTypeError):v2e_diff.module_name('nonsense:x')
+        with self.assertRaises(KeyError):v2e_diff.resolve('nonsense:x')
 
 
 if __name__ == '__main__':
